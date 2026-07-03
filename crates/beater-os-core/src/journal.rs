@@ -1,8 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    ActionManifest, AgentSession, CapabilityGrant, MemoryRecord, PolicyDecision, ScenarioManifest,
+    ActionManifest, AgentSession, CapabilityGrant, DecisionResult, MemoryRecord, PolicyDecision,
+    ScenarioManifest,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
@@ -136,6 +139,9 @@ impl InMemoryJournal {
 
     pub fn verify_chain(&self) -> BeaterOsResult<JournalVerificationReport> {
         let mut prev_hash = GENESIS_HASH.to_string();
+        let mut proposed_actions = BTreeSet::new();
+        let mut allowed_decisions = BTreeSet::new();
+        let mut latest_decision_by_action: BTreeMap<String, DecisionResult> = BTreeMap::new();
         for (idx, record) in self.records.iter().enumerate() {
             let expected_seq = idx as u64;
             if record.seq != expected_seq {
@@ -159,6 +165,12 @@ impl InMemoryJournal {
                     found: record.hash.clone(),
                 });
             }
+            verify_event_causality(
+                record,
+                &mut proposed_actions,
+                &mut allowed_decisions,
+                &mut latest_decision_by_action,
+            )?;
             prev_hash = record.hash.clone();
         }
         Ok(JournalVerificationReport {
@@ -166,4 +178,64 @@ impl InMemoryJournal {
             root_hash: prev_hash,
         })
     }
+}
+
+fn verify_event_causality(
+    record: &JournalRecord,
+    proposed_actions: &mut BTreeSet<String>,
+    allowed_decisions: &mut BTreeSet<String>,
+    latest_decision_by_action: &mut BTreeMap<String, DecisionResult>,
+) -> BeaterOsResult<()> {
+    match &record.event {
+        JournalEvent::ActionProposed { manifest } => {
+            if !proposed_actions.insert(manifest.action_id.clone()) {
+                return causality_error(
+                    record.seq,
+                    format!("action {} was proposed more than once", manifest.action_id),
+                );
+            }
+        }
+        JournalEvent::PolicyDecided { decision } => {
+            if !proposed_actions.contains(&decision.action_id) {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "policy decision {} references action {} before it was proposed",
+                        decision.decision_id, decision.action_id
+                    ),
+                );
+            }
+            latest_decision_by_action.insert(decision.action_id.clone(), decision.result.clone());
+            if decision.result == DecisionResult::Allowed {
+                allowed_decisions.insert(decision.action_id.clone());
+            } else {
+                allowed_decisions.remove(&decision.action_id);
+            }
+        }
+        JournalEvent::ReceiptAppended { receipt } => {
+            if !allowed_decisions.contains(&receipt.action_id) {
+                let latest = latest_decision_by_action
+                    .get(&receipt.action_id)
+                    .map(|result| format!("{result:?}"))
+                    .unwrap_or_else(|| "missing".to_string());
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} references action {} without a prior allowed decision (latest decision: {})",
+                        receipt.receipt_id, receipt.action_id, latest
+                    ),
+                );
+            }
+        }
+        JournalEvent::SessionCreated { .. }
+        | JournalEvent::CapabilityGranted { .. }
+        | JournalEvent::MemoryWritten { .. }
+        | JournalEvent::ScenarioEvaluated { .. }
+        | JournalEvent::IncidentAnnotated { .. } => {}
+    }
+    Ok(())
+}
+
+fn causality_error<T>(seq: u64, reason: String) -> BeaterOsResult<T> {
+    Err(BeaterOsError::JournalCausality { seq, reason })
 }

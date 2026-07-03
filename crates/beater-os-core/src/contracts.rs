@@ -152,6 +152,16 @@ impl Default for ApprovalRequirement {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalEvidence {
+    pub review_id: String,
+    pub action_id: String,
+    pub grant_id: String,
+    pub reviewer_id: String,
+    pub approved_at: DateTime<Utc>,
+    pub policy_version: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budget {
     #[serde(default)]
@@ -162,6 +172,22 @@ pub struct Budget {
     pub max_wall_ms: Option<u64>,
     #[serde(default)]
     pub max_payment_minor_units: Option<u64>,
+}
+
+impl Budget {
+    pub fn fits_within(&self, limit: &Budget) -> bool {
+        within_optional_limit(self.max_model_cents, limit.max_model_cents)
+            && within_optional_limit(self.max_tool_calls, limit.max_tool_calls)
+            && within_optional_limit(self.max_wall_ms, limit.max_wall_ms)
+            && within_optional_limit(self.max_payment_minor_units, limit.max_payment_minor_units)
+    }
+}
+
+fn within_optional_limit(requested: Option<u64>, limit: Option<u64>) -> bool {
+    match (requested, limit) {
+        (Some(requested), Some(limit)) => requested <= limit,
+        (Some(_), None) | (None, _) => true,
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,8 +316,16 @@ impl CapabilityGrant {
         !self.revoked && self.expires_at > now
     }
 
-    pub fn allows_manifest(&self, manifest: &ActionManifest, now: DateTime<Utc>) -> bool {
+    pub fn allows_manifest(
+        &self,
+        manifest: &ActionManifest,
+        now: DateTime<Utc>,
+        actor_id: &str,
+    ) -> bool {
         if !self.is_active_at(now) {
+            return false;
+        }
+        if self.holder != actor_id || self.session_id != manifest.session_id {
             return false;
         }
         if self.denied_actions.contains(&manifest.action_kind) {
@@ -313,8 +347,75 @@ impl CapabilityGrant {
         {
             return false;
         }
+        if !manifest
+            .requested_budget
+            .fits_within(&self.constraints.budget)
+        {
+            return false;
+        }
+        if !self.path_constraints_allow(manifest) {
+            return false;
+        }
+        if !self.network_constraints_allow(manifest) {
+            return false;
+        }
         true
     }
+
+    fn path_constraints_allow(&self, manifest: &ActionManifest) -> bool {
+        if manifest.target.resource_kind != ResourceKind::FilePath
+            || self.constraints.path_prefixes.is_empty()
+        {
+            return true;
+        }
+        self.constraints
+            .path_prefixes
+            .iter()
+            .any(|prefix| path_is_inside_prefix(&manifest.target.resource_id, prefix))
+    }
+
+    fn network_constraints_allow(&self, manifest: &ActionManifest) -> bool {
+        if manifest.target.resource_kind != ResourceKind::NetworkEndpoint
+            || self.constraints.network_allowlist.is_empty()
+        {
+            return true;
+        }
+        let host = network_host(&manifest.target.resource_id);
+        self.constraints
+            .network_allowlist
+            .iter()
+            .any(|allowed| host_matches_allowed(&host, allowed))
+    }
+}
+
+fn path_is_inside_prefix(path: &str, prefix: &str) -> bool {
+    if path == prefix {
+        return true;
+    }
+    let mut normalized_prefix = prefix.trim_end_matches('/').to_string();
+    normalized_prefix.push('/');
+    path.starts_with(&normalized_prefix)
+}
+
+fn network_host(endpoint: &str) -> String {
+    let without_scheme = endpoint
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(endpoint);
+    let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
+    authority
+        .split('@')
+        .next_back()
+        .unwrap_or(authority)
+        .split(':')
+        .next()
+        .unwrap_or(authority)
+        .to_ascii_lowercase()
+}
+
+fn host_matches_allowed(host: &str, allowed: &str) -> bool {
+    let allowed = allowed.to_ascii_lowercase();
+    host == allowed || host.ends_with(&format!(".{allowed}"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +433,8 @@ pub struct ActionManifest {
     pub expected_side_effects: BTreeSet<SideEffectClass>,
     #[serde(default)]
     pub required_grants: BTreeSet<String>,
+    #[serde(default)]
+    pub requested_budget: Budget,
     pub risk_class: RiskClass,
     #[serde(default)]
     pub data_classes: BTreeSet<DataClass>,
@@ -451,4 +554,13 @@ pub struct HumanReviewRequest {
     pub required_decision: String,
     pub reviewer_id: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimulationEvidence {
+    pub simulation_id: String,
+    pub action_id: String,
+    pub scenario_id: String,
+    pub passed_at: DateTime<Utc>,
+    pub policy_version: String,
 }
