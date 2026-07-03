@@ -20,7 +20,8 @@ from pathlib import Path
 
 from canonical import GENESIS_HASH, hash_preimage, sha256_hex
 
-FIXTURE = Path(__file__).resolve().parents[2] / "examples" / "traces" / "coding-workflow.trace.json"
+TRACES = Path(__file__).resolve().parents[2] / "examples" / "traces"
+FIXTURE = TRACES / "coding-workflow.trace.json"
 
 POLICY_VERSION = "policy-2026-07-03.dev"
 AGENT = "agent:coder-1"
@@ -181,6 +182,130 @@ def build_bundle() -> dict:
     }
 
 
+def build_payment_bundle() -> dict:
+    """A bounded-payment workflow exercising the approval-SATISFIED -> allowed path.
+
+    The coding trace only shows approval being *required*. This one shows the
+    other half of final.md's human-review design (§7.9, §13.14, §16.1): a spend
+    over the grant's approval threshold is admitted only *because* valid,
+    action-bound human approval evidence exists, and it carries a PaymentMandate
+    (§12.7) plus a payment receipt.
+    """
+    sid = "sess-pay-001"
+    agent = "agent:ap-1"
+    tp = "2026-07-03T09:0{}:00Z"
+
+    session = {
+        "session_id": sid,
+        "created_at": tp.format(0),
+        "created_by": "user:jaden",
+        "agent_id": agent,
+        "workspace_id": "ws:finance",
+        "goal": "Pay an approved vendor invoice within the standing mandate.",
+        "constraints": ["no payment above the mandate ceiling", "human approval over threshold"],
+        "policy_profile": "finance-default",
+        "initial_capability_ids": ["grant-vendor-spend"],
+        "budget": {"max_payment_minor_units": 100000},
+        "journal_root": GENESIS_HASH,
+        "status": "completed",
+    }
+
+    mandate = {
+        "mandate_id": "mandate-vendor",
+        "issuer": "user:jaden",
+        "holder": agent,
+        "session_id": sid,
+        "rail": "stripe",
+        "asset": "USD",
+        "max_minor_units": 100000,
+        "counterparty_policy": "allowlist:approved-vendors",
+        "purpose": "Settle approved vendor invoices.",
+        "expires_at": "2026-07-03T12:00:00Z",
+        "approval_threshold_minor_units": 5000,
+        "idempotency_key": "idem-mandate-vendor",
+        "receipt_requirement": "required",
+    }
+
+    grant = {
+        "grant_id": "grant-vendor-spend",
+        "issuer": "user:jaden",
+        "holder": agent,
+        "session_id": sid,
+        "scope": {"selector": {"resource_kind": "payment_rail", "resource_id": "stripe"}, "actions": ["spend"]},
+        "constraints": {"max_risk": "high", "max_data_class": "financial",
+                        "budget": {"max_payment_minor_units": 100000}},
+        "approval": {"mode": "human", "threshold_risk": "medium", "reviewer_ids": ["user:jaden"]},
+        "expires_at": "2026-07-03T12:00:00Z",
+        "delegation": "none",
+        "revocation_handle": "rev:grant-vendor-spend",
+        "policy_version": POLICY_VERSION,
+        "reason": "Pay approved vendor invoices via the standing mandate.",
+    }
+
+    m_pay = {
+        "action_id": "act-pay-invoice",
+        "session_id": sid,
+        "tool_id": "payment",
+        "action_kind": "spend",
+        "target": {"resource_kind": "payment_rail", "resource_id": "stripe"},
+        "inputs_digest": "sha256:in-pay-invoice",
+        "inputs_summary": "Charge 4200 USD minor units to an approved vendor.",
+        "expected_side_effects": ["payment"],
+        "required_grants": ["grant-vendor-spend"],
+        "requested_budget": {"max_payment_minor_units": 4200},
+        "risk_class": "medium",
+        "data_classes": ["financial"],
+        "taint": ["payment_instruction"],
+        "idempotency_key": "idem-pay-invoice",
+        "human_explanation": "Pay the approved vendor invoice #4471.",
+    }
+
+    approval = {
+        "review_id": "review-pay",
+        "action_id": "act-pay-invoice",
+        "grant_id": "grant-vendor-spend",
+        "reviewer_id": "user:jaden",
+        "approved_at": tp.format(1),
+        "policy_version": POLICY_VERSION,
+    }
+
+    d_pay = _decision("dec-pay", "act-pay-invoice", "allowed", tp.format(2),
+                      "action admitted by explicit active capability grant with valid human approval")
+
+    receipts = _chain_receipts([
+        _receipt("rcpt-pay", 0, m_pay, tp.format(2),
+                 "charged 4200 USD minor units to approved vendor #4471", ["payment"]),
+    ])
+    receipts[0]["external_ids"] = ["stripe:ch_test_4471"]
+    # Re-hash after adding external_ids so the chain stays valid.
+    receipts[0].pop("receipt_hash")
+    receipts[0]["receipt_hash"] = sha256_hex(hash_preimage(receipts[0], "receipt_hash"))
+
+    events = [
+        {"kind": "session_created", "session": session},
+        {"kind": "capability_granted", "grant": grant},
+        {"kind": "action_proposed", "manifest": m_pay},
+        {"kind": "policy_decided", "decision": d_pay},
+        {"kind": "receipt_appended", "receipt": receipts[0]},
+    ]
+    times = [tp.format(0), tp.format(0), tp.format(1), tp.format(2), tp.format(2)]
+    journal = _chain_journal(events, times)
+
+    return {
+        "bundle_id": "payment-workflow",
+        "description": "final.md §16.1/§13.14: bounded vendor payment admitted only because valid human approval evidence exists; carries a PaymentMandate and a payment receipt.",
+        "policy_version": POLICY_VERSION,
+        "sessions": [session],
+        "payment_mandates": [mandate],
+        "grants": [grant],
+        "approvals": [approval],
+        "manifests": [m_pay],
+        "decisions": [d_pay],
+        "receipts": receipts,
+        "journal": journal,
+    }
+
+
 def _decision(did, aid, result, created_at, explanation):
     return {
         "decision_id": did,
@@ -234,23 +359,29 @@ def _serialize(bundle) -> str:
     return json.dumps(bundle, indent=2, ensure_ascii=False) + "\n"
 
 
+FIXTURES = {
+    "coding-workflow.trace.json": build_bundle,
+    "payment-workflow.trace.json": build_payment_bundle,
+}
+
+
 def main() -> int:
-    bundle = build_bundle()
-    payload = _serialize(bundle)
-    if "--check" in sys.argv:
-        if not FIXTURE.exists():
-            print(f"FAIL: fixture missing: {FIXTURE}")
-            return 1
-        current = FIXTURE.read_text()
-        if current != payload:
-            print(f"FAIL: {FIXTURE} is out of date; run build_fixtures.py without --check")
-            return 1
-        print(f"ok: {FIXTURE.name} reproduces from build_fixtures.py")
-        return 0
-    FIXTURE.parent.mkdir(parents=True, exist_ok=True)
-    FIXTURE.write_text(payload)
-    print(f"wrote {FIXTURE}")
-    return 0
+    check = "--check" in sys.argv
+    failed = False
+    for name, builder in FIXTURES.items():
+        path = TRACES / name
+        payload = _serialize(builder())
+        if check:
+            if not path.exists() or path.read_text() != payload:
+                print(f"FAIL: {name} is missing or out of date; run build_fixtures.py without --check")
+                failed = True
+            else:
+                print(f"ok: {name} reproduces from build_fixtures.py")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(payload)
+            print(f"wrote {path}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
