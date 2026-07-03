@@ -44,6 +44,7 @@ pub enum CoordinationEvent {
         slice_id: String,
         merger_id: String,
         decision_id: String,
+        commit_sha: String,
     },
     ConflictDetected {
         slice_id: String,

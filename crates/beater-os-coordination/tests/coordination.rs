@@ -103,6 +103,32 @@ fn write_scope_directory_overlaps_are_detected() {
 }
 
 #[test]
+fn write_scope_normalizes_redundant_segments() {
+    // `//`, `/./`, and a leading `./` must canonicalize to the same path so
+    // they cannot be used to dodge overlap detection.
+    let dir = WriteScope::new(["crates/x/"]);
+    for spelling in ["crates//x/mod.rs", "crates/x/./mod.rs", "./crates/x/mod.rs"] {
+        let other = WriteScope::new([spelling]);
+        assert!(
+            !dir.is_disjoint(&other),
+            "{spelling} must overlap crates/x/"
+        );
+    }
+}
+
+#[test]
+fn overlapping_claims_via_redundant_slashes_are_rejected() {
+    let mut coord = coord_with_two_agents();
+    ok(coord.claim_slice(claim_input("a", "codex", "codex/a", &["crates/x/"]), at(1)));
+    // Double-slash spelling of a path inside crates/x/ must still conflict.
+    let e = err(coord.claim_slice(
+        claim_input("b", "claude", "claude/b", &["crates//x/mod.rs"]),
+        at(2),
+    ));
+    assert!(matches!(e, CoordinationError::WriteScopeConflict { .. }));
+}
+
+#[test]
 fn write_scope_exact_file_conflicts() {
     let a = WriteScope::new(["Cargo.toml"]);
     let b = WriteScope::new(["Cargo.toml"]);
@@ -284,11 +310,72 @@ fn full_happy_path_allows_and_merges() {
         Some(ClaimStatus::Approved)
     );
 
-    ok(coord.mark_merged("core", "claude", &decision.decision_id, at(5)));
+    ok(coord.mark_merged("core", "claude", &decision.decision_id, "sha-final", at(5)));
     assert_eq!(
         coord.claim("core").map(|c| c.status),
         Some(ClaimStatus::Merged)
     );
+}
+
+#[test]
+fn merge_authorization_is_bound_to_the_reviewed_commit() {
+    let mut coord = coord_with_two_agents();
+    slice_in_review(&mut coord, "core", "codex");
+    ok(coord.submit_review(
+        review_input("core", "claude", "sha-reviewed", ReviewVerdict::Approve),
+        at(3),
+    ));
+    let decision = ok(coord.evaluate_merge("core", "claude", "sha-reviewed", true, at(4)));
+    assert_eq!(decision.result, MergeGateResult::Allowed);
+
+    // Merging a DIFFERENT (unreviewed) commit with the same decision id must
+    // fail: authorization is bound to the reviewed commit.
+    let e = err(coord.mark_merged(
+        "core",
+        "claude",
+        &decision.decision_id,
+        "sha-unreviewed",
+        at(5),
+    ));
+    assert!(matches!(e, CoordinationError::MergeNotAuthorized { .. }));
+    assert_eq!(
+        coord.claim("core").map(|c| c.status),
+        Some(ClaimStatus::Approved)
+    );
+
+    // Merging the exact reviewed commit succeeds.
+    ok(coord.mark_merged(
+        "core",
+        "claude",
+        &decision.decision_id,
+        "sha-reviewed",
+        at(6),
+    ));
+    assert_eq!(
+        coord.claim("core").map(|c| c.status),
+        Some(ClaimStatus::Merged)
+    );
+}
+
+#[test]
+fn approval_is_invalidated_when_claim_returns_to_review() {
+    let mut coord = coord_with_two_agents();
+    slice_in_review(&mut coord, "core", "codex");
+    ok(coord.submit_review(
+        review_input("core", "claude", "sha1", ReviewVerdict::Approve),
+        at(3),
+    ));
+    let decision = ok(coord.evaluate_merge("core", "claude", "sha1", true, at(4)));
+    assert_eq!(decision.result, MergeGateResult::Allowed);
+
+    // A new commit arrives: back to InReview (clears the approval), then back to
+    // Approved WITHOUT a fresh gate.
+    ok(coord.set_status("core", ClaimStatus::InReview, at(5)));
+    ok(coord.set_status("core", ClaimStatus::Approved, at(6)));
+
+    // The stale decision must not merge: approved_commit was cleared.
+    let e = err(coord.mark_merged("core", "claude", &decision.decision_id, "sha1", at(7)));
+    assert!(matches!(e, CoordinationError::MergeNotAuthorized { .. }));
 }
 
 #[test]
@@ -412,7 +499,13 @@ fn dependency_must_be_merged_first() {
         "{:?}",
         dep_decision.blocking_reasons
     );
-    ok(coord.mark_merged("core", "claude", &dep_decision.decision_id, at(8)));
+    ok(coord.mark_merged(
+        "core",
+        "claude",
+        &dep_decision.decision_id,
+        "sha-core",
+        at(8),
+    ));
 
     let cleared = ok(coord.evaluate_merge("coord", "codex", "sha1", true, at(9)));
     assert_eq!(
@@ -432,7 +525,7 @@ fn mark_merged_requires_prior_authorizing_gate() {
         at(3),
     ));
     // Skip the gate and try to merge directly.
-    let e = err(coord.mark_merged("core", "claude", "fabricated-id", at(4)));
+    let e = err(coord.mark_merged("core", "claude", "fabricated-id", "sha1", at(4)));
     assert!(matches!(e, CoordinationError::MergeNotAuthorized { .. }));
 }
 
@@ -488,7 +581,7 @@ fn ledger_verifies_after_full_flow() {
         at(3),
     ));
     let decision = ok(coord.evaluate_merge("core", "claude", "sha1", true, at(4)));
-    ok(coord.mark_merged("core", "claude", &decision.decision_id, at(5)));
+    ok(coord.mark_merged("core", "claude", &decision.decision_id, "sha1", at(5)));
     ok(coord.verify());
 }
 

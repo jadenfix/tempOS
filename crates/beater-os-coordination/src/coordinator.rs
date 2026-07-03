@@ -146,7 +146,12 @@ impl Coordinator {
         input: ClaimInput,
         now: DateTime<Utc>,
     ) -> CoordinationResult<SliceClaim> {
+        let mut input = input;
         self.require_principal(&input.claimant)?;
+
+        // Re-normalize the scope so a deserialized `ClaimInput` cannot smuggle
+        // an un-normalized prefix (e.g. `crates//x/`) past overlap detection.
+        input.write_scope = WriteScope::new(input.write_scope.prefixes);
 
         if let Some(existing) = self.claims.get(&input.slice_id)
             && existing.status.holds_write_scope()
@@ -218,6 +223,7 @@ impl Coordinator {
             write_scope: input.write_scope,
             depends_on: input.depends_on,
             status: ClaimStatus::Claimed,
+            approved_commit: None,
             reason: input.reason,
             created_at: now,
             updated_at: now,
@@ -295,6 +301,11 @@ impl Coordinator {
             let from = claim.status;
             claim.status = to;
             claim.updated_at = now;
+            // Leaving `Approved` invalidates any commit-bound authorization, so
+            // a later re-approval cannot be merged with a stale decision.
+            if to != ClaimStatus::Approved {
+                claim.approved_commit = None;
+            }
             from
         };
         self.ledger.append(
@@ -332,8 +343,10 @@ impl Coordinator {
 
     /// Evaluate the merge gate for a slice at a specific commit.
     ///
-    /// On an authorized result, the claim advances to `Approved`. The decision
-    /// is journaled either way, so denials are auditable too.
+    /// On an authorized result the claim advances to `Approved` and records the
+    /// gated commit in `approved_commit`, so `mark_merged` can require that the
+    /// merged commit is exactly the one that was reviewed. The decision is
+    /// journaled either way, so denials are auditable too.
     pub fn evaluate_merge(
         &mut self,
         slice_id: &str,
@@ -369,20 +382,32 @@ impl Coordinator {
             now,
         )?;
 
-        if decision.is_allowed() && claim.status == ClaimStatus::InReview {
-            self.apply_status(slice_id, ClaimStatus::Approved, now)?;
+        if decision.is_allowed() {
+            if claim.status == ClaimStatus::InReview {
+                self.apply_status(slice_id, ClaimStatus::Approved, now)?;
+            }
+            // Bind the approval to the exact commit that was gated.
+            if let Some(current) = self.claims.get_mut(slice_id) {
+                current.approved_commit = Some(eval.commit_sha.clone());
+                current.updated_at = now;
+            }
         }
         Ok(decision)
     }
 
-    /// Mark a slice merged. Requires a prior `Allowed` gate decision, recorded
-    /// in the ledger, that authorized exactly this merger — so a merge can
-    /// never happen without passing the gate first.
+    /// Mark a slice merged at a specific commit.
+    ///
+    /// Requires a prior `Allowed` gate decision — recorded in the ledger — that
+    /// authorized exactly this `merger_id` for this `slice_id` **at this
+    /// `commit_sha`**, and that the claim is currently `Approved` for that same
+    /// commit. Binding to the commit is what stops a stale authorization (issued
+    /// for an earlier, reviewed commit) from merging later, unreviewed code.
     pub fn mark_merged(
         &mut self,
         slice_id: &str,
         merger_id: &str,
         decision_id: &str,
+        commit_sha: &str,
         now: DateTime<Utc>,
     ) -> CoordinationResult<()> {
         let claim = self.require_claim(slice_id)?.clone();
@@ -392,17 +417,19 @@ impl Coordinator {
                 slice_id: slice_id.to_string(),
             });
         }
-        if !self.has_authorizing_decision(slice_id, merger_id, decision_id) {
+        if !self.has_authorizing_decision(slice_id, merger_id, decision_id, commit_sha) {
             return Err(CoordinationError::MergeNotAuthorized {
                 slice_id: slice_id.to_string(),
                 merger_id: merger_id.to_string(),
             });
         }
-        if claim.status != ClaimStatus::Approved {
-            return Err(CoordinationError::InvalidClaimTransition {
+        // The claim's live authorization must still be for this exact commit.
+        if claim.status != ClaimStatus::Approved
+            || claim.approved_commit.as_deref() != Some(commit_sha)
+        {
+            return Err(CoordinationError::MergeNotAuthorized {
                 slice_id: slice_id.to_string(),
-                from: claim.status.to_string(),
-                to: ClaimStatus::Merged.to_string(),
+                merger_id: merger_id.to_string(),
             });
         }
         self.apply_status(slice_id, ClaimStatus::Merged, now)?;
@@ -411,6 +438,7 @@ impl Coordinator {
                 slice_id: slice_id.to_string(),
                 merger_id: merger_id.to_string(),
                 decision_id: decision_id.to_string(),
+                commit_sha: commit_sha.to_string(),
             },
             now,
         )?;
@@ -418,8 +446,14 @@ impl Coordinator {
     }
 
     /// Whether the ledger contains an `Allowed` gate decision with this id that
-    /// authorized `merger_id` to merge `slice_id`.
-    fn has_authorizing_decision(&self, slice_id: &str, merger_id: &str, decision_id: &str) -> bool {
+    /// authorized `merger_id` to merge `slice_id` at `commit_sha`.
+    fn has_authorizing_decision(
+        &self,
+        slice_id: &str,
+        merger_id: &str,
+        decision_id: &str,
+        commit_sha: &str,
+    ) -> bool {
         self.ledger.records().iter().any(|record| {
             matches!(
                 &record.event,
@@ -427,6 +461,7 @@ impl Coordinator {
                     if decision.decision_id == decision_id
                         && decision.slice_id == slice_id
                         && decision.merger_id == merger_id
+                        && decision.commit_sha == commit_sha
                         && decision.is_allowed()
             )
         })

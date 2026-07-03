@@ -95,8 +95,9 @@ beater-coord status --slice coordination-kernel --to in_review
 beater-coord review --slice coordination-kernel --by codex --commit <sha> --verdict approve
 beater-coord gate   --slice coordination-kernel --merger codex --commit <sha> --ci-green
 
-# If the gate authorizes, record the merge (never by the author):
-beater-coord merge  --slice coordination-kernel --merger codex --decision <decision_id>
+# If the gate authorizes, record the merge (never by the author). The commit
+# must match the exact commit the gate authorized:
+beater-coord merge  --slice coordination-kernel --merger codex --decision <decision_id> --commit <sha>
 
 # Inspect and audit at any time:
 beater-coord list
@@ -116,5 +117,12 @@ state, not source). Pass `--store <path>` to override.
   `min_independent_approvals` distinct non-author approvals exist **at the exact
   reviewed commit**, CI is green, and every declared dependency is merged. A
   stale `RequestChanges` on an older commit does not block a fixed one.
-- `mark_merged` requires a prior `Allowed` gate decision that named that merger.
+- `mark_merged` requires a prior `Allowed` gate decision that named that merger
+  **and that exact commit**, and the claim must still be `Approved` for that
+  commit. A stale authorization cannot merge a later, unreviewed commit;
+  returning a claim to `InReview` (e.g. on a new push) clears its approval.
 - Any edit to a journaled record is detected by `verify`.
+
+Path prefixes are canonicalized (`//`, `/./`, and leading `./` collapse) before
+overlap checks, so redundant spellings cannot dodge disjointness. Comparison is
+case-sensitive, matching Git's view of paths.

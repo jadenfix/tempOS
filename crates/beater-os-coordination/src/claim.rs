@@ -59,16 +59,31 @@ impl WriteScope {
     }
 }
 
-/// Normalize a prefix: trim whitespace and leading `./`, collapse a leading
-/// `/` (scopes are repo-relative). Trailing slashes are preserved because they
-/// distinguish "directory" from "exact file".
+/// Canonicalize a prefix so that textually different spellings of the same path
+/// compare equal: trim whitespace, drop a leading `/` (scopes are repo-relative)
+/// and empty (`//`) or `.` segments. A trailing slash is preserved because it
+/// distinguishes "directory" from "exact file". `..` segments are intentionally
+/// left intact so [`is_valid_prefix`] can reject them.
+///
+/// This runs on every constructed [`WriteScope`] *and* again inside
+/// `claim_slice`, so a deserialized (store or `ClaimInput`) scope cannot slip an
+/// un-normalized prefix past overlap detection.
 fn normalize(prefix: &str) -> String {
     let trimmed = prefix.trim();
-    let without_dot = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    without_dot
-        .strip_prefix('/')
-        .unwrap_or(without_dot)
-        .to_string()
+    let is_dir = trimmed.ends_with('/');
+    let segments: Vec<&str> = trimmed
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .collect();
+    let joined = segments.join("/");
+    if joined.is_empty() {
+        // e.g. "", "/", ".", "//" -> empty, rejected later by is_valid_prefix.
+        String::new()
+    } else if is_dir {
+        format!("{joined}/")
+    } else {
+        joined
+    }
 }
 
 /// A prefix is invalid if it is empty, absolute, or tries to escape the repo
@@ -178,6 +193,14 @@ pub struct SliceClaim {
     #[serde(default)]
     pub depends_on: BTreeSet<String>,
     pub status: ClaimStatus,
+    /// The exact commit the current `Approved` status was gated at, if any.
+    ///
+    /// Set when a merge gate authorizes a commit; cleared whenever the claim
+    /// leaves `Approved` (e.g. new commits push it back to `InReview`). Binding
+    /// approval to a commit is what stops a stale authorization from merging
+    /// later, unreviewed code.
+    #[serde(default)]
+    pub approved_commit: Option<String>,
     pub reason: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

@@ -68,9 +68,16 @@ fn cmd_init(path: &Path, args: &Args) -> Result<(), String> {
     let policy_version = args.value_or("policy-version", "coord-policy-v1");
     let mut policy = MergePolicy::default();
     if let Some(min) = args.opt("min-approvals") {
-        policy.min_independent_approvals = min
+        let parsed: usize = min
             .parse()
             .map_err(|_| format!("invalid --min-approvals '{min}'"))?;
+        if parsed == 0 {
+            return Err(
+                "--min-approvals must be at least 1 (0 would disable independent review)"
+                    .to_string(),
+            );
+        }
+        policy.min_independent_approvals = parsed;
     }
     let coord = Coordinator::with_policy(policy_version, policy);
     save_store(path, &coord)?;
@@ -205,7 +212,7 @@ fn cmd_gate(path: &Path, args: &Args) -> Result<(), String> {
     }
     if decision.is_allowed() {
         println!(
-            "  -> authorized. Merge with: beater-coord merge --slice {slice} --merger {merger} --decision {}",
+            "  -> authorized. Merge with: beater-coord merge --slice {slice} --merger {merger} --decision {} --commit {commit}",
             decision.decision_id
         );
     } else {
@@ -222,11 +229,12 @@ fn cmd_merge(path: &Path, args: &Args) -> Result<(), String> {
     let slice = args.require("slice")?;
     let merger = args.require("merger")?;
     let decision = args.require("decision")?;
+    let commit = args.require("commit")?;
     coord
-        .mark_merged(slice, merger, decision, Utc::now())
+        .mark_merged(slice, merger, decision, commit, Utc::now())
         .map_err(|e| e.to_string())?;
     save_store(path, &coord)?;
-    println!("slice {slice} marked merged by {merger}");
+    println!("slice {slice} marked merged by {merger} at {commit}");
     Ok(())
 }
 
@@ -457,7 +465,7 @@ COMMANDS:
   review      --slice <id> --by <reviewer> --commit <sha>
               --verdict <approve|request_changes|reject> [--subject <ref>] [--summary <text>]
   gate        --slice <id> --merger <id> --commit <sha> [--ci-green|--ci-red]
-  merge       --slice <id> --merger <id> --decision <decision_id>
+  merge       --slice <id> --merger <id> --decision <decision_id> --commit <sha>
   list        show principals and claims
   conflicts   show write-scope conflicts among active claims
   journal     dump the hash-chained coordination ledger
