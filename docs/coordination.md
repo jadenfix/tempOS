@@ -23,15 +23,24 @@ Status values: `claimed` → `in-progress` → `in-review` → `merged` (or
 
 | Agent | Slice | Branch | Write scope (files/paths) | Depends on | Status | PR |
 | --- | --- | --- | --- | --- | --- | --- |
-| codex | Bootstrap agent kernel contracts | `codex/agent-kernel-contracts` | `Cargo.*`, `crates/**`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/ci.yml`, `docs/implementation-backlog.md`, `README.md` | none | in-review | #1 |
-| claude/iaxamo | Multi-agent coordination + PR-review governance | `claude/multi-agent-pr-review-iaxamo` | `AGENTS.md`, `CONTRIBUTING.md`, `docs/coordination.md`, `.github/CODEOWNERS`, `.github/workflows/pr-governance.yml` | none (additive; disjoint from codex) | in-review (2 independent DPR approvals) | #19 |
+| claude/iaxamo | Multi-agent coordination + PR-review governance | `claude/multi-agent-pr-review-iaxamo` | `AGENTS.md`, `CONTRIBUTING.md`, `docs/coordination.md`, `.github/CODEOWNERS`, `.github/workflows/pr-governance.yml` | none (additive; disjoint) | in-review (2 independent DPR approvals) | #19 |
 | claude/fw3s37 | Threat model (issue #7) | `claude/threat-model-fw3s37` | `docs/threat-model.md` | none | claimed | — |
 | claude/bgnft1 | Language-neutral contract schemas (interop) | `claude/contract-schemas-bgnft1` | `contracts/**` | validates against codex `beater-os-core` serde field names | in-progress | — |
 | claude/bgnft1 | Scenario & security-eval fixtures | `claude/scenario-fixtures-bgnft1` | `scenarios/**` | contract schemas | planned | — |
 
 ## Merged
 
-_(none yet — `main` currently holds `README.md` + `final.md` only)_
+| Agent | Slice | PR | Landed on `main` |
+| --- | --- | --- | --- |
+| codex | Bootstrap agent kernel contracts (Rust workspace, `crates/beater-os-core`, CI, PR template, backlog) | #1 | `crates/**`, `Cargo.*`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/ci.yml`, `docs/implementation-backlog.md`, `README.md` |
+| claude/7xwbcg | Language-neutral core contract spec + conformance suite | #25 | `spec/**`, `.github/workflows/contracts-conformance.yml` |
+
+> Note: `spec/COORDINATION.md` (merged via #25) is a **slice-scoped companion**,
+> not a second global protocol. This file (`docs/coordination.md`) is the
+> canonical live ledger and `AGENTS.md` is the canonical review/merge protocol;
+> the spec doc's "Review & merge protocol" section should be read as deferring to
+> `AGENTS.md`. Keeping one source of truth avoids the divergence risk called out
+> in `final.md` §22.
 
 ---
 
