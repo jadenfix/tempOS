@@ -99,7 +99,7 @@
         "resource_id": "stripe"
       },
       "inputs_digest": "sha256:in-pay-invoice",
-      "inputs_summary": "Charge 4200 USD minor units to an approved vendor.",
+      "inputs_summary": "Charge 6200 USD minor units to an approved vendor.",
       "expected_side_effects": [
         "payment"
       ],
@@ -107,7 +107,7 @@
         "grant-vendor-spend"
       ],
       "requested_budget": {
-        "max_payment_minor_units": 4200
+        "max_payment_minor_units": 6200
       },
       "risk_class": "medium",
       "data_classes": [
@@ -145,7 +145,7 @@
       "status": "ok",
       "input_digest": "sha256:in-pay-invoice",
       "output_digest": "sha256:out-act-pay-invoice",
-      "side_effect_summary": "charged 4200 USD minor units to approved vendor #4471",
+      "side_effect_summary": "charged 6200 USD minor units to approved vendor #4471",
       "side_effects": [
         "payment"
       ],
@@ -153,7 +153,7 @@
       "external_ids": [
         "stripe:ch_test_4471"
       ],
-      "receipt_hash": "0b9bda4d9a7c2b2d8df465df0a6bf54d6fa5250bc97caebca0965763f8d5911c"
+      "receipt_hash": "2ff41c8d206532028b27716409989e15552c6b90c28d0d1220311e331af917e4"
     }
   ],
   "journal": [
@@ -245,7 +245,7 @@
             "resource_id": "stripe"
           },
           "inputs_digest": "sha256:in-pay-invoice",
-          "inputs_summary": "Charge 4200 USD minor units to an approved vendor.",
+          "inputs_summary": "Charge 6200 USD minor units to an approved vendor.",
           "expected_side_effects": [
             "payment"
           ],
@@ -253,7 +253,7 @@
             "grant-vendor-spend"
           ],
           "requested_budget": {
-            "max_payment_minor_units": 4200
+            "max_payment_minor_units": 6200
           },
           "risk_class": "medium",
           "data_classes": [
@@ -267,7 +267,7 @@
         }
       },
       "prev_hash": "cdf22fe8c81460b568d360f5adea4a98a76ea3b51db8579d6d51205d4e249ee7",
-      "hash": "18313a7573bb02171e351011567d63c12ef347b4c0973bf026c179809f510219"
+      "hash": "866b31e7f5a92e07e89d200b69ae98efb17f600553eda4f8fdef25158c5fd53c"
     },
     {
       "seq": 3,
@@ -283,8 +283,8 @@
           "created_at": "2026-07-03T09:02:00Z"
         }
       },
-      "prev_hash": "18313a7573bb02171e351011567d63c12ef347b4c0973bf026c179809f510219",
-      "hash": "e421beb6d65aaa7e8cc5f09db4aa3f3a2cbb90fbb6afdf964a40561f157a91ad"
+      "prev_hash": "866b31e7f5a92e07e89d200b69ae98efb17f600553eda4f8fdef25158c5fd53c",
+      "hash": "8c461f8e4358f34b4451b547d927977a62069ed1f2d5121f42c83a34709c35e4"
     },
     {
       "seq": 4,
@@ -305,7 +305,7 @@
           "status": "ok",
           "input_digest": "sha256:in-pay-invoice",
           "output_digest": "sha256:out-act-pay-invoice",
-          "side_effect_summary": "charged 4200 USD minor units to approved vendor #4471",
+          "side_effect_summary": "charged 6200 USD minor units to approved vendor #4471",
           "side_effects": [
             "payment"
           ],
@@ -313,11 +313,11 @@
           "external_ids": [
             "stripe:ch_test_4471"
           ],
-          "receipt_hash": "0b9bda4d9a7c2b2d8df465df0a6bf54d6fa5250bc97caebca0965763f8d5911c"
+          "receipt_hash": "2ff41c8d206532028b27716409989e15552c6b90c28d0d1220311e331af917e4"
         }
       },
-      "prev_hash": "e421beb6d65aaa7e8cc5f09db4aa3f3a2cbb90fbb6afdf964a40561f157a91ad",
-      "hash": "b2ac14343410e9fbc2301d9a577aa4fa39c2be49aa16c8b5cd41765e70c2a517"
+      "prev_hash": "8c461f8e4358f34b4451b547d927977a62069ed1f2d5121f42c83a34709c35e4",
+      "hash": "d2f32d08d41b2a4157732afa8c27369b48083efc6735f520c8eb01fcf485cbe7"
     }
   ]
 }

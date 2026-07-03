@@ -249,10 +249,10 @@ def build_payment_bundle() -> dict:
         "action_kind": "spend",
         "target": {"resource_kind": "payment_rail", "resource_id": "stripe"},
         "inputs_digest": "sha256:in-pay-invoice",
-        "inputs_summary": "Charge 4200 USD minor units to an approved vendor.",
+        "inputs_summary": "Charge 6200 USD minor units to an approved vendor.",
         "expected_side_effects": ["payment"],
         "required_grants": ["grant-vendor-spend"],
-        "requested_budget": {"max_payment_minor_units": 4200},
+        "requested_budget": {"max_payment_minor_units": 6200},
         "risk_class": "medium",
         "data_classes": ["financial"],
         "taint": ["payment_instruction"],
@@ -274,7 +274,7 @@ def build_payment_bundle() -> dict:
 
     receipts = _chain_receipts([
         _receipt("rcpt-pay", 0, m_pay, tp.format(2),
-                 "charged 4200 USD minor units to approved vendor #4471", ["payment"]),
+                 "charged 6200 USD minor units to approved vendor #4471", ["payment"]),
     ])
     receipts[0]["external_ids"] = ["stripe:ch_test_4471"]
     # Re-hash after adding external_ids so the chain stays valid.
