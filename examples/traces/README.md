@@ -12,6 +12,12 @@ causality, and independent policy admission of every recorded decision.
   (allowed), is **blocked** trying to write outside its granted path
   (`needs_narrowed_grant`), writes the fix in scope (allowed), and runs the test
   runner (allowed). Every side effect carries a receipt; every step is journaled.
+- `payment-workflow.trace.json` — the human-review *approval-satisfied* path
+  (§7.9, §13.14, §16.1): a bounded vendor `spend` over the grant's approval
+  threshold is admitted **only because** valid, action-bound human approval
+  evidence exists. Carries a `PaymentMandate` (§12.7) and a payment receipt.
+  Complements the adversarial scenarios, which show approval being *required* but
+  never *granted*.
 
 ## Regenerating
 

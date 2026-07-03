@@ -12,6 +12,7 @@
     "policy_version": { "type": "string" },
     "sessions": { "type": "array", "items": { "$ref": "agent-session.schema.json" }, "minItems": 1 },
     "grants": { "type": "array", "items": { "$ref": "capability-grant.schema.json" } },
+    "payment_mandates": { "type": "array", "items": { "$ref": "payment-mandate.schema.json" } },
     "approvals": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/approval_evidence" } },
     "simulations": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/simulation_evidence" } },
     "manifests": { "type": "array", "items": { "$ref": "action-manifest.schema.json" } },
