@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "capability-grant.schema.json",
+  "title": "CapabilityGrant",
+  "description": "final.md 12.2 / contracts.rs CapabilityGrant. The central authority object. Invariants: grants cannot be broadened by the holder; delegated grants must be equal or narrower; expired and revoked grants fail closed; grants are never inferred from prompt text. A grant is bound to a specific holder (actor) and session_id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "grant_id",
+    "issuer",
+    "holder",
+    "session_id",
+    "scope",
+    "expires_at",
+    "delegation",
+    "revocation_handle",
+    "policy_version",
+    "reason"
+  ],
+  "properties": {
+    "grant_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "issuer": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "holder": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "session_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "scope": { "$ref": "common.schema.json#/$defs/CapabilityScope" },
+    "denied_actions": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/ActionKind" },
+      "uniqueItems": true
+    },
+    "constraints": { "$ref": "common.schema.json#/$defs/GrantConstraints" },
+    "expires_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "delegation": { "$ref": "common.schema.json#/$defs/DelegationMode" },
+    "approval": { "$ref": "common.schema.json#/$defs/ApprovalRequirement" },
+    "revocation_handle": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "policy_version": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "reason": { "type": "string", "minLength": 1 },
+    "revoked": { "type": "boolean" }
+  }
+}

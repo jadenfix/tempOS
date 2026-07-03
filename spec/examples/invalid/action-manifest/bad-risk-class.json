@@ -1,0 +1,11 @@
+{
+  "action_id": "act-001",
+  "session_id": "sess-01JABCDEF0",
+  "tool_id": "tool:fs.write",
+  "action_kind": "write",
+  "target": { "resource_kind": "file_path", "resource_id": "/repo/beateros/src/parser.rs" },
+  "inputs_digest": "sha256:8f1e0c1e9a2b3c4d5e6f7081920a1b2c3d4e5f60718293a4b5c6d7e8f9001122",
+  "inputs_summary": "Patch off-by-one at end-of-input",
+  "risk_class": "none",
+  "human_explanation": "Apply the tokenizer fix."
+}

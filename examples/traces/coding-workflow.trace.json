@@ -1,0 +1,685 @@
+{
+  "bundle_id": "coding-workflow-mvp",
+  "description": "final.md §24 MVP proof: granted repo read/edit/test with a blocked out-of-scope write, full receipts and journal.",
+  "policy_version": "policy-2026-07-03.dev",
+  "sessions": [
+    {
+      "session_id": "sess-coding-001",
+      "created_at": "2026-07-03T18:00:00Z",
+      "created_by": "user:jaden",
+      "agent_id": "agent:coder-1",
+      "workspace_id": "ws:beateros",
+      "goal": "Fix the failing parser test and run the suite.",
+      "constraints": [
+        "no network without a grant",
+        "no push to origin"
+      ],
+      "policy_profile": "developer-default",
+      "initial_capability_ids": [
+        "grant-repo-rw",
+        "grant-test-exec"
+      ],
+      "budget": {
+        "max_model_cents": 5000,
+        "max_tool_calls": 50,
+        "max_wall_ms": 600000
+      },
+      "journal_root": "0000000000000000000000000000000000000000000000000000000000000000",
+      "status": "completed"
+    }
+  ],
+  "grants": [
+    {
+      "grant_id": "grant-repo-rw",
+      "issuer": "user:jaden",
+      "holder": "agent:coder-1",
+      "session_id": "sess-coding-001",
+      "scope": {
+        "selector": {
+          "resource_kind": "file_path",
+          "resource_id": "*"
+        },
+        "actions": [
+          "read",
+          "write"
+        ]
+      },
+      "constraints": {
+        "max_risk": "medium",
+        "max_data_class": "code",
+        "path_prefixes": [
+          "/ws/beateros"
+        ]
+      },
+      "expires_at": "2026-07-03T20:00:00Z",
+      "delegation": "none",
+      "revocation_handle": "rev:grant-repo-rw",
+      "policy_version": "policy-2026-07-03.dev",
+      "reason": "Edit repository files inside the workspace to fix the parser bug."
+    },
+    {
+      "grant_id": "grant-test-exec",
+      "issuer": "user:jaden",
+      "holder": "agent:coder-1",
+      "session_id": "sess-coding-001",
+      "scope": {
+        "selector": {
+          "resource_kind": "tool",
+          "resource_id": "test-runner"
+        },
+        "actions": [
+          "execute"
+        ]
+      },
+      "constraints": {
+        "max_risk": "medium",
+        "max_data_class": "code"
+      },
+      "expires_at": "2026-07-03T20:00:00Z",
+      "delegation": "none",
+      "revocation_handle": "rev:grant-test-exec",
+      "policy_version": "policy-2026-07-03.dev",
+      "reason": "Run the sandboxed test runner to verify the fix."
+    }
+  ],
+  "manifests": [
+    {
+      "action_id": "act-read-parser",
+      "session_id": "sess-coding-001",
+      "tool_id": "fs-read",
+      "action_kind": "read",
+      "target": {
+        "resource_kind": "file_path",
+        "resource_id": "/ws/beateros/src/parser.rs"
+      },
+      "resolved_target": {
+        "resource_kind": "file_path",
+        "resource_id": "/ws/beateros/src/parser.rs"
+      },
+      "inputs_digest": "sha256:in-read-parser",
+      "inputs_summary": "Read src/parser.rs to locate the bug.",
+      "expected_side_effects": [
+        "none"
+      ],
+      "required_grants": [
+        "grant-repo-rw"
+      ],
+      "risk_class": "low",
+      "data_classes": [
+        "code"
+      ],
+      "human_explanation": "Read the parser source before editing."
+    },
+    {
+      "action_id": "act-write-escape",
+      "session_id": "sess-coding-001",
+      "tool_id": "fs-write",
+      "action_kind": "write",
+      "target": {
+        "resource_kind": "file_path",
+        "resource_id": "/etc/passwd"
+      },
+      "resolved_target": {
+        "resource_kind": "file_path",
+        "resource_id": "/etc/passwd"
+      },
+      "inputs_digest": "sha256:in-write-escape",
+      "inputs_summary": "Attempt to write outside the granted workspace prefix.",
+      "expected_side_effects": [
+        "local_write"
+      ],
+      "required_grants": [
+        "grant-repo-rw"
+      ],
+      "risk_class": "medium",
+      "data_classes": [
+        "code"
+      ],
+      "human_explanation": "Blocked example: path escapes the grant's /ws/beateros prefix."
+    },
+    {
+      "action_id": "act-write-fix",
+      "session_id": "sess-coding-001",
+      "tool_id": "fs-write",
+      "action_kind": "write",
+      "target": {
+        "resource_kind": "file_path",
+        "resource_id": "/ws/beateros/src/parser.rs"
+      },
+      "resolved_target": {
+        "resource_kind": "file_path",
+        "resource_id": "/ws/beateros/src/parser.rs"
+      },
+      "inputs_digest": "sha256:in-write-fix",
+      "inputs_summary": "Apply the off-by-one fix in src/parser.rs.",
+      "expected_side_effects": [
+        "local_write"
+      ],
+      "required_grants": [
+        "grant-repo-rw"
+      ],
+      "risk_class": "medium",
+      "data_classes": [
+        "code"
+      ],
+      "human_explanation": "Write the fix inside the granted workspace path."
+    },
+    {
+      "action_id": "act-run-tests",
+      "session_id": "sess-coding-001",
+      "tool_id": "test-runner",
+      "action_kind": "execute",
+      "target": {
+        "resource_kind": "tool",
+        "resource_id": "test-runner"
+      },
+      "inputs_digest": "sha256:in-run-tests",
+      "inputs_summary": "Run the sandboxed test suite.",
+      "expected_side_effects": [
+        "none"
+      ],
+      "required_grants": [
+        "grant-test-exec"
+      ],
+      "risk_class": "medium",
+      "data_classes": [
+        "code"
+      ],
+      "human_explanation": "Execute the test runner to confirm the fix."
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "dec-read",
+      "action_id": "act-read-parser",
+      "policy_version": "policy-2026-07-03.dev",
+      "result": "allowed",
+      "explanation": "action admitted by explicit active capability grant",
+      "created_at": "2026-07-03T18:01:00Z"
+    },
+    {
+      "decision_id": "dec-escape",
+      "action_id": "act-write-escape",
+      "policy_version": "policy-2026-07-03.dev",
+      "result": "needs_narrowed_grant",
+      "explanation": "available grants do not allow this action, target, risk, data class, or time window",
+      "created_at": "2026-07-03T18:02:00Z"
+    },
+    {
+      "decision_id": "dec-fix",
+      "action_id": "act-write-fix",
+      "policy_version": "policy-2026-07-03.dev",
+      "result": "allowed",
+      "explanation": "action admitted by explicit active capability grant",
+      "created_at": "2026-07-03T18:03:00Z"
+    },
+    {
+      "decision_id": "dec-test",
+      "action_id": "act-run-tests",
+      "policy_version": "policy-2026-07-03.dev",
+      "result": "allowed",
+      "explanation": "action admitted by explicit active capability grant",
+      "created_at": "2026-07-03T18:04:00Z"
+    }
+  ],
+  "receipts": [
+    {
+      "receipt_id": "rcpt-read",
+      "seq": 0,
+      "action_id": "act-read-parser",
+      "tool_id": "fs-read",
+      "target": {
+        "resource_kind": "file_path",
+        "resource_id": "/ws/beateros/src/parser.rs"
+      },
+      "started_at": "2026-07-03T18:01:00Z",
+      "finished_at": "2026-07-03T18:01:00Z",
+      "status": "ok",
+      "input_digest": "sha256:in-read-parser",
+      "output_digest": "sha256:out-act-read-parser",
+      "side_effect_summary": "read 1180 bytes from src/parser.rs",
+      "side_effects": [],
+      "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "receipt_hash": "629c3fdfaddc4c258af3982a868a1884153fc9f44aa42d796e8c255d6f02c074"
+    },
+    {
+      "receipt_id": "rcpt-fix",
+      "seq": 1,
+      "action_id": "act-write-fix",
+      "tool_id": "fs-write",
+      "target": {
+        "resource_kind": "file_path",
+        "resource_id": "/ws/beateros/src/parser.rs"
+      },
+      "started_at": "2026-07-03T18:03:00Z",
+      "finished_at": "2026-07-03T18:03:00Z",
+      "status": "ok",
+      "input_digest": "sha256:in-write-fix",
+      "output_digest": "sha256:out-act-write-fix",
+      "side_effect_summary": "wrote 1204 bytes to src/parser.rs",
+      "side_effects": [
+        "local_write"
+      ],
+      "prev_receipt_hash": "629c3fdfaddc4c258af3982a868a1884153fc9f44aa42d796e8c255d6f02c074",
+      "receipt_hash": "2285865caac836928144596efa7ec5931d649f2f07984c8ddee48256aa61dbcf"
+    },
+    {
+      "receipt_id": "rcpt-test",
+      "seq": 2,
+      "action_id": "act-run-tests",
+      "tool_id": "test-runner",
+      "target": {
+        "resource_kind": "tool",
+        "resource_id": "test-runner"
+      },
+      "started_at": "2026-07-03T18:04:00Z",
+      "finished_at": "2026-07-03T18:04:00Z",
+      "status": "ok",
+      "input_digest": "sha256:in-run-tests",
+      "output_digest": "sha256:out-act-run-tests",
+      "side_effect_summary": "ran 42 tests, 42 passed",
+      "side_effects": [],
+      "prev_receipt_hash": "2285865caac836928144596efa7ec5931d649f2f07984c8ddee48256aa61dbcf",
+      "receipt_hash": "efd93ca4f0de5edbe76f70f68a0b5167213238b0ab9495ca6d29f6492294cdb6"
+    }
+  ],
+  "journal": [
+    {
+      "seq": 0,
+      "created_at": "2026-07-03T18:00:00Z",
+      "event": {
+        "kind": "session_created",
+        "session": {
+          "session_id": "sess-coding-001",
+          "created_at": "2026-07-03T18:00:00Z",
+          "created_by": "user:jaden",
+          "agent_id": "agent:coder-1",
+          "workspace_id": "ws:beateros",
+          "goal": "Fix the failing parser test and run the suite.",
+          "constraints": [
+            "no network without a grant",
+            "no push to origin"
+          ],
+          "policy_profile": "developer-default",
+          "initial_capability_ids": [
+            "grant-repo-rw",
+            "grant-test-exec"
+          ],
+          "budget": {
+            "max_model_cents": 5000,
+            "max_tool_calls": 50,
+            "max_wall_ms": 600000
+          },
+          "journal_root": "0000000000000000000000000000000000000000000000000000000000000000",
+          "status": "completed"
+        }
+      },
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "7ecb784364ff8d7e85ec7ac1ecf17e9636700c6530626c47c82b001a6275a3b7"
+    },
+    {
+      "seq": 1,
+      "created_at": "2026-07-03T18:00:00Z",
+      "event": {
+        "kind": "capability_granted",
+        "grant": {
+          "grant_id": "grant-repo-rw",
+          "issuer": "user:jaden",
+          "holder": "agent:coder-1",
+          "session_id": "sess-coding-001",
+          "scope": {
+            "selector": {
+              "resource_kind": "file_path",
+              "resource_id": "*"
+            },
+            "actions": [
+              "read",
+              "write"
+            ]
+          },
+          "constraints": {
+            "max_risk": "medium",
+            "max_data_class": "code",
+            "path_prefixes": [
+              "/ws/beateros"
+            ]
+          },
+          "expires_at": "2026-07-03T20:00:00Z",
+          "delegation": "none",
+          "revocation_handle": "rev:grant-repo-rw",
+          "policy_version": "policy-2026-07-03.dev",
+          "reason": "Edit repository files inside the workspace to fix the parser bug."
+        }
+      },
+      "prev_hash": "7ecb784364ff8d7e85ec7ac1ecf17e9636700c6530626c47c82b001a6275a3b7",
+      "hash": "c2fee45cad0c5516e26e35a2add8b83d2a6cc14b3eb227e7654d857a6bd62690"
+    },
+    {
+      "seq": 2,
+      "created_at": "2026-07-03T18:00:00Z",
+      "event": {
+        "kind": "capability_granted",
+        "grant": {
+          "grant_id": "grant-test-exec",
+          "issuer": "user:jaden",
+          "holder": "agent:coder-1",
+          "session_id": "sess-coding-001",
+          "scope": {
+            "selector": {
+              "resource_kind": "tool",
+              "resource_id": "test-runner"
+            },
+            "actions": [
+              "execute"
+            ]
+          },
+          "constraints": {
+            "max_risk": "medium",
+            "max_data_class": "code"
+          },
+          "expires_at": "2026-07-03T20:00:00Z",
+          "delegation": "none",
+          "revocation_handle": "rev:grant-test-exec",
+          "policy_version": "policy-2026-07-03.dev",
+          "reason": "Run the sandboxed test runner to verify the fix."
+        }
+      },
+      "prev_hash": "c2fee45cad0c5516e26e35a2add8b83d2a6cc14b3eb227e7654d857a6bd62690",
+      "hash": "47f9fdeadcdcda463500bda0753521945d9bd8ffa514d9c5e28f6c235df9ff8b"
+    },
+    {
+      "seq": 3,
+      "created_at": "2026-07-03T18:01:00Z",
+      "event": {
+        "kind": "action_proposed",
+        "manifest": {
+          "action_id": "act-read-parser",
+          "session_id": "sess-coding-001",
+          "tool_id": "fs-read",
+          "action_kind": "read",
+          "target": {
+            "resource_kind": "file_path",
+            "resource_id": "/ws/beateros/src/parser.rs"
+          },
+          "resolved_target": {
+            "resource_kind": "file_path",
+            "resource_id": "/ws/beateros/src/parser.rs"
+          },
+          "inputs_digest": "sha256:in-read-parser",
+          "inputs_summary": "Read src/parser.rs to locate the bug.",
+          "expected_side_effects": [
+            "none"
+          ],
+          "required_grants": [
+            "grant-repo-rw"
+          ],
+          "risk_class": "low",
+          "data_classes": [
+            "code"
+          ],
+          "human_explanation": "Read the parser source before editing."
+        }
+      },
+      "prev_hash": "47f9fdeadcdcda463500bda0753521945d9bd8ffa514d9c5e28f6c235df9ff8b",
+      "hash": "381384593f2cad789d45eabc8ea61eb3af18e5c49d05d280cf7154962de50e6d"
+    },
+    {
+      "seq": 4,
+      "created_at": "2026-07-03T18:01:00Z",
+      "event": {
+        "kind": "policy_decided",
+        "decision": {
+          "decision_id": "dec-read",
+          "action_id": "act-read-parser",
+          "policy_version": "policy-2026-07-03.dev",
+          "result": "allowed",
+          "explanation": "action admitted by explicit active capability grant",
+          "created_at": "2026-07-03T18:01:00Z"
+        }
+      },
+      "prev_hash": "381384593f2cad789d45eabc8ea61eb3af18e5c49d05d280cf7154962de50e6d",
+      "hash": "d99ab74bd18fc8358dc74d470eb7a8acae5516c331a7b0f35a52bf8b3b548971"
+    },
+    {
+      "seq": 5,
+      "created_at": "2026-07-03T18:01:00Z",
+      "event": {
+        "kind": "receipt_appended",
+        "receipt": {
+          "receipt_id": "rcpt-read",
+          "seq": 0,
+          "action_id": "act-read-parser",
+          "tool_id": "fs-read",
+          "target": {
+            "resource_kind": "file_path",
+            "resource_id": "/ws/beateros/src/parser.rs"
+          },
+          "started_at": "2026-07-03T18:01:00Z",
+          "finished_at": "2026-07-03T18:01:00Z",
+          "status": "ok",
+          "input_digest": "sha256:in-read-parser",
+          "output_digest": "sha256:out-act-read-parser",
+          "side_effect_summary": "read 1180 bytes from src/parser.rs",
+          "side_effects": [],
+          "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "receipt_hash": "629c3fdfaddc4c258af3982a868a1884153fc9f44aa42d796e8c255d6f02c074"
+        }
+      },
+      "prev_hash": "d99ab74bd18fc8358dc74d470eb7a8acae5516c331a7b0f35a52bf8b3b548971",
+      "hash": "5a708f9fc3e500cea1200cee5e5ed81b914efbe49754ed7dec5538c0b4954bfe"
+    },
+    {
+      "seq": 6,
+      "created_at": "2026-07-03T18:02:00Z",
+      "event": {
+        "kind": "action_proposed",
+        "manifest": {
+          "action_id": "act-write-escape",
+          "session_id": "sess-coding-001",
+          "tool_id": "fs-write",
+          "action_kind": "write",
+          "target": {
+            "resource_kind": "file_path",
+            "resource_id": "/etc/passwd"
+          },
+          "resolved_target": {
+            "resource_kind": "file_path",
+            "resource_id": "/etc/passwd"
+          },
+          "inputs_digest": "sha256:in-write-escape",
+          "inputs_summary": "Attempt to write outside the granted workspace prefix.",
+          "expected_side_effects": [
+            "local_write"
+          ],
+          "required_grants": [
+            "grant-repo-rw"
+          ],
+          "risk_class": "medium",
+          "data_classes": [
+            "code"
+          ],
+          "human_explanation": "Blocked example: path escapes the grant's /ws/beateros prefix."
+        }
+      },
+      "prev_hash": "5a708f9fc3e500cea1200cee5e5ed81b914efbe49754ed7dec5538c0b4954bfe",
+      "hash": "bd6a8161af41bb0d47d860359769c794347c751948a5bf36c10793e52153281b"
+    },
+    {
+      "seq": 7,
+      "created_at": "2026-07-03T18:02:00Z",
+      "event": {
+        "kind": "policy_decided",
+        "decision": {
+          "decision_id": "dec-escape",
+          "action_id": "act-write-escape",
+          "policy_version": "policy-2026-07-03.dev",
+          "result": "needs_narrowed_grant",
+          "explanation": "available grants do not allow this action, target, risk, data class, or time window",
+          "created_at": "2026-07-03T18:02:00Z"
+        }
+      },
+      "prev_hash": "bd6a8161af41bb0d47d860359769c794347c751948a5bf36c10793e52153281b",
+      "hash": "36db4379ec088b7f3aab7a2cf334ba9aefe8b7856d12f1c2cf43410572942995"
+    },
+    {
+      "seq": 8,
+      "created_at": "2026-07-03T18:03:00Z",
+      "event": {
+        "kind": "action_proposed",
+        "manifest": {
+          "action_id": "act-write-fix",
+          "session_id": "sess-coding-001",
+          "tool_id": "fs-write",
+          "action_kind": "write",
+          "target": {
+            "resource_kind": "file_path",
+            "resource_id": "/ws/beateros/src/parser.rs"
+          },
+          "resolved_target": {
+            "resource_kind": "file_path",
+            "resource_id": "/ws/beateros/src/parser.rs"
+          },
+          "inputs_digest": "sha256:in-write-fix",
+          "inputs_summary": "Apply the off-by-one fix in src/parser.rs.",
+          "expected_side_effects": [
+            "local_write"
+          ],
+          "required_grants": [
+            "grant-repo-rw"
+          ],
+          "risk_class": "medium",
+          "data_classes": [
+            "code"
+          ],
+          "human_explanation": "Write the fix inside the granted workspace path."
+        }
+      },
+      "prev_hash": "36db4379ec088b7f3aab7a2cf334ba9aefe8b7856d12f1c2cf43410572942995",
+      "hash": "4658cefa8d850c56ca6ca40c1c8531a876c72467578043a58e113322f46f4341"
+    },
+    {
+      "seq": 9,
+      "created_at": "2026-07-03T18:03:00Z",
+      "event": {
+        "kind": "policy_decided",
+        "decision": {
+          "decision_id": "dec-fix",
+          "action_id": "act-write-fix",
+          "policy_version": "policy-2026-07-03.dev",
+          "result": "allowed",
+          "explanation": "action admitted by explicit active capability grant",
+          "created_at": "2026-07-03T18:03:00Z"
+        }
+      },
+      "prev_hash": "4658cefa8d850c56ca6ca40c1c8531a876c72467578043a58e113322f46f4341",
+      "hash": "d50b036b5d1237f7a390aa0d16df362eb5d2c70eeef663ba98f0a09df12a08bd"
+    },
+    {
+      "seq": 10,
+      "created_at": "2026-07-03T18:03:00Z",
+      "event": {
+        "kind": "receipt_appended",
+        "receipt": {
+          "receipt_id": "rcpt-fix",
+          "seq": 1,
+          "action_id": "act-write-fix",
+          "tool_id": "fs-write",
+          "target": {
+            "resource_kind": "file_path",
+            "resource_id": "/ws/beateros/src/parser.rs"
+          },
+          "started_at": "2026-07-03T18:03:00Z",
+          "finished_at": "2026-07-03T18:03:00Z",
+          "status": "ok",
+          "input_digest": "sha256:in-write-fix",
+          "output_digest": "sha256:out-act-write-fix",
+          "side_effect_summary": "wrote 1204 bytes to src/parser.rs",
+          "side_effects": [
+            "local_write"
+          ],
+          "prev_receipt_hash": "629c3fdfaddc4c258af3982a868a1884153fc9f44aa42d796e8c255d6f02c074",
+          "receipt_hash": "2285865caac836928144596efa7ec5931d649f2f07984c8ddee48256aa61dbcf"
+        }
+      },
+      "prev_hash": "d50b036b5d1237f7a390aa0d16df362eb5d2c70eeef663ba98f0a09df12a08bd",
+      "hash": "90a4e399e41b617ad872565ea1241baf7e5b820d53c2d66365411c2861e75016"
+    },
+    {
+      "seq": 11,
+      "created_at": "2026-07-03T18:04:00Z",
+      "event": {
+        "kind": "action_proposed",
+        "manifest": {
+          "action_id": "act-run-tests",
+          "session_id": "sess-coding-001",
+          "tool_id": "test-runner",
+          "action_kind": "execute",
+          "target": {
+            "resource_kind": "tool",
+            "resource_id": "test-runner"
+          },
+          "inputs_digest": "sha256:in-run-tests",
+          "inputs_summary": "Run the sandboxed test suite.",
+          "expected_side_effects": [
+            "none"
+          ],
+          "required_grants": [
+            "grant-test-exec"
+          ],
+          "risk_class": "medium",
+          "data_classes": [
+            "code"
+          ],
+          "human_explanation": "Execute the test runner to confirm the fix."
+        }
+      },
+      "prev_hash": "90a4e399e41b617ad872565ea1241baf7e5b820d53c2d66365411c2861e75016",
+      "hash": "7cb97ea92d8d5ec8d324b27f035fd38a68be8505d9aede756c319247c8913052"
+    },
+    {
+      "seq": 12,
+      "created_at": "2026-07-03T18:04:00Z",
+      "event": {
+        "kind": "policy_decided",
+        "decision": {
+          "decision_id": "dec-test",
+          "action_id": "act-run-tests",
+          "policy_version": "policy-2026-07-03.dev",
+          "result": "allowed",
+          "explanation": "action admitted by explicit active capability grant",
+          "created_at": "2026-07-03T18:04:00Z"
+        }
+      },
+      "prev_hash": "7cb97ea92d8d5ec8d324b27f035fd38a68be8505d9aede756c319247c8913052",
+      "hash": "4ce3b171bf34eb0227190bc4f53fb7bff543ab97286ffad32ab5985acd746088"
+    },
+    {
+      "seq": 13,
+      "created_at": "2026-07-03T18:04:00Z",
+      "event": {
+        "kind": "receipt_appended",
+        "receipt": {
+          "receipt_id": "rcpt-test",
+          "seq": 2,
+          "action_id": "act-run-tests",
+          "tool_id": "test-runner",
+          "target": {
+            "resource_kind": "tool",
+            "resource_id": "test-runner"
+          },
+          "started_at": "2026-07-03T18:04:00Z",
+          "finished_at": "2026-07-03T18:04:00Z",
+          "status": "ok",
+          "input_digest": "sha256:in-run-tests",
+          "output_digest": "sha256:out-act-run-tests",
+          "side_effect_summary": "ran 42 tests, 42 passed",
+          "side_effects": [],
+          "prev_receipt_hash": "2285865caac836928144596efa7ec5931d649f2f07984c8ddee48256aa61dbcf",
+          "receipt_hash": "efd93ca4f0de5edbe76f70f68a0b5167213238b0ab9495ca6d29f6492294cdb6"
+        }
+      },
+      "prev_hash": "4ce3b171bf34eb0227190bc4f53fb7bff543ab97286ffad32ab5985acd746088",
+      "hash": "c81d0d985f2039532dd8d2f176e6eba1c349b07ff74c389821397dd1e2fae284"
+    }
+  ]
+}

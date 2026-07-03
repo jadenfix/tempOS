@@ -1,0 +1,25 @@
+{
+  "session_id": "sess-01JABCDEF0",
+  "created_at": "2026-07-03T18:00:00Z",
+  "created_by": "user:jaden",
+  "agent_id": "agent:coder-1",
+  "workspace_id": "ws:beateros",
+  "goal": "Fix the failing tokenizer test in the parser module",
+  "constraints": ["no network egress", "single commit"],
+  "policy_profile": "default-coding",
+  "initial_capability_ids": ["grant-repo-read", "grant-repo-write"],
+  "budget": {
+    "max_model_cents": 500,
+    "max_tool_calls": 200,
+    "max_wall_ms": 600000,
+    "max_payment_minor_units": null
+  },
+  "model_policy": {
+    "allowed_routes": ["local/opus", "cloud/opus"],
+    "local_only": false,
+    "max_data_class": "code"
+  },
+  "memory_scope": "workspace:beateros",
+  "journal_root": "0000000000000000000000000000000000000000000000000000000000000000",
+  "status": "running"
+}

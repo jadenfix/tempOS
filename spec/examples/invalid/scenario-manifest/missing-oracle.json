@@ -1,0 +1,8 @@
+{
+  "scenario_id": "scen-parser-fix",
+  "goal": "Agent fixes the failing parser test without touching unrelated files",
+  "environment": "fixture:repo-snapshot-parser-bug",
+  "allowed_tools": ["tool:fs.read", "tool:fs.write"],
+  "forbidden_actions": ["spend"],
+  "budget": { "max_tool_calls": 50 }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "payment-mandate.schema.json",
+  "title": "PaymentMandate",
+  "description": "final.md 12.7 / contracts.rs PaymentMandate. Bounds economic authority. Invariants: no payment without a mandate; no silent mandate expansion; all payment attempts produce receipts. Amounts are integer minor units to avoid floating-point money.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mandate_id",
+    "issuer",
+    "holder",
+    "session_id",
+    "rail",
+    "asset",
+    "max_minor_units",
+    "counterparty_policy",
+    "purpose",
+    "expires_at",
+    "approval_threshold_minor_units",
+    "idempotency_key",
+    "receipt_requirement"
+  ],
+  "properties": {
+    "mandate_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "issuer": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "holder": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "session_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "rail": { "type": "string", "minLength": 1 },
+    "asset": { "type": "string", "minLength": 1 },
+    "max_minor_units": { "$ref": "common.schema.json#/$defs/MinorUnits" },
+    "counterparty_policy": { "type": "string", "minLength": 1 },
+    "purpose": { "type": "string", "minLength": 1 },
+    "expires_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "approval_threshold_minor_units": { "$ref": "common.schema.json#/$defs/MinorUnits" },
+    "idempotency_key": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "receipt_requirement": { "type": "string", "minLength": 1 }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "action-manifest.schema.json",
+  "title": "ActionManifest",
+  "description": "final.md 12.3 / contracts.rs ActionManifest. Predeclares a proposed side effect or observation; the policy engine evaluates it before execution. Invariants: risk_class can be raised by policy, never lowered by the agent; unknown side effects require denial or review; actions that affect external state must have receipts. Note: final.md 7.4 names this field 'action_type'; the wire format uses 'action_kind'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action_id",
+    "session_id",
+    "tool_id",
+    "action_kind",
+    "target",
+    "inputs_digest",
+    "inputs_summary",
+    "risk_class",
+    "human_explanation"
+  ],
+  "properties": {
+    "action_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "session_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "tool_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "action_kind": { "$ref": "common.schema.json#/$defs/ActionKind" },
+    "target": { "$ref": "common.schema.json#/$defs/CapabilitySelector" },
+    "resolved_target": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/CapabilitySelector" },
+        { "type": "null" }
+      ]
+    },
+    "inputs_digest": { "type": "string", "minLength": 1 },
+    "inputs_summary": { "type": "string" },
+    "expected_outputs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "expected_side_effects": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/SideEffectClass" },
+      "uniqueItems": true
+    },
+    "required_grants": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Identifier" },
+      "uniqueItems": true
+    },
+    "requested_budget": { "$ref": "common.schema.json#/$defs/Budget" },
+    "risk_class": { "$ref": "common.schema.json#/$defs/RiskClass" },
+    "data_classes": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/DataClass" },
+      "uniqueItems": true
+    },
+    "taint": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/TaintLabel" },
+      "uniqueItems": true
+    },
+    "idempotency_key": { "type": ["string", "null"] },
+    "compensation_plan": { "type": ["string", "null"] },
+    "human_explanation": { "type": "string", "minLength": 1 }
+  }
+}

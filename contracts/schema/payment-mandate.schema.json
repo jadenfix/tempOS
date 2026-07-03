@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "payment-mandate.schema.json",
+  "title": "PaymentMandate",
+  "description": "Bounded economic authority. No payment without a mandate. final.md §7 (PaymentMandate), §12.7, §16.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mandate_id", "issuer", "holder", "session_id", "rail", "asset", "max_minor_units", "counterparty_policy", "purpose", "expires_at", "approval_threshold_minor_units", "idempotency_key", "receipt_requirement"],
+  "properties": {
+    "mandate_id": { "type": "string", "minLength": 1 },
+    "issuer": { "type": "string" },
+    "holder": { "type": "string" },
+    "session_id": { "type": "string" },
+    "rail": { "type": "string" },
+    "asset": { "type": "string" },
+    "max_minor_units": { "$ref": "common.schema.json#/$defs/uint" },
+    "counterparty_policy": { "type": "string" },
+    "purpose": { "type": "string" },
+    "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "approval_threshold_minor_units": { "$ref": "common.schema.json#/$defs/uint" },
+    "idempotency_key": { "type": "string" },
+    "receipt_requirement": { "type": "string" }
+  }
+}

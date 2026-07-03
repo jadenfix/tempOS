@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-session.schema.json",
+  "title": "AgentSession",
+  "description": "One goal-directed run. final.md §7.2, §12.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "created_at", "created_by", "agent_id", "workspace_id", "goal", "policy_profile", "journal_root", "status"],
+  "properties": {
+    "session_id": { "type": "string", "minLength": 1 },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "created_by": { "type": "string" },
+    "agent_id": { "type": "string", "description": "Acting principal; grants for this session must be held by this id." },
+    "workspace_id": { "type": "string" },
+    "goal": { "type": "string" },
+    "constraints": { "type": "array", "items": { "type": "string" } },
+    "policy_profile": { "type": "string" },
+    "initial_capability_ids": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "budget": { "$ref": "common.schema.json#/$defs/budget" },
+    "model_policy": { "$ref": "common.schema.json#/$defs/model_policy" },
+    "memory_scope": { "type": "string" },
+    "journal_root": { "type": "string" },
+    "status": { "$ref": "common.schema.json#/$defs/session_status" }
+  }
+}

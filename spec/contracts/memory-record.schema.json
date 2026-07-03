@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "memory-record.schema.json",
+  "title": "MemoryRecord",
+  "description": "final.md 12.6 / contracts.rs MemoryRecord. Knowledge preserved with provenance. Invariants: memory has a source; memory has an access policy; memory can be invalidated (expiry / supersede); derived memory can be rebuilt from the journal. Note: confidence is expressed in basis points (0-10000) on the wire rather than a 0-1 float.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "memory_id",
+    "source_event_id",
+    "source_digest",
+    "writer",
+    "created_at",
+    "kind",
+    "content_ref",
+    "summary",
+    "confidence_basis_points",
+    "sensitivity",
+    "access_policy"
+  ],
+  "properties": {
+    "memory_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "source_event_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "source_digest": { "type": "string", "minLength": 1 },
+    "writer": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "created_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "kind": { "type": "string", "minLength": 1 },
+    "content_ref": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string" },
+    "confidence_basis_points": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "sensitivity": { "$ref": "common.schema.json#/$defs/DataClass" },
+    "expires_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/Timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "access_policy": { "type": "string", "minLength": 1 }
+  }
+}
