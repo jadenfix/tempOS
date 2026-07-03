@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "capability-grant.schema.json",
+  "title": "CapabilityGrant",
+  "description": "Explicit, attenuable, revocable authority. final.md §7.3, §12.2, §13.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["grant_id", "issuer", "holder", "session_id", "scope", "expires_at", "delegation", "revocation_handle", "policy_version", "reason"],
+  "properties": {
+    "grant_id": { "type": "string", "minLength": 1 },
+    "issuer": { "type": "string" },
+    "holder": { "type": "string", "description": "Principal that receives authority; must equal the acting agent_id at admission." },
+    "session_id": { "type": "string" },
+    "scope": { "$ref": "common.schema.json#/$defs/capability_scope" },
+    "denied_actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action_kind" }, "uniqueItems": true },
+    "constraints": { "$ref": "common.schema.json#/$defs/grant_constraints" },
+    "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "delegation": { "$ref": "common.schema.json#/$defs/delegation_mode" },
+    "approval": { "$ref": "common.schema.json#/$defs/approval_requirement" },
+    "revocation_handle": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "reason": { "type": "string" },
+    "revoked": { "type": "boolean" }
+  }
+}

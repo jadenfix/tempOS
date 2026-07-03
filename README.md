@@ -2,6 +2,10 @@
 
 Agent-first operating system research and planning.
 
+Start with [AGENTS.md](AGENTS.md) for agent-facing repo context. The
+close-to-the-metal systems engineering rules are in
+[docs/sota-systems-engineering.md](docs/sota-systems-engineering.md).
+
 ## Development
 
 beaterOS follows the neighboring Beater Rust workspace style:

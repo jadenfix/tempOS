@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "capability-receipt.schema.json",
+  "title": "CapabilityReceipt",
+  "description": "final.md 12.5 / contracts.rs (receipt.rs) CapabilityReceipt. Records what happened as a hash-chained, append-only ledger entry. Invariants: receipts are append-only; seq increases by one from zero; prev_receipt_hash links to the previous receipt (or GENESIS_HASH at seq 0); large artifacts are content-addressed via refs; sensitive fields can be redacted through references without breaking the chain. Note: final.md 12.5 names the link field 'previous_receipt_hash'; the wire format uses 'prev_receipt_hash' and adds 'seq'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_id",
+    "seq",
+    "action_id",
+    "tool_id",
+    "target",
+    "started_at",
+    "finished_at",
+    "status",
+    "input_digest",
+    "output_digest",
+    "side_effect_summary",
+    "prev_receipt_hash",
+    "receipt_hash"
+  ],
+  "properties": {
+    "receipt_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "seq": { "type": "integer", "minimum": 0 },
+    "action_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "tool_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "target": { "$ref": "common.schema.json#/$defs/CapabilitySelector" },
+    "started_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "finished_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "status": { "type": "string", "minLength": 1 },
+    "input_digest": { "type": "string", "minLength": 1 },
+    "output_digest": { "type": "string", "minLength": 1 },
+    "side_effect_summary": { "type": "string" },
+    "side_effects": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/SideEffectClass" }
+    },
+    "external_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "artifact_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "prev_receipt_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+    "receipt_hash": { "$ref": "common.schema.json#/$defs/HashValue" }
+  }
+}

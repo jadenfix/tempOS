@@ -1,0 +1,14 @@
+{
+  "grant_id": "grant-repo-write",
+  "issuer": "policy:default-coding",
+  "session_id": "sess-01JABCDEF0",
+  "scope": {
+    "selector": { "resource_kind": "file_path", "resource_id": "/repo/beateros" },
+    "actions": ["read", "write"]
+  },
+  "expires_at": "2026-07-03T20:00:00Z",
+  "delegation": "attenuated_only",
+  "revocation_handle": "rev:grant-repo-write",
+  "policy_version": "policy-2026.07.0",
+  "reason": "Unbound authority: no holder principal"
+}

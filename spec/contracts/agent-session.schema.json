@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-session.schema.json",
+  "title": "AgentSession",
+  "description": "final.md 12.1 / contracts.rs AgentSession. The container for one goal-directed run. Invariants (enforced by the runtime, documented here): a session cannot execute actions without at least one capability grant; every status transition is journaled; pause/resume preserves causality; the session is exportable for audit with redactions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "created_at",
+    "created_by",
+    "agent_id",
+    "workspace_id",
+    "goal",
+    "policy_profile",
+    "journal_root",
+    "status"
+  ],
+  "properties": {
+    "session_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "created_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "created_by": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "agent_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "workspace_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "goal": { "type": "string", "minLength": 1 },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "policy_profile": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "initial_capability_ids": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Identifier" },
+      "uniqueItems": true
+    },
+    "budget": { "$ref": "common.schema.json#/$defs/Budget" },
+    "model_policy": { "$ref": "common.schema.json#/$defs/ModelPolicy" },
+    "memory_scope": { "type": ["string", "null"] },
+    "journal_root": { "type": "string", "minLength": 1 },
+    "status": { "$ref": "common.schema.json#/$defs/SessionStatus" }
+  }
+}

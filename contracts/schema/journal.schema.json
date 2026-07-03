@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "journal.schema.json",
+  "title": "JournalRecord",
+  "description": "One hash-linked record in the append-only journal. final.md §4.5, §10.4, §12.5.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["seq", "created_at", "event", "prev_hash", "hash"],
+  "properties": {
+    "seq": { "$ref": "common.schema.json#/$defs/uint" },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "event": { "$ref": "#/$defs/journal_event" },
+    "prev_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "journal_event": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind", "session"],
+          "properties": {
+            "kind": { "const": "session_created" },
+            "session": { "$ref": "agent-session.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "grant"],
+          "properties": {
+            "kind": { "const": "capability_granted" },
+            "grant": { "$ref": "capability-grant.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "manifest"],
+          "properties": {
+            "kind": { "const": "action_proposed" },
+            "manifest": { "$ref": "action-manifest.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "decision"],
+          "properties": {
+            "kind": { "const": "policy_decided" },
+            "decision": { "$ref": "policy-decision.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "receipt"],
+          "properties": {
+            "kind": { "const": "receipt_appended" },
+            "receipt": { "$ref": "capability-receipt.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "memory"],
+          "properties": {
+            "kind": { "const": "memory_written" },
+            "memory": { "$ref": "memory-record.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "scenario", "passed"],
+          "properties": {
+            "kind": { "const": "scenario_evaluated" },
+            "scenario": { "$ref": "scenario-manifest.schema.json" },
+            "passed": { "type": "boolean" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "incident_id", "note"],
+          "properties": {
+            "kind": { "const": "incident_annotated" },
+            "incident_id": { "type": "string" },
+            "note": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

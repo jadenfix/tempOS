@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.schema.json",
+  "title": "beaterOS Common Definitions",
+  "description": "Shared enums and value objects used across the beaterOS core data contracts (final.md sections 7 and 12). This is the language-neutral wire contract: any implementation's serialized objects (e.g. crates/beater-os-core) must validate against these definitions.",
+  "$defs": {
+    "ActionKind": {
+      "description": "final.md 7.3 / contracts.rs ActionKind. The verb an action performs.",
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "execute",
+        "navigate",
+        "submit",
+        "communicate",
+        "spend",
+        "deploy",
+        "remember",
+        "delegate",
+        "ask_human"
+      ]
+    },
+    "ResourceKind": {
+      "description": "final.md 7.3 / contracts.rs ResourceKind. The kind of resource a capability selector points at.",
+      "type": "string",
+      "enum": [
+        "workspace",
+        "file_path",
+        "network_endpoint",
+        "browser_origin",
+        "tool",
+        "memory",
+        "model_route",
+        "payment_rail",
+        "cloud_resource",
+        "human_recipient",
+        "scenario",
+        "other"
+      ]
+    },
+    "RiskClass": {
+      "description": "final.md 12.3. Ordered low < medium < high < critical. Policy may raise risk; agents may never lower it.",
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "DataClass": {
+      "description": "final.md 13.4. Data sensitivity / provenance class.",
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "personal",
+        "customer",
+        "financial",
+        "secret",
+        "code",
+        "binary",
+        "untrusted_web",
+        "untrusted_email",
+        "untrusted_document",
+        "tool_output"
+      ]
+    },
+    "SideEffectClass": {
+      "description": "final.md 7.6 / contracts.rs SideEffectClass. What kind of side effect an action produces.",
+      "type": "string",
+      "enum": [
+        "none",
+        "local_write",
+        "network_write",
+        "browser_submit",
+        "human_communication",
+        "payment",
+        "cloud_mutation",
+        "deployment",
+        "memory_write",
+        "delegation"
+      ]
+    },
+    "TaintLabel": {
+      "description": "final.md 13.4. Provenance taint carried by data and manifests.",
+      "type": "string",
+      "enum": [
+        "trusted_user_instruction",
+        "system_policy",
+        "developer_instruction",
+        "untrusted_web",
+        "untrusted_email",
+        "untrusted_document",
+        "tool_output",
+        "secret",
+        "personal_data",
+        "customer_data",
+        "financial_data",
+        "code",
+        "binary",
+        "payment_instruction"
+      ]
+    },
+    "SessionStatus": {
+      "description": "final.md 12.1. Lifecycle state of a session; every transition is journaled.",
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "waiting_for_approval",
+        "paused",
+        "completed",
+        "failed",
+        "canceled"
+      ]
+    },
+    "DecisionResult": {
+      "description": "final.md 12.4. Deterministic policy admission outcome.",
+      "type": "string",
+      "enum": [
+        "allowed",
+        "denied",
+        "needs_approval",
+        "needs_simulation",
+        "needs_narrowed_grant"
+      ]
+    },
+    "DelegationMode": {
+      "description": "final.md 12.2. How a grant may be delegated. Delegated grants must be equal or narrower.",
+      "type": "string",
+      "enum": ["none", "attenuated_only", "same_scope"]
+    },
+    "ApprovalMode": {
+      "description": "final.md 7.9. Whether/what kind of human approval a grant requires.",
+      "type": "string",
+      "enum": ["none", "human", "multi_party"]
+    },
+    "HashValue": {
+      "description": "Lowercase hex SHA-256 digest. GENESIS_HASH is 64 zeros (hash.rs).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Timestamp": {
+      "description": "RFC 3339 / ISO 8601 UTC timestamp (serde chrono DateTime<Utc>).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "Identifier": {
+      "description": "Non-empty opaque identifier.",
+      "type": "string",
+      "minLength": 1
+    },
+    "MinorUnits": {
+      "description": "A non-negative integer amount of a currency's smallest unit (e.g. cents).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "OptionalCount": {
+      "description": "An optional non-negative integer ceiling. null means unbounded.",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "Budget": {
+      "description": "final.md 4.1 / contracts.rs Budget. Optional ceilings; null means unbounded. A requested budget fits a limit iff every specified limit dimension bounds the request.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_model_cents": { "$ref": "common.schema.json#/$defs/OptionalCount" },
+        "max_tool_calls": { "$ref": "common.schema.json#/$defs/OptionalCount" },
+        "max_wall_ms": { "$ref": "common.schema.json#/$defs/OptionalCount" },
+        "max_payment_minor_units": { "$ref": "common.schema.json#/$defs/OptionalCount" }
+      }
+    },
+    "ModelPolicy": {
+      "description": "final.md 3.6 / contracts.rs ModelPolicy. Model routing constraints.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_routes": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/Identifier" },
+          "uniqueItems": true
+        },
+        "local_only": { "type": "boolean" },
+        "max_data_class": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/DataClass" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "CapabilitySelector": {
+      "description": "final.md 7.3 / contracts.rs CapabilitySelector. Points at one resource; resource_id '*' is a wildcard within a kind.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_kind", "resource_id"],
+      "properties": {
+        "resource_kind": { "$ref": "common.schema.json#/$defs/ResourceKind" },
+        "resource_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "CapabilityScope": {
+      "description": "contracts.rs CapabilityScope. A selector plus the set of actions allowed on it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector", "actions"],
+      "properties": {
+        "selector": { "$ref": "common.schema.json#/$defs/CapabilitySelector" },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/ActionKind" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "GrantConstraints": {
+      "description": "contracts.rs GrantConstraints. Attenuating limits applied on top of a grant's scope.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_risk": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/RiskClass" },
+            { "type": "null" }
+          ]
+        },
+        "max_data_class": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/DataClass" },
+            { "type": "null" }
+          ]
+        },
+        "budget": { "$ref": "common.schema.json#/$defs/Budget" },
+        "network_allowlist": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "path_prefixes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "ApprovalRequirement": {
+      "description": "contracts.rs ApprovalRequirement. When human/multi-party approval is required for a grant.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "threshold_risk"],
+      "properties": {
+        "mode": { "$ref": "common.schema.json#/$defs/ApprovalMode" },
+        "threshold_risk": { "$ref": "common.schema.json#/$defs/RiskClass" },
+        "reviewer_ids": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/Identifier" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

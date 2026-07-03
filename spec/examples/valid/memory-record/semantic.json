@@ -1,0 +1,14 @@
+{
+  "memory_id": "mem-001",
+  "source_event_id": "evt-042",
+  "source_digest": "sha256:c1a2b3c4d5e6f7089a0b1c2d3e4f5061728394a5b6c7d8e9f0011223344556677",
+  "writer": "agent:coder-1",
+  "created_at": "2026-07-03T18:02:00Z",
+  "kind": "semantic",
+  "content_ref": "cas:sha256:d4e5f60718293a4b5c6d7e8f90011223344556677889900aabbccddeeff00112",
+  "summary": "The tokenizer in parser.rs had an off-by-one at end-of-input.",
+  "confidence_basis_points": 9000,
+  "sensitivity": "code",
+  "expires_at": null,
+  "access_policy": "workspace:beateros/read"
+}

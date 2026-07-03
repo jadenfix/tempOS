@@ -1,0 +1,4 @@
+interface:
+  display_name: "beaterOS Systems Engineering"
+  short_description: "Close-to-metal performance and security review guide"
+  default_prompt: "Use $beateros-systems-engineering to design or review a beaterOS change for close-to-metal performance, security, and operability."

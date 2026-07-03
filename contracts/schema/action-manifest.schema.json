@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "action-manifest.schema.json",
+  "title": "ActionManifest",
+  "description": "A predeclared proposed side effect or observation, admitted by policy before execution. final.md §7.4, §12.3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action_id", "session_id", "tool_id", "action_kind", "target", "inputs_digest", "inputs_summary", "risk_class", "human_explanation"],
+  "properties": {
+    "action_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string" },
+    "tool_id": { "type": "string" },
+    "action_kind": { "$ref": "common.schema.json#/$defs/action_kind" },
+    "target": { "$ref": "common.schema.json#/$defs/capability_selector" },
+    "resolved_target": { "$ref": "common.schema.json#/$defs/capability_selector" },
+    "inputs_digest": { "type": "string" },
+    "inputs_summary": { "type": "string" },
+    "expected_outputs": { "type": "array", "items": { "type": "string" } },
+    "expected_side_effects": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/side_effect_class" }, "uniqueItems": true },
+    "required_grants": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "requested_budget": { "$ref": "common.schema.json#/$defs/budget" },
+    "risk_class": { "$ref": "common.schema.json#/$defs/risk_class" },
+    "data_classes": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/data_class" }, "uniqueItems": true },
+    "taint": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/taint_label" }, "uniqueItems": true },
+    "idempotency_key": { "type": "string" },
+    "compensation_plan": { "type": "string" },
+    "human_explanation": { "type": "string" }
+  }
+}

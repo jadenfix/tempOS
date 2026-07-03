@@ -1,3 +1,7 @@
 /target/
 **/*.rs.bk
 .DS_Store
+
+# Python (tooling under scripts/ and spec/conformance/)
+__pycache__/
+*.py[cod]

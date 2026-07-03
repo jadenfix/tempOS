@@ -1,0 +1,14 @@
+{
+  "mandate_id": "mand-001",
+  "issuer": "user:jaden",
+  "holder": "agent:buyer-1",
+  "session_id": "sess-pay-1",
+  "asset": "USD",
+  "max_minor_units": 5000,
+  "counterparty_policy": "allowlist:vendors",
+  "purpose": "Renew CI minutes",
+  "expires_at": "2026-07-10T00:00:00Z",
+  "approval_threshold_minor_units": 2000,
+  "idempotency_key": "mand-001-key",
+  "receipt_requirement": "required"
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scenario-manifest.schema.json",
+  "title": "ScenarioManifest",
+  "description": "final.md 12.8 / contracts.rs ScenarioManifest. Makes a task testable: the eval equivalent of a unit test plus environment specification. Invariants: scenarios are versioned; results are comparable across model and policy versions; production incidents become new scenarios. Note: final.md 12.8 lists 'seed_data'; the wire format folds seed data into 'fixtures'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scenario_id", "goal", "environment", "oracle"],
+  "properties": {
+    "scenario_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "goal": { "type": "string", "minLength": 1 },
+    "environment": { "type": "string", "minLength": 1 },
+    "fixtures": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "allowed_tools": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Identifier" },
+      "uniqueItems": true
+    },
+    "forbidden_actions": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/ActionKind" },
+      "uniqueItems": true
+    },
+    "oracle": { "type": "string", "minLength": 1 },
+    "success_criteria": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "risk_traps": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "budget": { "$ref": "common.schema.json#/$defs/Budget" },
+    "expected_trace_properties": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

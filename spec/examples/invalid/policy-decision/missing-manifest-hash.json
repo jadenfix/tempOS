@@ -1,0 +1,8 @@
+{
+  "decision_id": "dec-001",
+  "action_id": "act-001",
+  "policy_version": "policy-2026.07.0",
+  "result": "allowed",
+  "explanation": "A decision must be bound to the manifest it decided on.",
+  "created_at": "2026-07-03T18:01:00Z"
+}

@@ -1,0 +1,15 @@
+{
+  "receipt_id": "rcpt-001",
+  "seq": -1,
+  "action_id": "act-001",
+  "tool_id": "tool:fs.write",
+  "target": { "resource_kind": "file_path", "resource_id": "/repo/beateros/src/parser.rs" },
+  "started_at": "2026-07-03T18:01:05Z",
+  "finished_at": "2026-07-03T18:01:06Z",
+  "status": "ok",
+  "input_digest": "sha256:aaa",
+  "output_digest": "sha256:bbb",
+  "side_effect_summary": "Wrote 3 lines to src/parser.rs",
+  "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "receipt_hash": "1b4f0e9851971998e732078544c96b36c3d01cedf7caa332359d6f1d83567014"
+}

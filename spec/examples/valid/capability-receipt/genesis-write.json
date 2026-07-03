@@ -1,0 +1,18 @@
+{
+  "receipt_id": "rcpt-001",
+  "seq": 0,
+  "action_id": "act-001",
+  "tool_id": "tool:fs.write",
+  "target": { "resource_kind": "file_path", "resource_id": "/repo/beateros/src/parser.rs" },
+  "started_at": "2026-07-03T18:01:05Z",
+  "finished_at": "2026-07-03T18:01:06Z",
+  "status": "ok",
+  "input_digest": "sha256:8f1e0c1e9a2b3c4d5e6f7081920a1b2c3d4e5f60718293a4b5c6d7e8f9001122",
+  "output_digest": "sha256:44c2b0f9d1e0a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5e7f90112",
+  "side_effect_summary": "Wrote 3 lines to src/parser.rs",
+  "side_effects": ["local_write"],
+  "external_ids": [],
+  "artifact_refs": ["cas:sha256:44c2b0f9d1e0a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5e7f90112"],
+  "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "receipt_hash": "1b4f0e9851971998e732078544c96b36c3d01cedf7caa332359d6f1d83567014"
+}

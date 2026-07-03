@@ -1,0 +1,29 @@
+name: contracts-conformance
+
+# Validates the language-neutral beaterOS contract spec under spec/.
+# Intentionally separate from the Rust `ci.yml` workflow so the two slices
+# (owned by different agents) never collide on the same file.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    paths:
+      - "spec/**"
+      - ".github/workflows/contracts-conformance.yml"
+  pull_request:
+    paths:
+      - "spec/**"
+      - ".github/workflows/contracts-conformance.yml"
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run contract conformance suite
+        run: python3 spec/conformance/validate.py

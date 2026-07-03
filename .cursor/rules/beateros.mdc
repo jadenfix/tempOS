@@ -1,0 +1,37 @@
+---
+description: beaterOS repo context and SOTA systems-engineering guardrails
+alwaysApply: true
+---
+
+# beaterOS Agent Context
+
+Read `AGENTS.md` first. It maps the repo, links to `final.md`, and points to the
+systems-engineering doctrine in `docs/sota-systems-engineering.md`.
+
+Key rules:
+
+- `final.md` is the source-of-truth plan. Do not shorten or weaken it.
+- Every feature should land through a scoped PR with non-author review and merge.
+- Design from first principles: critical path, authority boundary, state model,
+  resource bounds, failure mode, and evidence trail.
+- Optimize architecture before micro-optimizing code: fewer copies, fewer
+  syscalls, bounded queues, cache-aware layouts, deterministic admission, and
+  explicit backpressure.
+- Rust is the default implementation language. C is allowed for ABI, boot,
+  driver, hypervisor, platform, or measured hot-path needs. Assembly is only for
+  unavoidable hardware boundaries.
+- Unsafe/C/assembly code must be isolated behind safe APIs and justified with
+  tests, fuzz/property checks, or benchmarks where practical.
+- Security is not optional performance overhead. Capabilities, policy decisions,
+  receipts, journals, memory, payments, and tool/model calls must fail closed.
+- Keep macOS and Apple Silicon working. Linux-only APIs require an abstraction or
+  a documented macOS path.
+
+Useful commands:
+
+```sh
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+git diff --check
+```
