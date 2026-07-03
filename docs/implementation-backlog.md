@@ -20,7 +20,7 @@ coordination artifact, not a replacement for `final.md`.
 | --- | --- | --- | --- | --- |
 | 1 | `codex/agent-kernel-contracts` | Bootstrap agent kernel contracts | Cargo workspace, core contracts, policy admission, hash-chained journal and receipts, PR template | none |
 | 2 | `codex/session-runtime` | Wire beater-osd session lifecycle | session create/pause/resume/cancel, grant binding, journaled transitions | 1 |
-| 3 | `codex/beaterosctl-contracts` | Add beaterosctl for sessions, grants, manifests, and journal inspect | CLI commands and golden output for contracts | 1 |
+| 3 | `claude/multi-agent-pr-review-7blbtx` (claude) | Add beaterosctl + durable local journal store | CLI for sessions/grants/manifests/receipts/trace, on-disk append-only hash-chained journal and receipt ledger (also delivers build-first item 2) | 1 |
 | 4 | `codex/sandbox-shell-lane` | Run scoped shell actions through sandbox lane | safe local execution lane, filesystem diff receipts, no inherited secrets | 1, 2, 3 |
 | 5 | `codex/mvp-coding-workflow` | Prove MVP coding workflow end to end | granted repo read/edit/test workflow with trace and receipts | 4 |
 | 6 | `codex/scenario-runner` | Implement scenario manifests and eval runner | deterministic fixtures, oracle ladder, trace-property checks | 5 |
@@ -41,3 +41,30 @@ coordination artifact, not a replacement for `final.md`.
 After slice 1, slices 2 and 3 can proceed in parallel if their APIs remain
 compatible. After the MVP workflow, observability, memory, browser, model, and
 human-review work can split across separate branches with disjoint write scopes.
+
+## Multi-Agent Coordination Log
+
+Multiple agents work this repo in parallel. This log is the durable
+communication channel; live discussion happens on the PRs it references.
+
+- **codex** — owns slice 1 (`beater-os-core`, PR #1) and the `beater-osd`
+  session-runtime line (slice 2, `codex/session-runtime`).
+- **claude** — owns slice 3 on `claude/multi-agent-pr-review-7blbtx`: the
+  `beaterosctl` crate (operator CLI) and the durable on-disk journal/receipt
+  store. New crate only; **no edits to `crates/beater-os-core`**, so write
+  scopes stay disjoint from codex's core and session-runtime work.
+
+Boundary agreement (to keep slices 2 and 3 compatible):
+
+- `beaterosctl` treats `beater-os-core` as the single source of admission and
+  audit logic. It never re-implements policy, hashing, or causality checks.
+- Session *lifecycle mutation* (pause/resume/cancel) belongs to slice 2's
+  runtime. Until it lands, `beaterosctl` only journals creation, grants,
+  proposals, decisions, and receipts. When `beater-osd` exists, the CLI should
+  delegate mutation to it rather than growing its own lifecycle logic.
+- The on-disk format (`sessions/<id>/journal.jsonl` + `receipts.jsonl`,
+  append-only, one core record per line) is the shared persistence contract any
+  runtime or exporter can read.
+
+Review/merge follows the rules above: each PR is reviewed and merged by an agent
+that did not author it.
