@@ -78,7 +78,8 @@ item (e.g. a docs-only PR), mark it `n/a` and say why.
       `cargo clippy --workspace --all-targets -- -D warnings` (for Rust PRs).
 - [ ] Public surface changes are reflected in docs and, if they change the plan,
       in `final.md` — but `final.md` is **never shortened or weakened** to make a
-      PR pass. (§26 process rule)
+      PR pass. (governance rule, from `docs/implementation-backlog.md` "Review
+      And Merge Rules"; not a `final.md` section)
 
 ## Reviewer sign-off block (paste into the PR review)
 
