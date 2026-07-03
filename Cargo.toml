@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/beater-os-core",
+    "crates/beater-os-audit",
 ]
 resolver = "2"
 
