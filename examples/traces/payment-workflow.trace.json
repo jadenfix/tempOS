@@ -1,0 +1,323 @@
+{
+  "bundle_id": "payment-workflow",
+  "description": "final.md §16.1/§13.14: bounded vendor payment admitted only because valid human approval evidence exists; carries a PaymentMandate and a payment receipt.",
+  "policy_version": "policy-2026-07-03.dev",
+  "sessions": [
+    {
+      "session_id": "sess-pay-001",
+      "created_at": "2026-07-03T09:00:00Z",
+      "created_by": "user:jaden",
+      "agent_id": "agent:ap-1",
+      "workspace_id": "ws:finance",
+      "goal": "Pay an approved vendor invoice within the standing mandate.",
+      "constraints": [
+        "no payment above the mandate ceiling",
+        "human approval over threshold"
+      ],
+      "policy_profile": "finance-default",
+      "initial_capability_ids": [
+        "grant-vendor-spend"
+      ],
+      "budget": {
+        "max_payment_minor_units": 100000
+      },
+      "journal_root": "0000000000000000000000000000000000000000000000000000000000000000",
+      "status": "completed"
+    }
+  ],
+  "payment_mandates": [
+    {
+      "mandate_id": "mandate-vendor",
+      "issuer": "user:jaden",
+      "holder": "agent:ap-1",
+      "session_id": "sess-pay-001",
+      "rail": "stripe",
+      "asset": "USD",
+      "max_minor_units": 100000,
+      "counterparty_policy": "allowlist:approved-vendors",
+      "purpose": "Settle approved vendor invoices.",
+      "expires_at": "2026-07-03T12:00:00Z",
+      "approval_threshold_minor_units": 5000,
+      "idempotency_key": "idem-mandate-vendor",
+      "receipt_requirement": "required"
+    }
+  ],
+  "grants": [
+    {
+      "grant_id": "grant-vendor-spend",
+      "issuer": "user:jaden",
+      "holder": "agent:ap-1",
+      "session_id": "sess-pay-001",
+      "scope": {
+        "selector": {
+          "resource_kind": "payment_rail",
+          "resource_id": "stripe"
+        },
+        "actions": [
+          "spend"
+        ]
+      },
+      "constraints": {
+        "max_risk": "high",
+        "max_data_class": "financial",
+        "budget": {
+          "max_payment_minor_units": 100000
+        }
+      },
+      "approval": {
+        "mode": "human",
+        "threshold_risk": "medium",
+        "reviewer_ids": [
+          "user:jaden"
+        ]
+      },
+      "expires_at": "2026-07-03T12:00:00Z",
+      "delegation": "none",
+      "revocation_handle": "rev:grant-vendor-spend",
+      "policy_version": "policy-2026-07-03.dev",
+      "reason": "Pay approved vendor invoices via the standing mandate."
+    }
+  ],
+  "approvals": [
+    {
+      "review_id": "review-pay",
+      "action_id": "act-pay-invoice",
+      "grant_id": "grant-vendor-spend",
+      "reviewer_id": "user:jaden",
+      "approved_at": "2026-07-03T09:01:00Z",
+      "policy_version": "policy-2026-07-03.dev"
+    }
+  ],
+  "manifests": [
+    {
+      "action_id": "act-pay-invoice",
+      "session_id": "sess-pay-001",
+      "tool_id": "payment",
+      "action_kind": "spend",
+      "target": {
+        "resource_kind": "payment_rail",
+        "resource_id": "stripe"
+      },
+      "inputs_digest": "sha256:in-pay-invoice",
+      "inputs_summary": "Charge 6200 USD minor units to an approved vendor.",
+      "expected_side_effects": [
+        "payment"
+      ],
+      "required_grants": [
+        "grant-vendor-spend"
+      ],
+      "requested_budget": {
+        "max_payment_minor_units": 6200
+      },
+      "risk_class": "medium",
+      "data_classes": [
+        "financial"
+      ],
+      "taint": [
+        "payment_instruction"
+      ],
+      "idempotency_key": "idem-pay-invoice",
+      "human_explanation": "Pay the approved vendor invoice #4471."
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "dec-pay",
+      "action_id": "act-pay-invoice",
+      "policy_version": "policy-2026-07-03.dev",
+      "result": "allowed",
+      "explanation": "action admitted by explicit active capability grant with valid human approval",
+      "created_at": "2026-07-03T09:02:00Z"
+    }
+  ],
+  "receipts": [
+    {
+      "receipt_id": "rcpt-pay",
+      "seq": 0,
+      "action_id": "act-pay-invoice",
+      "tool_id": "payment",
+      "target": {
+        "resource_kind": "payment_rail",
+        "resource_id": "stripe"
+      },
+      "started_at": "2026-07-03T09:02:00Z",
+      "finished_at": "2026-07-03T09:02:00Z",
+      "status": "ok",
+      "input_digest": "sha256:in-pay-invoice",
+      "output_digest": "sha256:out-act-pay-invoice",
+      "side_effect_summary": "charged 6200 USD minor units to approved vendor #4471",
+      "side_effects": [
+        "payment"
+      ],
+      "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "external_ids": [
+        "stripe:ch_test_4471"
+      ],
+      "receipt_hash": "2ff41c8d206532028b27716409989e15552c6b90c28d0d1220311e331af917e4"
+    }
+  ],
+  "journal": [
+    {
+      "seq": 0,
+      "created_at": "2026-07-03T09:00:00Z",
+      "event": {
+        "kind": "session_created",
+        "session": {
+          "session_id": "sess-pay-001",
+          "created_at": "2026-07-03T09:00:00Z",
+          "created_by": "user:jaden",
+          "agent_id": "agent:ap-1",
+          "workspace_id": "ws:finance",
+          "goal": "Pay an approved vendor invoice within the standing mandate.",
+          "constraints": [
+            "no payment above the mandate ceiling",
+            "human approval over threshold"
+          ],
+          "policy_profile": "finance-default",
+          "initial_capability_ids": [
+            "grant-vendor-spend"
+          ],
+          "budget": {
+            "max_payment_minor_units": 100000
+          },
+          "journal_root": "0000000000000000000000000000000000000000000000000000000000000000",
+          "status": "completed"
+        }
+      },
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "e2000ce593266bb364a8aff6572347a254dbc5299e64af6a33ab368857719f63"
+    },
+    {
+      "seq": 1,
+      "created_at": "2026-07-03T09:00:00Z",
+      "event": {
+        "kind": "capability_granted",
+        "grant": {
+          "grant_id": "grant-vendor-spend",
+          "issuer": "user:jaden",
+          "holder": "agent:ap-1",
+          "session_id": "sess-pay-001",
+          "scope": {
+            "selector": {
+              "resource_kind": "payment_rail",
+              "resource_id": "stripe"
+            },
+            "actions": [
+              "spend"
+            ]
+          },
+          "constraints": {
+            "max_risk": "high",
+            "max_data_class": "financial",
+            "budget": {
+              "max_payment_minor_units": 100000
+            }
+          },
+          "approval": {
+            "mode": "human",
+            "threshold_risk": "medium",
+            "reviewer_ids": [
+              "user:jaden"
+            ]
+          },
+          "expires_at": "2026-07-03T12:00:00Z",
+          "delegation": "none",
+          "revocation_handle": "rev:grant-vendor-spend",
+          "policy_version": "policy-2026-07-03.dev",
+          "reason": "Pay approved vendor invoices via the standing mandate."
+        }
+      },
+      "prev_hash": "e2000ce593266bb364a8aff6572347a254dbc5299e64af6a33ab368857719f63",
+      "hash": "cdf22fe8c81460b568d360f5adea4a98a76ea3b51db8579d6d51205d4e249ee7"
+    },
+    {
+      "seq": 2,
+      "created_at": "2026-07-03T09:01:00Z",
+      "event": {
+        "kind": "action_proposed",
+        "manifest": {
+          "action_id": "act-pay-invoice",
+          "session_id": "sess-pay-001",
+          "tool_id": "payment",
+          "action_kind": "spend",
+          "target": {
+            "resource_kind": "payment_rail",
+            "resource_id": "stripe"
+          },
+          "inputs_digest": "sha256:in-pay-invoice",
+          "inputs_summary": "Charge 6200 USD minor units to an approved vendor.",
+          "expected_side_effects": [
+            "payment"
+          ],
+          "required_grants": [
+            "grant-vendor-spend"
+          ],
+          "requested_budget": {
+            "max_payment_minor_units": 6200
+          },
+          "risk_class": "medium",
+          "data_classes": [
+            "financial"
+          ],
+          "taint": [
+            "payment_instruction"
+          ],
+          "idempotency_key": "idem-pay-invoice",
+          "human_explanation": "Pay the approved vendor invoice #4471."
+        }
+      },
+      "prev_hash": "cdf22fe8c81460b568d360f5adea4a98a76ea3b51db8579d6d51205d4e249ee7",
+      "hash": "866b31e7f5a92e07e89d200b69ae98efb17f600553eda4f8fdef25158c5fd53c"
+    },
+    {
+      "seq": 3,
+      "created_at": "2026-07-03T09:02:00Z",
+      "event": {
+        "kind": "policy_decided",
+        "decision": {
+          "decision_id": "dec-pay",
+          "action_id": "act-pay-invoice",
+          "policy_version": "policy-2026-07-03.dev",
+          "result": "allowed",
+          "explanation": "action admitted by explicit active capability grant with valid human approval",
+          "created_at": "2026-07-03T09:02:00Z"
+        }
+      },
+      "prev_hash": "866b31e7f5a92e07e89d200b69ae98efb17f600553eda4f8fdef25158c5fd53c",
+      "hash": "8c461f8e4358f34b4451b547d927977a62069ed1f2d5121f42c83a34709c35e4"
+    },
+    {
+      "seq": 4,
+      "created_at": "2026-07-03T09:02:00Z",
+      "event": {
+        "kind": "receipt_appended",
+        "receipt": {
+          "receipt_id": "rcpt-pay",
+          "seq": 0,
+          "action_id": "act-pay-invoice",
+          "tool_id": "payment",
+          "target": {
+            "resource_kind": "payment_rail",
+            "resource_id": "stripe"
+          },
+          "started_at": "2026-07-03T09:02:00Z",
+          "finished_at": "2026-07-03T09:02:00Z",
+          "status": "ok",
+          "input_digest": "sha256:in-pay-invoice",
+          "output_digest": "sha256:out-act-pay-invoice",
+          "side_effect_summary": "charged 6200 USD minor units to approved vendor #4471",
+          "side_effects": [
+            "payment"
+          ],
+          "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "external_ids": [
+            "stripe:ch_test_4471"
+          ],
+          "receipt_hash": "2ff41c8d206532028b27716409989e15552c6b90c28d0d1220311e331af917e4"
+        }
+      },
+      "prev_hash": "8c461f8e4358f34b4451b547d927977a62069ed1f2d5121f42c83a34709c35e4",
+      "hash": "d2f32d08d41b2a4157732afa8c27369b48083efc6735f520c8eb01fcf485cbe7"
+    }
+  ]
+}

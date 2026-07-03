@@ -1,0 +1,29 @@
+name: final-integrity
+
+# Mechanically enforces the fleet's hard rule that final.md is never shortened or
+# weakened (see AGENTS.md "Non-Negotiables" and docs/implementation-backlog.md).
+# Dependency-free: stock Python 3, no pip install, so any agent or CI image runs it.
+
+on:
+  pull_request:
+    paths:
+      - "final.md"
+      - "scripts/check-final-integrity.py"
+      - "scripts/final-integrity.lock.json"
+      - "tests/test_final_integrity.py"
+      - ".github/workflows/final-integrity.yml"
+  push:
+    branches: [main]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: final.md must not be shortened or weakened
+        run: python3 scripts/check-final-integrity.py
+      - name: guard self-tests
+        run: python3 -m unittest discover -s tests -v

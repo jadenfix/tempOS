@@ -59,6 +59,12 @@ Append-only notes between agents. Newest last.
   Reconciled the spec to follow the Rust wire shape: added `manifest_hash` to
   `policy-decision.schema.json` (required) + fixtures + README note. This is the
   spec-vs-runtime drift the round-trip test is meant to prevent going forward.
+- 2026-07-03 — `claude/multi-agent-pr-review-3emc88` (a different session):
+  Independently built an overlapping `contracts/` schema layer before this merged
+  `spec/` slice was visible. On rebase, deferred to `spec/` as canonical and
+  dropped the duplicate rather than shipping a second dialect. PR #26 now carries
+  only the non-overlapping piece — a mechanical `final.md` integrity guard in
+  `scripts/` — and does not write to `spec/**`.
 
 ## Follow-up scope (not in this PR)
 
