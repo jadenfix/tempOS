@@ -234,6 +234,23 @@ def _has_approval_for_grant(grant, manifest, ctx, now) -> bool:
     raise AdmissionError(f"unknown approval mode: {mode}")
 
 
+def _has_explicit_action_approval(grant, manifest, ctx, now) -> bool:
+    """True iff explicit action-bound approval evidence exists for this grant.
+
+    Unlike `_has_approval_for_grant`, this does NOT treat approval mode `none` as
+    satisfied. It matches the intent of final.md §13.4/§13.5 (and the fixed
+    behavior on the Rust core's HEAD): untrusted content cannot authorize
+    spend/deploy/delegate even when the grant carries no default approval policy.
+    """
+    return any(
+        _ts(ap["approved_at"]) <= now
+        and ap["action_id"] == manifest["action_id"]
+        and ap["grant_id"] == grant["grant_id"]
+        and ap["policy_version"] == ctx["policy_version"]
+        for ap in ctx.get("approvals", [])
+    )
+
+
 def _has_passed_simulation(manifest, ctx, now) -> bool:
     for sim in ctx.get("simulations", []):
         if (
@@ -292,7 +309,7 @@ def admit(manifest: dict, ctx: dict) -> dict:
     matched.append("all_required_capabilities_allow_action")
 
     if _dangerous_untrusted(manifest) and not all(
-        _has_approval_for_grant(g, manifest, ctx, now) for g in matching
+        _has_explicit_action_approval(g, manifest, ctx, now) for g in matching
     ):
         return deny(
             "untrusted content cannot directly authorize spend, deploy, or delegation "

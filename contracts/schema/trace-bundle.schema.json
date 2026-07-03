@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "trace-bundle.schema.json",
+  "title": "TraceBundle",
+  "description": "A self-contained end-to-end trace: the objects for one session run plus its hash-linked receipt and journal chains. Consumed by the conformance gate. final.md §24 (MVP proof), §2.2 (reproducibility).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle_id", "policy_version", "sessions", "manifests", "decisions", "journal"],
+  "properties": {
+    "bundle_id": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "sessions": { "type": "array", "items": { "$ref": "agent-session.schema.json" }, "minItems": 1 },
+    "grants": { "type": "array", "items": { "$ref": "capability-grant.schema.json" } },
+    "approvals": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/approval_evidence" } },
+    "simulations": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/simulation_evidence" } },
+    "manifests": { "type": "array", "items": { "$ref": "action-manifest.schema.json" } },
+    "decisions": { "type": "array", "items": { "$ref": "policy-decision.schema.json" } },
+    "receipts": { "type": "array", "items": { "$ref": "capability-receipt.schema.json" } },
+    "journal": { "type": "array", "items": { "$ref": "journal.schema.json" } }
+  }
+}

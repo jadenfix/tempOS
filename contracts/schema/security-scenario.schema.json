@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "security-scenario.schema.json",
+  "title": "SecurityScenario",
+  "description": "An adversarial eval: a ScenarioManifest plus a concrete admission probe asserting the policy layer blocks or escalates the attack even if the model is persuaded. final.md §14.5, §13.5.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scenario", "attack", "probe"],
+  "properties": {
+    "scenario": { "$ref": "scenario-manifest.schema.json" },
+    "attack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vector", "description"],
+      "properties": {
+        "vector": { "type": "string", "description": "e.g. prompt_injection_web, malicious_tool, email_wire_funds, memory_poisoning, subagent_escalation, payment_address_swap" },
+        "description": { "type": "string" },
+        "final_md_refs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context", "manifest", "expected_result", "must_be_blocked"],
+      "properties": {
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["now", "actor_id", "session_id", "policy_version"],
+          "properties": {
+            "now": { "$ref": "common.schema.json#/$defs/timestamp" },
+            "actor_id": { "type": "string" },
+            "session_id": { "type": "string" },
+            "policy_version": { "type": "string" },
+            "grants": { "type": "array", "items": { "$ref": "capability-grant.schema.json" } },
+            "approvals": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/approval_evidence" } },
+            "simulations": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/simulation_evidence" } }
+          }
+        },
+        "manifest": { "$ref": "action-manifest.schema.json" },
+        "expected_result": { "$ref": "common.schema.json#/$defs/decision_result" },
+        "must_be_blocked": { "type": "boolean", "description": "true when the attack must NOT be admitted (expected_result != allowed)." }
+      }
+    }
+  }
+}

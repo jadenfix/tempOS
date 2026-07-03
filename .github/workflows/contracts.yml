@@ -1,0 +1,37 @@
+name: contracts-conformance
+
+# Gate for the language-neutral contract corpus (JSON Schemas + example traces +
+# adversarial scenarios). Separate from the Rust CI (ci.yml) so the two families'
+# work stays independent. See tools/conformance/README.md and AGENTS.md.
+
+on:
+  push:
+    paths:
+      - "contracts/**"
+      - "examples/**"
+      - "scenarios/**"
+      - "tools/conformance/**"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "examples/**"
+      - "scenarios/**"
+      - "tools/conformance/**"
+      - ".github/workflows/contracts.yml"
+  workflow_dispatch:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Self-test (guard against a false-green gate)
+        run: python3 tools/conformance/selftest.py
+      - name: Golden fixtures reproduce (no drift)
+        run: python3 tools/conformance/build_fixtures.py --check
+      - name: Conformance gate (schemas + invariants + scenarios)
+        run: python3 tools/conformance/validate.py

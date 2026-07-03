@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scenario-manifest.schema.json",
+  "title": "ScenarioManifest",
+  "description": "Makes a task testable; the eval unit. final.md §7.10, §12.8, §14.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scenario_id", "goal", "environment", "oracle"],
+  "properties": {
+    "scenario_id": { "type": "string", "minLength": 1 },
+    "goal": { "type": "string" },
+    "environment": { "type": "string" },
+    "fixtures": { "type": "object", "additionalProperties": { "type": "string" } },
+    "allowed_tools": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "forbidden_actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action_kind" }, "uniqueItems": true },
+    "oracle": { "type": "string" },
+    "success_criteria": { "type": "array", "items": { "type": "string" } },
+    "risk_traps": { "type": "array", "items": { "type": "string" } },
+    "budget": { "$ref": "common.schema.json#/$defs/budget" },
+    "expected_trace_properties": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "capability-receipt.schema.json",
+  "title": "CapabilityReceipt",
+  "description": "Append-only, hash-linked record of an executed action. final.md §7.6, §12.5, §13.11.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["receipt_id", "seq", "action_id", "tool_id", "target", "started_at", "finished_at", "status", "input_digest", "output_digest", "side_effect_summary", "prev_receipt_hash", "receipt_hash"],
+  "properties": {
+    "receipt_id": { "type": "string", "minLength": 1 },
+    "seq": { "$ref": "common.schema.json#/$defs/uint" },
+    "action_id": { "type": "string" },
+    "tool_id": { "type": "string" },
+    "target": { "$ref": "common.schema.json#/$defs/capability_selector" },
+    "started_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "finished_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "status": { "type": "string" },
+    "input_digest": { "type": "string" },
+    "output_digest": { "type": "string" },
+    "side_effect_summary": { "type": "string" },
+    "side_effects": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/side_effect_class" } },
+    "external_ids": { "type": "array", "items": { "type": "string" } },
+    "artifact_refs": { "type": "array", "items": { "type": "string" } },
+    "prev_receipt_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "receipt_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

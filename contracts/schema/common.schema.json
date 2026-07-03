@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.schema.json",
+  "title": "beaterOS shared contract vocabulary",
+  "description": "Enums and shared structures for the core contracts. Pinned field-for-field to crates/beater-os-core (commit 3e5625a): snake_case enum values match serde(rename_all = snake_case).",
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 / ISO 8601 UTC timestamp."
+    },
+    "uint": { "type": "integer", "minimum": 0 },
+    "action_kind": {
+      "type": "string",
+      "enum": ["read", "write", "execute", "navigate", "submit", "communicate", "spend", "deploy", "remember", "delegate", "ask_human"]
+    },
+    "resource_kind": {
+      "type": "string",
+      "enum": ["workspace", "file_path", "network_endpoint", "browser_origin", "tool", "memory", "model_route", "payment_rail", "cloud_resource", "human_recipient", "scenario", "other"]
+    },
+    "risk_class": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "data_class": {
+      "type": "string",
+      "enum": ["public", "internal", "personal", "customer", "financial", "secret", "code", "binary", "untrusted_web", "untrusted_email", "untrusted_document", "tool_output"]
+    },
+    "side_effect_class": {
+      "type": "string",
+      "enum": ["none", "local_write", "network_write", "browser_submit", "human_communication", "payment", "cloud_mutation", "deployment", "memory_write", "delegation"]
+    },
+    "taint_label": {
+      "type": "string",
+      "enum": ["trusted_user_instruction", "system_policy", "developer_instruction", "untrusted_web", "untrusted_email", "untrusted_document", "tool_output", "secret", "personal_data", "customer_data", "financial_data", "code", "binary", "payment_instruction"]
+    },
+    "session_status": {
+      "type": "string",
+      "enum": ["created", "running", "waiting_for_approval", "paused", "completed", "failed", "canceled"]
+    },
+    "decision_result": {
+      "type": "string",
+      "enum": ["allowed", "denied", "needs_approval", "needs_simulation", "needs_narrowed_grant"]
+    },
+    "delegation_mode": {
+      "type": "string",
+      "enum": ["none", "attenuated_only", "same_scope"]
+    },
+    "approval_mode": {
+      "type": "string",
+      "enum": ["none", "human", "multi_party"]
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional resource ceilings. Absent field = unbounded on the limit side, but fails closed when a grant sets a ceiling the action does not request.",
+      "properties": {
+        "max_model_cents": { "$ref": "#/$defs/uint" },
+        "max_tool_calls": { "$ref": "#/$defs/uint" },
+        "max_wall_ms": { "$ref": "#/$defs/uint" },
+        "max_payment_minor_units": { "$ref": "#/$defs/uint" }
+      }
+    },
+    "model_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_routes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "local_only": { "type": "boolean" },
+        "max_data_class": { "$ref": "#/$defs/data_class" }
+      }
+    },
+    "capability_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_kind", "resource_id"],
+      "properties": {
+        "resource_kind": { "$ref": "#/$defs/resource_kind" },
+        "resource_id": { "type": "string", "description": "Concrete id, or \"*\" wildcard within the resource kind." }
+      }
+    },
+    "capability_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector", "actions"],
+      "properties": {
+        "selector": { "$ref": "#/$defs/capability_selector" },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/action_kind" }, "uniqueItems": true }
+      }
+    },
+    "grant_constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_risk": { "$ref": "#/$defs/risk_class" },
+        "max_data_class": { "$ref": "#/$defs/data_class" },
+        "budget": { "$ref": "#/$defs/budget" },
+        "network_allowlist": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "path_prefixes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "approval_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "threshold_risk"],
+      "properties": {
+        "mode": { "$ref": "#/$defs/approval_mode" },
+        "threshold_risk": { "$ref": "#/$defs/risk_class" },
+        "reviewer_ids": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "approval_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_id", "action_id", "grant_id", "reviewer_id", "approved_at", "policy_version"],
+      "properties": {
+        "review_id": { "type": "string" },
+        "action_id": { "type": "string" },
+        "grant_id": { "type": "string" },
+        "reviewer_id": { "type": "string" },
+        "approved_at": { "$ref": "#/$defs/timestamp" },
+        "policy_version": { "type": "string" }
+      }
+    },
+    "simulation_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["simulation_id", "action_id", "scenario_id", "passed_at", "policy_version"],
+      "properties": {
+        "simulation_id": { "type": "string" },
+        "action_id": { "type": "string" },
+        "scenario_id": { "type": "string" },
+        "passed_at": { "$ref": "#/$defs/timestamp" },
+        "policy_version": { "type": "string" }
+      }
+    }
+  }
+}

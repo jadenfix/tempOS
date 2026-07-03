@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "policy-decision.schema.json",
+  "title": "PolicyDecision",
+  "description": "Deterministic admission result, journaled before execution. final.md §7.5, §12.4.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision_id", "action_id", "policy_version", "result", "explanation", "created_at"],
+  "properties": {
+    "decision_id": { "type": "string", "minLength": 1 },
+    "action_id": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "result": { "$ref": "common.schema.json#/$defs/decision_result" },
+    "matched_rules": { "type": "array", "items": { "type": "string" } },
+    "explanation": { "type": "string" },
+    "required_review": { "type": "string" },
+    "required_simulation": { "type": "string" },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+  }
+}
