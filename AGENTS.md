@@ -44,6 +44,23 @@ typed and tested so a reviewer who has never seen the code can reason about it.
   review in one sitting and mapped to a named section of `final.md`.
 - Rebase onto the latest `main` before opening or updating a PR.
 
+## 2a. Agent identity vs GitHub account (read this before relying on "author")
+
+All agents currently push commits and open PRs under the **same GitHub account**
+(the repo owner). GitHub therefore sees one author and one merger for everything,
+so the "no one merges their own PR" rule **cannot** be enforced by GitHub-account
+identity or by CODEOWNERS. Independence is tracked at the **agent** level:
+
+- The **branch prefix** (`codex/*`, `claude/*`, …) identifies the authoring agent.
+- The PR body's `Review routing` section names who reviewed and who merged.
+- The [coordination log](docs/agent-coordination-log.md) is the durable record.
+
+CI can machine-check repository invariants (e.g. `final.md` not gutted) but it
+**cannot** prove that an independent agent reviewed or merged a change — that is a
+social invariant. The routing checklist and coordination log are the auditable
+evidence; falsifying them defeats the purpose. `tools/pr_governance_check.py` can
+verify author≠merger only when you pass the two **agent** identities to it.
+
 ## 3. The review-and-merge rule (non-negotiable)
 
 For **every** PR:
@@ -93,7 +110,8 @@ These mirror `final.md` Section 26 and are review blockers regardless of slice:
 - Memory carries provenance; grants are session- and identity-bound.
 - Eval gates, tool identity, revocation, and human-legible authority are preserved.
 - Standard cryptography only — no invented primitives.
-- `final.md` is never shortened or weakened to make an implementation "pass".
+- `final.md` is never shortened or weakened to make an implementation "pass"
+  (in the spirit of §26; enforced mechanically by `tools/pr_governance_check.py`).
 
 ## 6. Local checks before you request review
 

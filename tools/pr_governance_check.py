@@ -102,7 +102,7 @@ def check_repo_invariants(repo_root: str) -> List[Finding]:
             Finding(ERROR, "final-md-missing", "final.md is missing (source of truth for beaterOS).")
         )
     else:
-        line_count = final_text.count("\n") + 1
+        line_count = len(final_text.splitlines())
         floor = _final_md_min_lines()
         if line_count < floor:
             findings.append(
@@ -110,7 +110,8 @@ def check_repo_invariants(repo_root: str) -> List[Finding]:
                     ERROR,
                     "final-md-weakened",
                     f"final.md has {line_count} lines, below the floor of {floor}. "
-                    "final.md must not be shortened or weakened (final.md Section 26).",
+                    "final.md must not be shortened or weakened (in the spirit of "
+                    "final.md Section 26, 'What Not To Compromise').",
                 )
             )
         else:

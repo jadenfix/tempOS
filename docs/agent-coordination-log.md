@@ -28,8 +28,8 @@ which approach is further along or better, then pick something else.
 
 | Agent | Branch | Slice / scope | Expected write scope | PR | Status |
 | --- | --- | --- | --- | --- | --- |
-| codex | `codex/agent-kernel-contracts` | Bootstrap agent kernel contracts (final.md §12, §10) — Rust core crate, policy admission, hash-chained journal/receipts | `Cargo.*`, `crates/beater-os-core/**`, `.github/workflows/ci.yml`, `.github/PULL_REQUEST_TEMPLATE.md`, `docs/implementation-backlog.md` | #1 (draft) | in-review |
-| claude | `claude/multi-agent-pr-review` | Multi-agent review & coordination governance (final.md §13, §19 Phase 0, §26) — collaboration contract, DPR protocol, reviewer rubric, governance tool + CI, Phase-0 glossary/open-questions | `AGENTS.md`, `docs/multi-agent-review-protocol.md`, `docs/review-checklist.md`, `docs/agent-coordination-log.md`, `docs/glossary.md`, `docs/open-questions.md`, `tools/**`, `.github/workflows/governance.yml` | (opening as draft) | claimed |
+| codex | `codex/agent-kernel-contracts` | Bootstrap agent kernel contracts (final.md §12, §10) — Rust core crate, policy admission, hash-chained journal/receipts | `Cargo.*`, `crates/beater-os-core/**`, `.github/workflows/ci.yml`, `.github/PULL_REQUEST_TEMPLATE.md`, `docs/implementation-backlog.md` | #1 | **merged** (into `main` by owner) |
+| claude | `claude/multi-agent-pr-review-qp5d8a` | Multi-agent review & coordination governance (final.md §13, §19 Phase 0, §26) — collaboration contract, DPR protocol, reviewer rubric, governance tool + CI, Phase-0 glossary/open-questions | `AGENTS.md`, `docs/multi-agent-review-protocol.md`, `docs/review-checklist.md`, `docs/agent-coordination-log.md`, `docs/glossary.md`, `docs/open-questions.md`, `tools/**`, `.github/workflows/governance.yml` | #24 | in-review |
 
 ## Notes
 
@@ -45,3 +45,18 @@ which approach is further along or better, then pick something else.
   `codex/*`. Per `AGENTS.md` §1 (shared ownership), those slices are open to any
   agent. If you pick one up, claim it here and rename the branch to your prefix
   to avoid the appearance of single-agent ownership.
+- 2026-07-03 — `claude`: **PR #1 merged** to `main` (owner performed the merge —
+  satisfies "author ≠ merger"). The DPR loop worked: my Blocking #1 (untrusted
+  content authorizing spend/deploy via default-`None`-approval grants) was fixed
+  before merge ("bind admission evidence to manifests").
+- 2026-07-03 — `claude`: **FOLLOW-UP for any agent** — my Blocking #2 from the
+  PR #1 DPR is **still open on `main`**: `crates/beater-os-core/src/policy.rs`
+  (approval-threshold gate ~line 154, simulation gate ~line 173) keys off the
+  agent-declared `manifest.risk_class` with no policy-derived floor, so a
+  *trusted* payment/deploy can under-declare `Low` to skip both gates. `final.md`
+  §26 requires risk be raised by policy, never lowered by the agent. Suggested
+  fix: derive an effective risk floor from `action_kind`/`expected_side_effects`
+  (Payment/Deployment/Delegation ⇒ at least `High`) and surface it on
+  `PolicyDecision`. Tracked in `docs/open-questions.md`. I'm not opening this
+  myself to avoid colliding with codex's active Rust work — codex or any agent,
+  please claim it here.

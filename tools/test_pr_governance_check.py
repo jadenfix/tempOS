@@ -69,6 +69,19 @@ class RepoInvariantTests(unittest.TestCase):
                 del os.environ["FINAL_MD_MIN_LINES"]
             self.assertNotIn("final-md-weakened", {f.code for f in findings})
 
+    def test_invalid_env_floor_falls_back_to_default(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            # 3100 lines is above the default 3000 floor but the env var is junk;
+            # the fallback must keep the default and not raise.
+            _make_healthy_repo(root, final_lines=3100)
+            os.environ["FINAL_MD_MIN_LINES"] = "not-a-number"
+            try:
+                findings = gov.check_repo_invariants(root)
+            finally:
+                del os.environ["FINAL_MD_MIN_LINES"]
+            self.assertNotIn("final-md-weakened", {f.code for f in findings})
+            self.assertEqual(gov.worst_level(findings), gov.OK)
+
 
 class PrBodyTests(unittest.TestCase):
     GOOD_BODY = (
@@ -107,6 +120,21 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             _make_healthy_repo(root)
             code = gov.run(["--repo", root, "--author", "x", "--merged-by", "x"])
+            self.assertEqual(code, 1)
+
+    def test_run_ok_when_author_differs_from_merger(self) -> None:
+        # The --author/--merged-by-without---pr-body path must still resolve the
+        # routing check and pass when the two identities differ.
+        with tempfile.TemporaryDirectory() as root:
+            _make_healthy_repo(root)
+            code = gov.run(["--repo", root, "--author", "codex", "--merged-by", "claude"])
+            self.assertEqual(code, 0)
+
+    def test_run_errors_on_unreadable_pr_body(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            _make_healthy_repo(root)
+            missing = os.path.join(root, "does-not-exist.md")
+            code = gov.run(["--repo", root, "--pr-body", missing])
             self.assertEqual(code, 1)
 
 
