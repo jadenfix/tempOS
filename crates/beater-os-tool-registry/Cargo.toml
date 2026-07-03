@@ -1,0 +1,20 @@
+[package]
+name = "beater-os-tool-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Trustworthy tool registry for the beaterOS agent kernel: signed manifests, version/schema pinning, risk metadata, per-workspace allowlists, quarantine, and revocation."
+
+[dependencies]
+beater-os-core = { path = "../beater-os-core" }
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
