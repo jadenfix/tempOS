@@ -20,7 +20,7 @@ coordination artifact, not a replacement for `final.md`.
 | --- | --- | --- | --- | --- |
 | 1 | `codex/agent-kernel-contracts` | Bootstrap agent kernel contracts | Cargo workspace, core contracts, policy admission, hash-chained journal and receipts, PR template | none |
 | 2 | `codex/session-runtime` | Wire beater-osd session lifecycle | session create/pause/resume/cancel, grant binding, journaled transitions | 1 |
-| 3 | `claude/multi-agent-pr-review-7blbtx` (claude) | Add beaterosctl + durable local journal store | CLI for sessions/grants/manifests/receipts/trace, on-disk append-only hash-chained journal and receipt ledger (also delivers build-first item 2) | 1 |
+| 3 | `claude/multi-agent-pr-review-7blbtx` (claude) | Add beaterosctl + durable local journal store | CLI for sessions/grants/manifests/receipts/trace, plus the on-disk append-only hash-chained journal and receipt ledger (the durable realization of build-first item 2 "local append-only journal"; does NOT include the beater-osd session lifecycle, which is slice 2) | 1 |
 | 4 | `codex/sandbox-shell-lane` | Run scoped shell actions through sandbox lane | safe local execution lane, filesystem diff receipts, no inherited secrets | 1, 2, 3 |
 | 5 | `codex/mvp-coding-workflow` | Prove MVP coding workflow end to end | granted repo read/edit/test workflow with trace and receipts | 4 |
 | 6 | `codex/scenario-runner` | Implement scenario manifests and eval runner | deterministic fixtures, oracle ladder, trace-property checks | 5 |

@@ -22,6 +22,12 @@ const RECEIPTS_FILE: &str = "receipts.jsonl";
 /// previously written line; new records are only ever appended. This is the
 /// on-disk realization of the "journal before side effects, receipts after"
 /// invariants from `final.md`.
+///
+/// Concurrency: this is a single-user, single-process operator tool. Appends
+/// are read-len-then-append and are **not** guarded by a file lock, so two
+/// concurrent processes writing the same session could fork a chain. Such a
+/// fork is not silent — it fails `journal verify` — but a locking or
+/// single-writer runtime (the `beater-osd` slice) should own concurrent access.
 pub struct Store {
     root: PathBuf,
 }
@@ -189,8 +195,10 @@ impl Store {
         Ok(ReceiptLedger::from_receipts(receipts))
     }
 
-    /// Append a side-effect receipt to a session's ledger and persist it.
-    pub fn append_receipt(
+    /// Compute the next chained receipt for a session **without** writing it to
+    /// disk. The caller is expected to journal the resulting `ReceiptAppended`
+    /// event (the source of truth) and then call [`Store::persist_receipt`].
+    pub fn stage_receipt(
         &self,
         session_id: &str,
         input: CapabilityReceiptInput,
@@ -199,13 +207,21 @@ impl Store {
             return Err(CliError::SessionNotFound(session_id.to_string()));
         }
         let mut ledger = self.load_receipts(session_id)?;
-        let receipt = ledger.append(input)?;
-        let line = serde_json::to_string(&receipt)?;
+        Ok(ledger.append(input)?)
+    }
+
+    /// Persist a previously [`staged`](Store::stage_receipt) receipt as the next
+    /// line of the session's receipt ledger.
+    pub fn persist_receipt(&self, session_id: &str, receipt: &CapabilityReceipt) -> CliResult<()> {
+        if !self.session_exists(session_id) {
+            return Err(CliError::SessionNotFound(session_id.to_string()));
+        }
+        let line = serde_json::to_string(receipt)?;
         let mut file = OpenOptions::new()
             .append(true)
             .open(self.receipts_path(session_id))?;
         writeln!(file, "{line}")?;
-        Ok(receipt)
+        Ok(())
     }
 
     /// Rebuild the read model for a session from its journal.

@@ -330,3 +330,158 @@ fn help_is_available() {
     assert!(out.contains("beaterosctl"));
     assert!(out.contains("session create"));
 }
+
+/// Set up a session with a write grant and one admitted write action `act-ok`.
+/// Returns the temp home so the caller keeps it alive.
+fn setup_admitted_write(session: &str) -> TempHome {
+    let home = TempHome::new();
+    let h = home.as_str();
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "read,write",
+            "--path-prefix",
+            "/repo",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+    ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/a",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-ok",
+        ],
+    );
+    home
+}
+
+#[test]
+fn receipt_rejects_undeclared_side_effect_and_keeps_journal_verifiable() {
+    let session = "sess-effects";
+    let home = setup_admitted_write(session);
+    let h = home.as_str();
+
+    // The action declared only local_write; declaring `deployment` must be
+    // refused at write time so the append-only journal stays verifiable.
+    let err = cli(
+        &h,
+        &[
+            "receipt",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-ok",
+            "--side-effects",
+            "deployment",
+        ],
+    )
+    .expect_err("undeclared side effect must be refused");
+    assert!(
+        matches!(err, CliError::Refused(_)),
+        "unexpected error: {err}"
+    );
+
+    // Nothing poisoned the log: verification still passes.
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
+
+    // A subset of the declared effects is still allowed.
+    let recorded = ok(
+        &h,
+        &[
+            "receipt",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-ok",
+            "--side-effects",
+            "local_write",
+        ],
+    );
+    assert!(recorded.contains("recorded receipt"), "{recorded}");
+    assert!(ok(&h, &["journal", "verify", "--session", session]).contains("journal OK"));
+}
+
+#[test]
+fn duplicate_action_id_is_refused_and_keeps_journal_verifiable() {
+    let session = "sess-dup";
+    let home = setup_admitted_write(session);
+    let h = home.as_str();
+
+    // Re-proposing the same action id must be refused (core forbids double
+    // proposal, which would otherwise break verification permanently).
+    let err = cli(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/a",
+            "--grants",
+            "ignored",
+            "--action-id",
+            "act-ok",
+        ],
+    )
+    .expect_err("duplicate action id must be refused");
+    assert!(
+        matches!(err, CliError::Refused(_)),
+        "unexpected error: {err}"
+    );
+
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
+}

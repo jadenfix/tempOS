@@ -196,6 +196,18 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let session_id = require_session(store, args)?;
     let projection = store.project(&session_id)?;
 
+    // Fail closed on a duplicate action id: core forbids proposing the same
+    // action twice, so appending a second ActionProposed would permanently
+    // break `journal verify` on an append-only log.
+    let action_id = args
+        .get_or("action-id", &Uuid::new_v4().to_string())
+        .to_string();
+    if projection.manifest(&action_id).is_some() {
+        return Err(CliError::Refused(format!(
+            "action {action_id} was already proposed in this session"
+        )));
+    }
+
     let action_kind: ActionKind = args::require_enum(args, "kind")?;
     let target = CapabilitySelector {
         resource_kind: args::require_enum(args, "target-kind")?,
@@ -247,9 +259,7 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     }
 
     let manifest = ActionManifest {
-        action_id: args
-            .get_or("action-id", &Uuid::new_v4().to_string())
-            .to_string(),
+        action_id,
         session_id: session_id.clone(),
         tool_id: args.require("tool")?.to_string(),
         action_kind,
@@ -289,7 +299,9 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         approvals: Vec::new(),
         simulations: Vec::new(),
     };
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    // `admit` is fallible because it digests the manifest; propagate any
+    // hashing error rather than pretending a decision was reached.
+    let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
 
     store.append_event(
         &session_id,
@@ -352,11 +364,21 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         None => hash_json(&format!("{status}:{side_effect_summary}"))?,
     };
 
-    // Receipts may only declare side effects the manifest predeclared.
+    // Receipts may only declare side effects the manifest predeclared. Core's
+    // causality verifier rejects any receipt whose effects are not a subset of
+    // the manifest's, so we must fail closed here rather than write a record
+    // that would permanently break `journal verify` on an append-only log.
     let side_effects: Vec<SideEffectClass> = if args.has_flag("side-effects") {
         let mut out = Vec::new();
         for token in args.csv("side-effects") {
-            out.push(args::parse_enum::<SideEffectClass>("side-effects", &token)?);
+            let effect = args::parse_enum::<SideEffectClass>("side-effects", &token)?;
+            if !manifest.expected_side_effects.contains(&effect) {
+                return Err(CliError::Refused(format!(
+                    "side effect {effect:?} was not declared by action {action_id}; \
+                     receipts may only report predeclared effects"
+                )));
+            }
+            out.push(effect);
         }
         out
     } else {
@@ -370,7 +392,11 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         None => now,
     };
 
-    let receipt = store.append_receipt(
+    // Compute the chained receipt without touching disk, journal it (the
+    // journal is the source of truth the trace is projected from), then persist
+    // the derived ledger line. If a crash interleaves, the journal still holds
+    // the receipt and the ledger can be rebuilt from it.
+    let receipt = store.stage_receipt(
         &session_id,
         CapabilityReceiptInput {
             receipt_id: args.get("receipt-id").map(str::to_string),
@@ -399,6 +425,7 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         },
         now,
     )?;
+    store.persist_receipt(&session_id, &receipt)?;
 
     Ok(format!(
         "recorded receipt {} for action {}\n  status:  {}\n  effects: {:?}\n  hash:    {}",
