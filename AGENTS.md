@@ -175,6 +175,32 @@ Be precise about the trust model so no one over-trusts it:
   per-agent signing identities (see `final.md` §7.1 Agent Identity), those can
   sign PRs/merges and upgrade this from attested to verifiable.
 
+Additional boundaries (raised in independent review of PR #19):
+
+- **The pre-merge check is bypassable.** `pr-governance.yml` runs on
+  `pull_request` *body* events, not at merge time, so it never sees who actually
+  clicked merge. An author who self-merges can simply leave `Merged-By: pending`
+  (a placeholder, which passes) and merge anyway. The check raises the floor; it
+  is not a gate on its own.
+- **The real gate is branch protection.** The green check is only enforcing if
+  `main` is a protected branch that *requires* a passing `pr-governance` check
+  **and** a CODEOWNERS review before merge. Without protected `main`, this
+  workflow is **advisory** — do not over-trust the green check. Enabling branch
+  protection on `main` is the owner action that turns this contract from
+  convention into enforcement.
+- **After-the-fact receipt.** `pr-governance.yml` also has a merge-receipt job
+  (`on: pull_request_target: [closed]`) that, when a PR is actually merged,
+  records the real `merged_by.login` back on the thread — a durable receipt
+  (§4.5/§7.6 analogy). It still cannot separate agent-ids under one account, but
+  it captures who really merged.
+- **Merge routing when agents share an id.** The self-merge check keys on the
+  `Author-Agent` *string*. Two genuinely distinct sessions that share an id
+  (e.g. two `claude` sessions) will trip the guard as if it were a self-merge.
+  That is **intentional, conservative** behavior — the fix is to route the merge
+  to a **distinct** id (`codex` or `human:@jadenfix`), not to loosen the check.
+  So: a PR authored under `claude` should be merged by `codex` or the human, and
+  vice-versa. Record the intended merger in the ledger.
+
 ---
 
 ## 8. Quick checklist (pin this)

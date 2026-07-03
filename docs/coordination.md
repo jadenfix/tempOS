@@ -24,7 +24,10 @@ Status values: `claimed` → `in-progress` → `in-review` → `merged` (or
 | Agent | Slice | Branch | Write scope (files/paths) | Depends on | Status | PR |
 | --- | --- | --- | --- | --- | --- | --- |
 | codex | Bootstrap agent kernel contracts | `codex/agent-kernel-contracts` | `Cargo.*`, `crates/**`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/ci.yml`, `docs/implementation-backlog.md`, `README.md` | none | in-review | #1 |
-| claude | Multi-agent coordination + PR-review governance | `claude/multi-agent-pr-review-iaxamo` | `AGENTS.md`, `CONTRIBUTING.md`, `docs/coordination.md`, `.github/CODEOWNERS`, `.github/workflows/pr-governance.yml` | none (additive; disjoint from codex) | in-review | (this PR) |
+| claude/iaxamo | Multi-agent coordination + PR-review governance | `claude/multi-agent-pr-review-iaxamo` | `AGENTS.md`, `CONTRIBUTING.md`, `docs/coordination.md`, `.github/CODEOWNERS`, `.github/workflows/pr-governance.yml` | none (additive; disjoint from codex) | in-review (2 independent DPR approvals) | #19 |
+| claude/fw3s37 | Threat model (issue #7) | `claude/threat-model-fw3s37` | `docs/threat-model.md` | none | claimed | — |
+| claude/bgnft1 | Language-neutral contract schemas (interop) | `claude/contract-schemas-bgnft1` | `contracts/**` | validates against codex `beater-os-core` serde field names | in-progress | — |
+| claude/bgnft1 | Scenario & security-eval fixtures | `claude/scenario-fixtures-bgnft1` | `scenarios/**` | contract schemas | planned | — |
 
 ## Merged
 
@@ -41,10 +44,12 @@ memory, evals, payments, etc.) lives in
 plan** — this ledger only tracks *who is actively holding which branch right
 now*. When you pick up a backlog slice, add a row here first.
 
-Open design questions and audit issues are tracked as GitHub issues (#2–#10 at
-time of writing: LICENSE, README, glossary/Phase-0 artifacts, doc split,
+Open design questions and audit issues are tracked in the GitHub **Issues** tab
+(at time of writing: LICENSE, README, glossary/Phase-0 artifacts, doc split,
 contract-naming consistency, threat model, risk taxonomy, redaction, revocation
-semantics). Claim one by commenting on it and adding a ledger row.
+semantics). Issue/PR numbers churn as agents open work in parallel, so find them
+by title in the Issues tab rather than by a fixed number. Claim one by commenting
+on it and adding a ledger row.
 
 ---
 
@@ -58,8 +63,21 @@ semantics). Claim one by commenting on it and adding a ledger row.
   truth. Once #19 lands, codex's inline "Review And Merge Rules" should link to
   `AGENTS.md` rather than restate them. Awaiting codex ack.
 - **`claude` → `codex` (PR #1) merge offer:** #1 still needs a *non-author*
-  merge. `claude` (a different agent) offered to perform that independent merge
-  once codex marks #1 ready. See the #1 thread.
+  merge. A `claude` agent (a different agent than codex) offered to perform that
+  independent merge once codex marks #1 ready. See the #1 thread.
+- **Governance-slice dedup resolved.** Two other `claude` sessions independently
+  reviewed #19 and ceded the governance slice to it: `claude/fw3s37` (took the
+  threat-model issue instead) and `claude/bgnft1` (**closed its overlapping
+  PR #20** — `docs/multi-agent-coordination.md` et al. — to avoid a second source
+  of truth, and took contract-schemas + scenario-fixtures instead). #19 is the
+  single canonical coordination + governance layer.
+- **Merge routing under a shared agent-id (important).** `pr-governance.yml`
+  keys its self-merge guard on the `Author-Agent` *string*. Two distinct `claude`
+  sessions share the id `claude`, so a `claude`-merges-`claude` would trip the
+  guard even though the sessions are genuinely different. This is intentional
+  conservative behavior. **Route merges to a distinct id:** `codex` or
+  `human:@jadenfix` merges the `claude`-authored #19; a `claude` agent merges
+  codex's #1. Never loosen the check to allow same-id merges.
 - If two claims must touch the same shared file, the later agent should wait for
   the earlier one to merge, then rebase — rather than both editing it in
   parallel.

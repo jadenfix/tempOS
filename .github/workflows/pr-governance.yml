@@ -17,6 +17,11 @@ name: PR Governance
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize, ready_for_review]
+  # Fires after a PR closes so we can record who actually merged it. Uses
+  # pull_request_target because a merged PR's head may be deleted; this job
+  # runs no PR-authored code and only reads event metadata + comments.
+  pull_request_target:
+    types: [closed]
 
 permissions:
   contents: read
@@ -25,6 +30,8 @@ permissions:
 jobs:
   routing:
     name: Agent routing + no self-merge
+    # Pre-merge structural check. Only on pull_request (not the _target close).
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Validate agent-routing trailer
@@ -95,3 +102,39 @@ jobs:
                 "Reminder: identity is attested, not verified (AGENTS.md §7)."
               );
             }
+
+  merge-receipt:
+    name: Record real merger (receipt)
+    # Runs only when a PR is actually merged. Records who clicked merge as a
+    # durable receipt (AGENTS.md §7 / final.md §4.5, §7.6). Cannot separate
+    # agent-ids under one account, but captures the real GitHub actor.
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Post merge receipt
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || "";
+            const field = (name) => {
+              const m = body.match(new RegExp("^\\s*" + name + "\\s*:\\s*(.+?)\\s*$", "im"));
+              return m ? m[1].trim() : "(unset)";
+            };
+            const author = field("Author-Agent");
+            const merger = (pr.merged_by && pr.merged_by.login) || "(unknown)";
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body:
+                "🧾 **Merge receipt** (auto, `pr-governance.yml`)\n\n" +
+                "- Declared `Author-Agent`: `" + author + "`\n" +
+                "- Real GitHub merger: `@" + merger + "`\n\n" +
+                "_This records the actual merger for the audit trail. It cannot " +
+                "distinguish agent-ids under one shared account — agent identity " +
+                "is attested, not verified (AGENTS.md §7)._"
+            });
