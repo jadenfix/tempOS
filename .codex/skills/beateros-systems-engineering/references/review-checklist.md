@@ -51,4 +51,3 @@ Use this checklist for design reviews, code reviews, and architecture changes.
   benchmark, trace, or CI gate.
 - Performance claims include a measurement plan or benchmark.
 - Security claims include a negative test or threat-model link.
-

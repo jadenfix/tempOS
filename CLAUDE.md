@@ -40,4 +40,3 @@ For non-trivial changes, state or encode:
 - security boundary and required evidence
 - macOS impact
 - local verification command
-

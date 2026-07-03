@@ -42,6 +42,6 @@ coordination artifact, not a replacement for `final.md`.
 
 ## Parallelism
 
-After slice 1, slices 2 and 3 can proceed in parallel if their APIs remain
+After slice 2, slices 3 and 4 can proceed in parallel if their APIs remain
 compatible. After the MVP workflow, observability, memory, browser, model, and
 human-review work can split across separate branches with disjoint write scopes.

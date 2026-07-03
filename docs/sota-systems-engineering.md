@@ -198,4 +198,3 @@ Use this checklist on architecture and implementation PRs:
 - macOS support is preserved.
 - The change adds or identifies the benchmark, trace, property test, scenario, or
   CI gate that would catch the most likely regression.
-

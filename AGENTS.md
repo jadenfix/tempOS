@@ -71,4 +71,3 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 git diff --check
 ```
-
