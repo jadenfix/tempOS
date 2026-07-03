@@ -18,6 +18,11 @@ causality, and independent policy admission of every recorded decision.
   evidence exists. Carries a `PaymentMandate` (§12.7) and a payment receipt.
   Complements the adversarial scenarios, which show approval being *required* but
   never *granted*.
+- `resilience-review-timeout.trace.json` — the fail-closed resilience path
+  (§14.2, §13.15): a high-risk production deploy needs human approval, the
+  approval **never arrives**, and the system fails closed — the action is never
+  executed (**no receipt exists**), the timeout is recorded as an
+  `incident_annotated` journal event, and the session ends `canceled`.
 
 ## Regenerating
 
