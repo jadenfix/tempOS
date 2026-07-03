@@ -135,6 +135,21 @@ def _scope_allows(scope: dict, target: dict, action: str) -> bool:
     return _selector_matches(scope["selector"], target) and action in scope["actions"]
 
 
+def _effective_constraints(grant: dict) -> dict:
+    """Return the grant's constraints, mirroring serde's defaulting.
+
+    Rust `CapabilityGrant.constraints` is `#[serde(default)]`, and
+    `GrantConstraints::default()` sets `max_risk = Some(Medium)` and
+    `max_data_class = Some(Internal)`. So an *absent* `constraints` key means the
+    default Medium/Internal ceilings (NOT unbounded). A *present* object keeps its
+    fields as-is; an omitted `Option` field inside it is `None` (unbounded), which
+    also matches serde field-level `#[serde(default)]` on `Option<..>`.
+    """
+    if grant.get("constraints") is not None:
+        return grant["constraints"]
+    return {"max_risk": "medium", "max_data_class": "internal"}
+
+
 def grant_is_active_at(grant: dict, now: datetime) -> bool:
     return not grant.get("revoked", False) and _ts(grant["expires_at"]) > now
 
@@ -150,7 +165,7 @@ def grant_allows_manifest(grant: dict, manifest: dict, now: datetime, actor_id: 
     if not _scope_allows(grant["scope"], manifest["target"], action):
         return False
 
-    constraints = grant.get("constraints", {}) or {}
+    constraints = _effective_constraints(grant)
     max_risk = constraints.get("max_risk")
     if max_risk is not None and _risk_gt(manifest["risk_class"], max_risk):
         return False
@@ -207,6 +222,9 @@ def has_external_side_effect(manifest: dict) -> bool:
 
 
 def _approval_from_reviewer(grant, manifest, ctx, now, reviewer_id) -> bool:
+    # NOTE: binds on action_id, not the manifest body hash. The Rust core's HEAD
+    # additionally binds evidence to a manifest_hash; adopting that here depends on
+    # the canonical-hashing convergence tracked in tools/conformance/README.md.
     for ap in ctx.get("approvals", []):
         if (
             _ts(ap["approved_at"]) <= now
@@ -234,13 +252,14 @@ def _has_approval_for_grant(grant, manifest, ctx, now) -> bool:
     raise AdmissionError(f"unknown approval mode: {mode}")
 
 
-def _has_explicit_action_approval(grant, manifest, ctx, now) -> bool:
-    """True iff explicit action-bound approval evidence exists for this grant.
+def _explicit_action_evidence_exists(grant, manifest, ctx, now) -> bool:
+    """True iff SOME action-bound approval evidence exists for this grant.
 
-    Unlike `_has_approval_for_grant`, this does NOT treat approval mode `none` as
-    satisfied. It matches the intent of final.md §13.4/§13.5 (and the fixed
-    behavior on the Rust core's HEAD): untrusted content cannot authorize
-    spend/deploy/delegate even when the grant carries no default approval policy.
+    Reviewer-agnostic: used only for the `mode == none` untrusted case, where the
+    grant configures no authorized reviewers but an untrusted dangerous action
+    still needs explicit human sign-off bound to this exact action+grant+policy.
+    Evidence binds on action_id (not manifest body hash) pending the cross-language
+    canonical-hashing convergence tracked in tools/conformance/README.md.
     """
     return any(
         _ts(ap["approved_at"]) <= now
@@ -249,6 +268,29 @@ def _has_explicit_action_approval(grant, manifest, ctx, now) -> bool:
         and ap["policy_version"] == ctx["policy_version"]
         for ap in ctx.get("approvals", [])
     )
+
+
+def _untrusted_dangerous_approved(grant, manifest, ctx, now) -> bool:
+    """Approval gate for untrusted spend/deploy/delegate (final.md §13.4/§13.5).
+
+    Stricter than `_has_approval_for_grant` for `mode == none` (auto-pass is NOT
+    allowed -- explicit evidence is required, matching the Rust core's HEAD), but
+    it still enforces the SAME reviewer-authorization and multi-party rules for
+    `human`/`multi_party`. It must never accept an approval from an unauthorized
+    reviewer.
+    """
+    approval = grant.get("approval", {}) or {}
+    mode = approval.get("mode", "none")
+    reviewers = approval.get("reviewer_ids", [])
+    if mode == "none":
+        return _explicit_action_evidence_exists(grant, manifest, ctx, now)
+    if mode == "human":
+        return any(_approval_from_reviewer(grant, manifest, ctx, now, r) for r in reviewers)
+    if mode == "multi_party":
+        return bool(reviewers) and all(
+            _approval_from_reviewer(grant, manifest, ctx, now, r) for r in reviewers
+        )
+    raise AdmissionError(f"unknown approval mode: {mode}")
 
 
 def _has_passed_simulation(manifest, ctx, now) -> bool:
@@ -309,7 +351,7 @@ def admit(manifest: dict, ctx: dict) -> dict:
     matched.append("all_required_capabilities_allow_action")
 
     if _dangerous_untrusted(manifest) and not all(
-        _has_explicit_action_approval(g, manifest, ctx, now) for g in matching
+        _untrusted_dangerous_approved(g, manifest, ctx, now) for g in matching
     ):
         return deny(
             "untrusted content cannot directly authorize spend, deploy, or delegation "

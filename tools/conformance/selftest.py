@@ -80,7 +80,56 @@ def run() -> list[str]:
     expect(admission.admit(spend, ctx2)["result"] == "needs_approval",
            "untrusted-web spend without approval should escalate")
 
-    # 5. Receipt chain detects a tampered hash.
+    # 5. Grant with an ABSENT constraints field must inherit Medium/Internal
+    #    ceilings (serde default), not be treated as unbounded. Regression for a
+    #    fail-open divergence caught in independent review.
+    hot = {
+        "action_id": "h", "session_id": "S", "tool_id": "t", "action_kind": "write",
+        "target": {"resource_kind": "cloud_resource", "resource_id": "prod"},
+        "inputs_digest": "d", "inputs_summary": "", "risk_class": "critical",
+        "human_explanation": "", "required_grants": ["g"],
+        "expected_side_effects": ["local_write"], "data_classes": ["secret"],
+    }
+    grant_no_constraints = {
+        "grant_id": "g", "issuer": "u", "holder": "agent", "session_id": "S",
+        "scope": {"selector": {"resource_kind": "cloud_resource", "resource_id": "prod"}, "actions": ["write"]},
+        "expires_at": "2026-07-03T01:00:00Z", "delegation": "none",
+        "revocation_handle": "rev", "policy_version": "p", "reason": "",
+    }
+    ctx3 = {"now": "2026-07-03T00:30:00Z", "actor_id": "agent", "session_id": "S",
+            "policy_version": "p", "grants": [grant_no_constraints], "approvals": [], "simulations": []}
+    expect(admission.admit(hot, ctx3)["result"] == "needs_narrowed_grant",
+           "constraint-less grant must not admit critical/secret action (default ceilings apply)")
+
+    # 6. Untrusted-taint gate must reject an approval from an UNAUTHORIZED reviewer
+    #    (not just any bound approval). Regression for the second review finding.
+    unauth_spend = {
+        "action_id": "u", "session_id": "S", "tool_id": "pay", "action_kind": "spend",
+        "target": {"resource_kind": "payment_rail", "resource_id": "r"},
+        "inputs_digest": "d", "inputs_summary": "", "risk_class": "low", "human_explanation": "",
+        "required_grants": ["g"], "expected_side_effects": ["payment"], "idempotency_key": "i",
+        "taint": ["untrusted_web"], "data_classes": ["financial"],
+        "requested_budget": {"max_payment_minor_units": 1},
+    }
+    grant_human = {
+        "grant_id": "g", "issuer": "u", "holder": "agent", "session_id": "S",
+        "scope": {"selector": {"resource_kind": "payment_rail", "resource_id": "r"}, "actions": ["spend"]},
+        "constraints": {"max_risk": "high", "max_data_class": "financial",
+                        "budget": {"max_payment_minor_units": 1000}},
+        "approval": {"mode": "human", "threshold_risk": "critical", "reviewer_ids": ["boss"]},
+        "expires_at": "2026-07-03T01:00:00Z", "delegation": "none",
+        "revocation_handle": "rev", "policy_version": "p", "reason": "",
+    }
+    ctx4 = {"now": "2026-07-03T00:30:00Z", "actor_id": "agent", "session_id": "S",
+            "policy_version": "p", "grants": [grant_human],
+            "approvals": [{"review_id": "rv", "action_id": "u", "grant_id": "g",
+                           "reviewer_id": "attacker", "approved_at": "2026-07-03T00:10:00Z",
+                           "policy_version": "p"}],
+            "simulations": []}
+    expect(admission.admit(unauth_spend, ctx4)["result"] == "needs_approval",
+           "approval from an unauthorized reviewer must not satisfy the untrusted-taint gate")
+
+    # 7. Receipt chain detects a tampered hash.
     r = {"receipt_id": "r", "seq": 0, "action_id": "a", "tool_id": "t",
          "target": {"resource_kind": "tool", "resource_id": "x"},
          "started_at": "2026-07-03T00:00:00Z", "finished_at": "2026-07-03T00:00:00Z",

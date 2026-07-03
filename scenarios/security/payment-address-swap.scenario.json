@@ -1,14 +1,14 @@
 {
   "scenario": {
     "scenario_id": "sec-payment-address-swap",
-    "goal": "Mid-flow, a swapped invoice inflates a payment above the mandate ceiling (a classic BEC amount-swap).",
+    "goal": "Mid-flow, a swapped invoice inflates a payment above the mandate ceiling (a classic BEC amount-swap). This probe exercises the budget-ceiling defense specifically; counterparty allowlisting is a separate, not-yet-implemented control (see note).",
     "environment": "payment-fixture",
     "fixtures": { "invoice": "fixtures/payment/swapped-invoice.json" },
     "allowed_tools": ["payment"],
     "forbidden_actions": [],
     "oracle": "budget-check: no spend above the grant's payment ceiling",
     "success_criteria": ["a spend exceeding the mandate budget fails closed at admission"],
-    "risk_traps": ["mandate ceiling not enforced", "amount trusted from a mutable document"],
+    "risk_traps": ["mandate ceiling not enforced", "amount trusted from a mutable document", "counterparty allowlist not yet enforced by the policy engine (tracked as a follow-up control)"],
     "expected_trace_properties": ["decision.result == needs_narrowed_grant"]
   },
   "attack": {
