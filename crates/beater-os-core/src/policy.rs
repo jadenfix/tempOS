@@ -5,6 +5,8 @@ use crate::contracts::{
     ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DecisionResult,
     PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
 };
+use crate::error::BeaterOsResult;
+use crate::hash::HashValue;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdmissionContext {
@@ -25,45 +27,50 @@ impl PolicyEngine {
         Self
     }
 
-    pub fn admit(&self, manifest: &ActionManifest, ctx: &AdmissionContext) -> PolicyDecision {
+    pub fn admit(
+        &self,
+        manifest: &ActionManifest,
+        ctx: &AdmissionContext,
+    ) -> BeaterOsResult<PolicyDecision> {
         let mut matched_rules = Vec::new();
+        let manifest_hash = manifest.digest()?;
 
         if manifest.session_id != ctx.session_id {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::Denied,
                 matched_rules,
                 "action manifest session does not match admission context session",
-                None,
-                None,
-            );
+                DecisionFollowup::none(),
+            ));
         }
         matched_rules.push("manifest_bound_to_context_session".to_string());
 
         if manifest.required_grants.is_empty() {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::Denied,
                 matched_rules,
                 "action manifests must name at least one required grant",
-                None,
-                None,
-            );
+                DecisionFollowup::none(),
+            ));
         }
         matched_rules.push("required_grants_present".to_string());
 
         if manifest.has_external_side_effect() && manifest.idempotency_key.is_none() {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::Denied,
                 matched_rules,
                 "external side effects require an idempotency key before execution",
-                None,
-                None,
-            );
+                DecisionFollowup::none(),
+            ));
         }
         matched_rules.push("external_side_effect_idempotency".to_string());
 
@@ -72,15 +79,15 @@ impl PolicyEngine {
             .contains(&SideEffectClass::Payment)
             && manifest.action_kind != ActionKind::Spend
         {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::Denied,
                 matched_rules,
                 "payment side effects must use the spend action kind",
-                None,
-                None,
-            );
+                DecisionFollowup::none(),
+            ));
         }
 
         let matching_grants: Vec<&CapabilityGrant> = ctx
@@ -89,15 +96,15 @@ impl PolicyEngine {
             .filter(|grant| manifest.required_grants.contains(&grant.grant_id))
             .collect();
         if matching_grants.len() != manifest.required_grants.len() {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::Denied,
                 matched_rules,
                 "one or more required grants are missing from the admission context",
-                None,
-                None,
-            );
+                DecisionFollowup::none(),
+            ));
         }
         matched_rules.push("required_grants_available".to_string());
 
@@ -105,33 +112,38 @@ impl PolicyEngine {
             .iter()
             .all(|grant| grant.allows_manifest(manifest, ctx.now, &ctx.actor_id));
         if !allowed {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::NeedsNarrowedGrant,
                 matched_rules,
                 "available grants do not allow this action, target, risk, data class, or time window",
-                None,
-                None,
-            );
+                DecisionFollowup::none(),
+            ));
         }
         matched_rules.push("all_required_capabilities_allow_action".to_string());
 
         if dangerous_untrusted_instruction(manifest)
-            && !all_grants_have_action_approval(&matching_grants, manifest, ctx)
-        {
-            return decision(
+            && !all_grants_have_explicit_action_approval(
+                &matching_grants,
                 manifest,
+                &manifest_hash,
+                ctx,
+            )
+        {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::NeedsApproval,
                 matched_rules,
                 "untrusted content cannot directly authorize spend, deploy, or delegation actions without action-bound approval",
-                Some(format!(
+                DecisionFollowup::review(format!(
                     "action:{}:untrusted-risk-review",
                     manifest.action_id
                 )),
-                None,
-            );
+            ));
         }
         matched_rules.push("untrusted_instruction_policy_checked".to_string());
 
@@ -141,51 +153,51 @@ impl PolicyEngine {
                 grant.approval.mode != ApprovalMode::None
                     && manifest.risk_class >= grant.approval.threshold_risk
             })
-            .any(|grant| !has_approval_for_grant(grant, manifest, ctx))
+            .any(|grant| !has_approval_for_grant(grant, manifest, &manifest_hash, ctx))
         {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::NeedsApproval,
                 matched_rules,
                 "grant policy requires human approval for this risk class",
-                Some(format!(
+                DecisionFollowup::review(format!(
                     "action:{}:grant-threshold-review",
                     manifest.action_id
                 )),
-                None,
-            );
+            ));
         }
         matched_rules.push("grant_approval_policy_checked".to_string());
 
         if manifest.risk_class >= RiskClass::High
             && manifest.has_external_side_effect()
-            && !has_passed_simulation_for_action(manifest, ctx)
+            && !has_passed_simulation_for_action(manifest, &manifest_hash, ctx)
         {
-            return decision(
+            return Ok(decision(
                 manifest,
+                manifest_hash,
                 ctx,
                 DecisionResult::NeedsSimulation,
                 matched_rules,
                 "high-risk external side effects require a passed simulation before execution",
-                None,
-                Some(format!(
+                DecisionFollowup::simulation(format!(
                     "action:{}:high-risk-side-effect-simulation",
                     manifest.action_id
                 )),
-            );
+            ));
         }
 
         matched_rules.push("admitted_by_capability_policy".to_string());
-        decision(
+        Ok(decision(
             manifest,
+            manifest_hash,
             ctx,
             DecisionResult::Allowed,
             matched_rules,
             "action admitted by explicit active capability grant",
-            None,
-            None,
-        )
+            DecisionFollowup::none(),
+        ))
     }
 }
 
@@ -201,32 +213,35 @@ fn dangerous_untrusted_instruction(manifest: &ActionManifest) -> bool {
     )
 }
 
-fn all_grants_have_action_approval(
+fn all_grants_have_explicit_action_approval(
     grants: &[&CapabilityGrant],
     manifest: &ActionManifest,
+    manifest_hash: &HashValue,
     ctx: &AdmissionContext,
 ) -> bool {
-    grants
-        .iter()
-        .all(|grant| has_approval_for_grant(grant, manifest, ctx))
+    grants.iter().all(|grant| match grant.approval.mode {
+        ApprovalMode::None => false,
+        ApprovalMode::Human | ApprovalMode::MultiParty => {
+            has_approval_for_grant(grant, manifest, manifest_hash, ctx)
+        }
+    })
 }
 
 fn has_approval_for_grant(
     grant: &CapabilityGrant,
     manifest: &ActionManifest,
+    manifest_hash: &HashValue,
     ctx: &AdmissionContext,
 ) -> bool {
     match grant.approval.mode {
         ApprovalMode::None => true,
-        ApprovalMode::Human => grant
-            .approval
-            .reviewer_ids
-            .iter()
-            .any(|reviewer_id| has_approval_from_reviewer(grant, manifest, ctx, reviewer_id)),
+        ApprovalMode::Human => grant.approval.reviewer_ids.iter().any(|reviewer_id| {
+            has_approval_from_reviewer(grant, manifest, manifest_hash, ctx, reviewer_id)
+        }),
         ApprovalMode::MultiParty => {
             !grant.approval.reviewer_ids.is_empty()
                 && grant.approval.reviewer_ids.iter().all(|reviewer_id| {
-                    has_approval_from_reviewer(grant, manifest, ctx, reviewer_id)
+                    has_approval_from_reviewer(grant, manifest, manifest_hash, ctx, reviewer_id)
                 })
         }
     }
@@ -235,44 +250,78 @@ fn has_approval_for_grant(
 fn has_approval_from_reviewer(
     grant: &CapabilityGrant,
     manifest: &ActionManifest,
+    manifest_hash: &HashValue,
     ctx: &AdmissionContext,
     reviewer_id: &str,
 ) -> bool {
     ctx.approvals.iter().any(|approval| {
         approval.approved_at <= ctx.now
             && approval.action_id == manifest.action_id
+            && approval.manifest_hash == *manifest_hash
             && approval.grant_id == grant.grant_id
             && approval.policy_version == ctx.policy_version
             && approval.reviewer_id == reviewer_id
     })
 }
 
-fn has_passed_simulation_for_action(manifest: &ActionManifest, ctx: &AdmissionContext) -> bool {
+fn has_passed_simulation_for_action(
+    manifest: &ActionManifest,
+    manifest_hash: &HashValue,
+    ctx: &AdmissionContext,
+) -> bool {
     ctx.simulations.iter().any(|simulation| {
         simulation.passed_at <= ctx.now
             && simulation.action_id == manifest.action_id
+            && simulation.manifest_hash == *manifest_hash
             && simulation.policy_version == ctx.policy_version
     })
 }
 
 fn decision(
     manifest: &ActionManifest,
+    manifest_hash: HashValue,
     ctx: &AdmissionContext,
     result: DecisionResult,
     matched_rules: Vec<String>,
     explanation: &str,
-    required_review: Option<String>,
-    required_simulation: Option<String>,
+    followup: DecisionFollowup,
 ) -> PolicyDecision {
     PolicyDecision {
         decision_id: Uuid::new_v4().to_string(),
         action_id: manifest.action_id.clone(),
+        manifest_hash,
         policy_version: ctx.policy_version.clone(),
         result,
         matched_rules,
         explanation: explanation.to_string(),
-        required_review,
-        required_simulation,
+        required_review: followup.required_review,
+        required_simulation: followup.required_simulation,
         created_at: ctx.now,
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct DecisionFollowup {
+    required_review: Option<String>,
+    required_simulation: Option<String>,
+}
+
+impl DecisionFollowup {
+    fn none() -> Self {
+        Self::default()
+    }
+
+    fn review(review: String) -> Self {
+        Self {
+            required_review: Some(review),
+            required_simulation: None,
+        }
+    }
+
+    fn simulation(simulation: String) -> Self {
+        Self {
+            required_review: None,
+            required_simulation: Some(simulation),
+        }
     }
 }

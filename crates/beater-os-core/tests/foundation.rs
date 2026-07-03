@@ -19,6 +19,18 @@ fn set<T: Ord>(items: impl IntoIterator<Item = T>) -> BTreeSet<T> {
     items.into_iter().collect()
 }
 
+fn manifest_hash(manifest: &ActionManifest) -> String {
+    manifest
+        .digest()
+        .unwrap_or_else(|err| panic!("manifest fixture should hash: {err}"))
+}
+
+fn admit(manifest: &ActionManifest, ctx: &AdmissionContext) -> PolicyDecision {
+    PolicyEngine::new()
+        .admit(manifest, ctx)
+        .unwrap_or_else(|err| panic!("admission fixture should hash: {err}"))
+}
+
 fn grant_for_file(now: chrono::DateTime<Utc>) -> CapabilityGrant {
     CapabilityGrant {
         grant_id: "grant-read-repo".to_string(),
@@ -96,7 +108,7 @@ fn policy_allows_action_when_explicit_active_grant_matches() {
     let now = fixed_time();
     let manifest = read_manifest();
     let ctx = admission_context(now, vec![grant_for_file(now)]);
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::Allowed);
     assert!(
         decision
@@ -111,7 +123,7 @@ fn policy_denies_ambient_authority_when_no_grant_is_named() {
     let mut manifest = read_manifest();
     manifest.required_grants.clear();
     let ctx = admission_context(now, vec![grant_for_file(now)]);
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::Denied);
     assert!(decision.explanation.contains("required grant"));
 }
@@ -122,7 +134,7 @@ fn policy_denies_grant_bound_to_other_session_or_holder() {
     let manifest = read_manifest();
     let mut other_session_grant = grant_for_file(now);
     other_session_grant.session_id = "session-2".to_string();
-    let decision = PolicyEngine::new().admit(
+    let decision = admit(
         &manifest,
         &admission_context(now, vec![other_session_grant]),
     );
@@ -130,8 +142,7 @@ fn policy_denies_grant_bound_to_other_session_or_holder() {
 
     let mut other_holder_grant = grant_for_file(now);
     other_holder_grant.holder = "agent:other".to_string();
-    let decision =
-        PolicyEngine::new().admit(&manifest, &admission_context(now, vec![other_holder_grant]));
+    let decision = admit(&manifest, &admission_context(now, vec![other_holder_grant]));
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
@@ -141,7 +152,7 @@ fn policy_requires_narrowed_grant_for_over_risk_action() {
     let mut manifest = read_manifest();
     manifest.risk_class = RiskClass::High;
     let ctx = admission_context(now, vec![grant_for_file(now)]);
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
@@ -153,7 +164,7 @@ fn policy_enforces_path_prefix_constraints_even_with_wildcard_resource() {
     let mut grant = grant_for_file(now);
     grant.scope.selector.resource_id = "*".to_string();
     let ctx = admission_context(now, vec![grant]);
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
@@ -169,7 +180,7 @@ fn policy_rejects_file_path_traversal_and_missing_resolved_target() {
         resource_kind: ResourceKind::FilePath,
         resource_id: "/workspace/secret".to_string(),
     });
-    let decision = PolicyEngine::new().admit(
+    let decision = admit(
         &traversal_manifest,
         &admission_context(now, vec![grant.clone()]),
     );
@@ -177,7 +188,7 @@ fn policy_rejects_file_path_traversal_and_missing_resolved_target() {
 
     let mut missing_resolved_manifest = read_manifest();
     missing_resolved_manifest.resolved_target = None;
-    let decision = PolicyEngine::new().admit(
+    let decision = admit(
         &missing_resolved_manifest,
         &admission_context(now, vec![grant]),
     );
@@ -202,7 +213,7 @@ fn policy_enforces_network_allowlist_constraints() {
     };
     grant.scope.actions = set([ActionKind::Read]);
     grant.constraints.network_allowlist = set(["example.com".to_string()]);
-    let decision = PolicyEngine::new().admit(&manifest, &admission_context(now, vec![grant]));
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
     assert_eq!(decision.result, DecisionResult::Allowed);
 
     let mut blocked_manifest = manifest;
@@ -215,7 +226,7 @@ fn policy_enforces_network_allowlist_constraints() {
     };
     blocked_grant.scope.actions = set([ActionKind::Read]);
     blocked_grant.constraints.network_allowlist = set(["example.com".to_string()]);
-    let decision = PolicyEngine::new().admit(
+    let decision = admit(
         &blocked_manifest,
         &admission_context(now, vec![blocked_grant]),
     );
@@ -229,7 +240,7 @@ fn policy_enforces_budget_constraints() {
     manifest.requested_budget.max_model_cents = Some(500);
     let mut grant = grant_for_file(now);
     grant.constraints.budget.max_model_cents = Some(100);
-    let decision = PolicyEngine::new().admit(&manifest, &admission_context(now, vec![grant]));
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
@@ -239,7 +250,7 @@ fn policy_fails_closed_when_limited_budget_is_omitted() {
     let manifest = read_manifest();
     let mut grant = grant_for_file(now);
     grant.constraints.budget.max_model_cents = Some(100);
-    let decision = PolicyEngine::new().admit(&manifest, &admission_context(now, vec![grant]));
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
@@ -252,7 +263,7 @@ fn policy_treats_multiple_required_grants_conjunctively() {
     extra_grant.grant_id = "grant-extra".to_string();
     extra_grant.scope.selector.resource_id = "/workspace/other".to_string();
     let ctx = admission_context(now, vec![grant_for_file(now), extra_grant]);
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
@@ -283,9 +294,39 @@ fn policy_requires_review_for_untrusted_payment_instruction() {
         reviewer_ids: vec!["user:jaden".to_string()],
     };
     let ctx = admission_context(now, vec![grant]);
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsApproval);
     assert!(decision.explanation.contains("untrusted content"));
+}
+
+#[test]
+fn policy_requires_explicit_review_for_untrusted_payment_even_when_grant_has_no_review_policy() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Spend;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::PaymentRail,
+        resource_id: "stablecoin:x402".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Payment]);
+    manifest.required_grants = set(["grant-spend".to_string()]);
+    manifest.requested_budget.max_payment_minor_units = Some(100);
+    manifest.risk_class = RiskClass::Critical;
+    manifest.taint = set([TaintLabel::UntrustedWeb]);
+    manifest.idempotency_key = Some("pay-once".to_string());
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-spend".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::PaymentRail;
+    grant.scope.selector.resource_id = "stablecoin:x402".to_string();
+    grant.scope.actions = set([ActionKind::Spend]);
+    grant.constraints.max_risk = Some(RiskClass::Critical);
+    grant.constraints.max_data_class = Some(DataClass::Financial);
+    grant.constraints.budget.max_payment_minor_units = Some(100);
+    grant.approval = ApprovalRequirement::default();
+
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    assert_eq!(decision.result, DecisionResult::NeedsApproval);
 }
 
 #[test]
@@ -316,17 +357,59 @@ fn policy_requires_action_bound_review_evidence() {
     ctx.approvals.push(ApprovalEvidence {
         review_id: "review-1".to_string(),
         action_id: "different-action".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         grant_id: "grant-deploy".to_string(),
         reviewer_id: "user:jaden".to_string(),
         approved_at: now,
         policy_version: "policy-v1".to_string(),
     });
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsApproval);
 
     ctx.approvals[0].action_id = "action-1".to_string();
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+}
+
+#[test]
+fn policy_rejects_review_evidence_for_stale_manifest_hash() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Deploy;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::CloudResource,
+        resource_id: "staging".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-deploy".to_string()]);
+    manifest.risk_class = RiskClass::High;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+    let mut stale_manifest = manifest.clone();
+    stale_manifest.inputs_digest = "sha256:old-input".to_string();
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-deploy".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::CloudResource;
+    grant.scope.selector.resource_id = "staging".to_string();
+    grant.scope.actions = set([ActionKind::Deploy]);
+    grant.constraints.max_risk = Some(RiskClass::High);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:jaden".to_string()],
+    };
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.approvals.push(ApprovalEvidence {
+        review_id: "review-1".to_string(),
+        action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&stale_manifest),
+        grant_id: "grant-deploy".to_string(),
+        reviewer_id: "user:jaden".to_string(),
+        approved_at: now,
+        policy_version: "policy-v1".to_string(),
+    });
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsApproval);
 }
 
 #[test]
@@ -357,12 +440,13 @@ fn policy_rejects_future_dated_review_evidence() {
     ctx.approvals.push(ApprovalEvidence {
         review_id: "review-1".to_string(),
         action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         grant_id: "grant-deploy".to_string(),
         reviewer_id: "user:jaden".to_string(),
         approved_at: now + Duration::minutes(1),
         policy_version: "policy-v1".to_string(),
     });
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsApproval);
 }
 
@@ -394,23 +478,25 @@ fn policy_requires_all_reviewers_for_multiparty_approval() {
     ctx.approvals.push(ApprovalEvidence {
         review_id: "review-1".to_string(),
         action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         grant_id: "grant-deploy".to_string(),
         reviewer_id: "user:jaden".to_string(),
         approved_at: now,
         policy_version: "policy-v1".to_string(),
     });
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsApproval);
 
     ctx.approvals.push(ApprovalEvidence {
         review_id: "review-2".to_string(),
         action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         grant_id: "grant-deploy".to_string(),
         reviewer_id: "user:reviewer2".to_string(),
         approved_at: now,
         policy_version: "policy-v1".to_string(),
     });
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
 }
 
@@ -442,6 +528,7 @@ fn policy_requires_action_bound_simulation_evidence() {
     ctx.approvals.push(ApprovalEvidence {
         review_id: "review-1".to_string(),
         action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         grant_id: "grant-deploy".to_string(),
         reviewer_id: "user:jaden".to_string(),
         approved_at: now,
@@ -450,16 +537,66 @@ fn policy_requires_action_bound_simulation_evidence() {
     ctx.simulations.push(SimulationEvidence {
         simulation_id: "sim-1".to_string(),
         action_id: "different-action".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         scenario_id: "deploy-scenario".to_string(),
         passed_at: now,
         policy_version: "policy-v1".to_string(),
     });
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
 
     ctx.simulations[0].action_id = "action-1".to_string();
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::Allowed);
+}
+
+#[test]
+fn policy_rejects_simulation_evidence_for_stale_manifest_hash() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Deploy;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::CloudResource,
+        resource_id: "staging".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-deploy".to_string()]);
+    manifest.risk_class = RiskClass::High;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+    let mut stale_manifest = manifest.clone();
+    stale_manifest.expected_side_effects = set([SideEffectClass::CloudMutation]);
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-deploy".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::CloudResource;
+    grant.scope.selector.resource_id = "staging".to_string();
+    grant.scope.actions = set([ActionKind::Deploy]);
+    grant.constraints.max_risk = Some(RiskClass::High);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:jaden".to_string()],
+    };
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.approvals.push(ApprovalEvidence {
+        review_id: "review-1".to_string(),
+        action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&manifest),
+        grant_id: "grant-deploy".to_string(),
+        reviewer_id: "user:jaden".to_string(),
+        approved_at: now,
+        policy_version: "policy-v1".to_string(),
+    });
+    ctx.simulations.push(SimulationEvidence {
+        simulation_id: "sim-1".to_string(),
+        action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&stale_manifest),
+        scenario_id: "deploy-scenario".to_string(),
+        passed_at: now,
+        policy_version: "policy-v1".to_string(),
+    });
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
 }
 
 #[test]
@@ -490,6 +627,7 @@ fn policy_rejects_future_dated_simulation_evidence() {
     ctx.approvals.push(ApprovalEvidence {
         review_id: "review-1".to_string(),
         action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         grant_id: "grant-deploy".to_string(),
         reviewer_id: "user:jaden".to_string(),
         approved_at: now,
@@ -498,11 +636,12 @@ fn policy_rejects_future_dated_simulation_evidence() {
     ctx.simulations.push(SimulationEvidence {
         simulation_id: "sim-1".to_string(),
         action_id: "action-1".to_string(),
+        manifest_hash: manifest_hash(&manifest),
         scenario_id: "deploy-scenario".to_string(),
         passed_at: now + Duration::minutes(1),
         policy_version: "policy-v1".to_string(),
     });
-    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
 }
 
@@ -519,7 +658,7 @@ fn journal_detects_event_tampering() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     journal.append(
         JournalEvent::PolicyDecided {
-            decision: PolicyEngine::new().admit(
+            decision: admit(
                 &manifest,
                 &admission_context(now, vec![grant_for_file(now)]),
             ),
@@ -535,6 +674,40 @@ fn journal_detects_event_tampering() -> Result<(), Box<dyn std::error::Error>> {
     }
     let tampered = InMemoryJournal::from_records(records);
     assert!(tampered.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_decision_for_stale_manifest_hash() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut stale_manifest = manifest.clone();
+    stale_manifest.inputs_digest = "sha256:old-input".to_string();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: manifest.clone(),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: PolicyDecision {
+                decision_id: "decision-1".to_string(),
+                action_id: manifest.action_id.clone(),
+                manifest_hash: manifest_hash(&stale_manifest),
+                policy_version: "policy-v1".to_string(),
+                result: DecisionResult::Allowed,
+                matched_rules: Vec::new(),
+                explanation: "allowed in fixture".to_string(),
+                required_review: None,
+                required_simulation: None,
+                created_at: now,
+            },
+        },
+        now,
+    )?;
+    assert!(journal.verify_chain().is_err());
     Ok(())
 }
 
@@ -582,7 +755,8 @@ fn journal_rejects_receipt_without_prior_allowed_decision() -> Result<(), Box<dy
         JournalEvent::PolicyDecided {
             decision: PolicyDecision {
                 decision_id: "decision-1".to_string(),
-                action_id: manifest.action_id,
+                action_id: manifest.action_id.clone(),
+                manifest_hash: manifest_hash(&manifest),
                 policy_version: "policy-v1".to_string(),
                 result: DecisionResult::Denied,
                 matched_rules: Vec::new(),
@@ -616,7 +790,8 @@ fn journal_accepts_receipt_after_prior_allowed_decision() -> Result<(), Box<dyn 
         JournalEvent::PolicyDecided {
             decision: PolicyDecision {
                 decision_id: "decision-1".to_string(),
-                action_id: manifest.action_id,
+                action_id: manifest.action_id.clone(),
+                manifest_hash: manifest_hash(&manifest),
                 policy_version: "policy-v1".to_string(),
                 result: DecisionResult::Allowed,
                 matched_rules: Vec::new(),
@@ -651,7 +826,43 @@ fn journal_rejects_receipt_that_does_not_match_manifest() -> Result<(), Box<dyn 
         JournalEvent::PolicyDecided {
             decision: PolicyDecision {
                 decision_id: "decision-1".to_string(),
-                action_id: manifest.action_id,
+                action_id: manifest.action_id.clone(),
+                manifest_hash: manifest_hash(&manifest),
+                policy_version: "policy-v1".to_string(),
+                result: DecisionResult::Allowed,
+                matched_rules: Vec::new(),
+                explanation: "allowed in fixture".to_string(),
+                required_review: None,
+                required_simulation: None,
+                created_at: now,
+            },
+        },
+        now,
+    )?;
+    journal.append(JournalEvent::ReceiptAppended { receipt }, now)?;
+    assert!(journal.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_malformed_embedded_receipt_hash() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut receipt = receipt_for_manifest(&manifest, now);
+    receipt.receipt_hash = "bad-hash".to_string();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: manifest.clone(),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: PolicyDecision {
+                decision_id: "decision-1".to_string(),
+                action_id: manifest.action_id.clone(),
+                manifest_hash: manifest_hash(&manifest),
                 policy_version: "policy-v1".to_string(),
                 result: DecisionResult::Allowed,
                 matched_rules: Vec::new(),

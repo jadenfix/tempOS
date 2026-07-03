@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use crate::contracts::{
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
-use crate::receipt::CapabilityReceipt;
+use crate::receipt::{CapabilityReceipt, ReceiptLedger};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -140,8 +140,9 @@ impl InMemoryJournal {
     pub fn verify_chain(&self) -> BeaterOsResult<JournalVerificationReport> {
         let mut prev_hash = GENESIS_HASH.to_string();
         let mut proposed_actions: BTreeMap<String, ActionManifest> = BTreeMap::new();
-        let mut allowed_decisions = BTreeSet::new();
+        let mut allowed_decisions: BTreeMap<String, HashValue> = BTreeMap::new();
         let mut latest_decision_by_action: BTreeMap<String, DecisionResult> = BTreeMap::new();
+        let mut receipt_chain = Vec::new();
         for (idx, record) in self.records.iter().enumerate() {
             let expected_seq = idx as u64;
             if record.seq != expected_seq {
@@ -170,6 +171,7 @@ impl InMemoryJournal {
                 &mut proposed_actions,
                 &mut allowed_decisions,
                 &mut latest_decision_by_action,
+                &mut receipt_chain,
             )?;
             prev_hash = record.hash.clone();
         }
@@ -183,8 +185,9 @@ impl InMemoryJournal {
 fn verify_event_causality(
     record: &JournalRecord,
     proposed_actions: &mut BTreeMap<String, ActionManifest>,
-    allowed_decisions: &mut BTreeSet<String>,
+    allowed_decisions: &mut BTreeMap<String, HashValue>,
     latest_decision_by_action: &mut BTreeMap<String, DecisionResult>,
+    receipt_chain: &mut Vec<CapabilityReceipt>,
 ) -> BeaterOsResult<()> {
     match &record.event {
         JournalEvent::ActionProposed { manifest } => {
@@ -199,7 +202,7 @@ fn verify_event_causality(
             }
         }
         JournalEvent::PolicyDecided { decision } => {
-            if !proposed_actions.contains_key(&decision.action_id) {
+            let Some(manifest) = proposed_actions.get(&decision.action_id) else {
                 return causality_error(
                     record.seq,
                     format!(
@@ -207,10 +210,21 @@ fn verify_event_causality(
                         decision.decision_id, decision.action_id
                     ),
                 );
+            };
+            let manifest_hash = manifest.digest()?;
+            if decision.manifest_hash != manifest_hash {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "policy decision {} manifest hash does not match action {}",
+                        decision.decision_id, decision.action_id
+                    ),
+                );
             }
             latest_decision_by_action.insert(decision.action_id.clone(), decision.result.clone());
             if decision.result == DecisionResult::Allowed {
-                allowed_decisions.insert(decision.action_id.clone());
+                allowed_decisions
+                    .insert(decision.action_id.clone(), decision.manifest_hash.clone());
             } else {
                 allowed_decisions.remove(&decision.action_id);
             }
@@ -225,7 +239,7 @@ fn verify_event_causality(
                     ),
                 );
             };
-            if !allowed_decisions.contains(&receipt.action_id) {
+            let Some(allowed_manifest_hash) = allowed_decisions.get(&receipt.action_id) else {
                 let latest = latest_decision_by_action
                     .get(&receipt.action_id)
                     .map(|result| format!("{result:?}"))
@@ -235,6 +249,15 @@ fn verify_event_causality(
                     format!(
                         "receipt {} references action {} without a prior allowed decision (latest decision: {})",
                         receipt.receipt_id, receipt.action_id, latest
+                    ),
+                );
+            };
+            if &manifest.digest()? != allowed_manifest_hash {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} references action {} whose allowed decision hash is stale",
+                        receipt.receipt_id, manifest.action_id
                     ),
                 );
             }
@@ -282,6 +305,8 @@ fn verify_event_causality(
                     ),
                 );
             }
+            receipt_chain.push(receipt.clone());
+            ReceiptLedger::from_receipts(receipt_chain.clone()).verify_chain()?;
         }
         JournalEvent::SessionCreated { .. }
         | JournalEvent::CapabilityGranted { .. }

@@ -4,6 +4,9 @@ use std::path::{Component, Path};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::error::BeaterOsResult;
+use crate::hash::{HashValue, hash_json};
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionKind {
@@ -157,6 +160,7 @@ impl Default for ApprovalRequirement {
 pub struct ApprovalEvidence {
     pub review_id: String,
     pub action_id: String,
+    pub manifest_hash: HashValue,
     pub grant_id: String,
     pub reviewer_id: String,
     pub approved_at: DateTime<Utc>,
@@ -496,12 +500,17 @@ impl ActionManifest {
             )
         })
     }
+
+    pub fn digest(&self) -> BeaterOsResult<HashValue> {
+        hash_json(self)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecision {
     pub decision_id: String,
     pub action_id: String,
+    pub manifest_hash: HashValue,
     pub policy_version: String,
     pub result: DecisionResult,
     #[serde(default)]
@@ -600,6 +609,7 @@ pub struct HumanReviewRequest {
 pub struct SimulationEvidence {
     pub simulation_id: String,
     pub action_id: String,
+    pub manifest_hash: HashValue,
     pub scenario_id: String,
     pub passed_at: DateTime<Utc>,
     pub policy_version: String,
