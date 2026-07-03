@@ -73,12 +73,15 @@ here so the fleet can converge rather than drift:
 | Contract | `final.md` / schema | Rust crate | Resolution |
 | --- | --- | --- | --- |
 | ActionManifest | `action_type` | `action_kind` | add a serde `alias`/`rename`, or agree to amend `final.md` |
+| ActionManifest | `idempotency_key` (required, non-null) | `Option<String>` (required only for external side effects) | schema follows `final.md` (always required); the crate should populate it on every manifest to conform, even a deterministic key for pure reads |
 | CapabilityGrant | `resource` + `actions` | nested `scope { selector, actions }` | grant schema keeps `final.md`'s flat shape; a `scope` object is accepted as an additional property |
 | CapabilityGrant | `approval_requirements` | `approval` | serde `rename` on the Rust side |
+| PolicyDecision | `required_review` / `required_simulation` | `Option<String>` (review/sim handle) | `final.md` mandates the fields but not their type; the schema accepts boolean OR string OR null so both a flag and a handle round-trip. The fleet should pick one reading and pin it |
 
-None of these break serialization today (open `additionalProperties`), but they
-should be reconciled so a single JSON blob round-trips through both. See the
-review note filed on PR #1.
+Most of these do not break serialization today (open `additionalProperties`, and
+`PolicyDecision`/`required_*` now accept both readings). The two that the schema
+holds to `final.md` deliberately — `action_type` naming and `idempotency_key`
+always-present — are the crate's to reconcile. See the review note filed on PR #1.
 
 ## Validate locally (zero dependencies)
 

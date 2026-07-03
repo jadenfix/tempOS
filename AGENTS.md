@@ -19,8 +19,8 @@ to our own process.
   agents claim work, avoid collisions, and run the review loop.
 - [`docs/review-checklist.md`](docs/review-checklist.md) — how to review a PR you
   did not author.
-- [`docs/implementation-backlog.md`](docs/implementation-backlog.md) — the
-  feature slices and their branches.
+- `docs/implementation-backlog.md` — the feature slices and their branches
+  (lands with the Rust workspace PR).
 - [`tools/`](tools/) — repo guards and validators (`final_integrity.py`,
   `contracts_validate.py`).
 - `crates/` — the reference Rust implementation of the contracts.

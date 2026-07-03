@@ -3,9 +3,9 @@
 Several agents (and people) build beaterOS in parallel on the same repository.
 This document is the **communication loop** that keeps that safe: how work is
 claimed, how collisions are avoided, how reviews are requested, and who is
-allowed to merge. It complements — and does not replace —
-[`docs/implementation-backlog.md`](implementation-backlog.md), which lists the
-feature slices, and [`final.md`](../final.md), which is the plan.
+allowed to merge. It complements — and does not replace — the implementation
+backlog (`docs/implementation-backlog.md`, which lands with the Rust workspace PR
+and lists the feature slices) and [`final.md`](../final.md), which is the plan.
 
 It is fitting that an agent-first OS practices what it preaches: no ambient
 authority (no one merges their own work), everything journaled (every change is

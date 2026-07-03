@@ -108,6 +108,39 @@ class NegativeExampleTest(unittest.TestCase):
         del instance["target"]["resource_kind"]
         self._assert_rejects(instance, schema)
 
+    def test_calendar_invalid_timestamp_rejected(self) -> None:
+        instance, schema = self._load("policy_decision.example.json")
+        for bad in ("2026-99-99T99:99:99Z", "2026-02-30T00:00:00Z"):
+            with self.subTest(ts=bad):
+                mutated = dict(instance, created_at=bad)
+                self._assert_rejects(mutated, schema)
+
+    def test_trailing_newline_in_digest_rejected(self) -> None:
+        instance, schema = self._load("capability_receipt.example.json")
+        instance["receipt_hash"] = "sha256:abcd\n"
+        self._assert_rejects(instance, schema)
+
+
+class InteropAcceptanceTest(unittest.TestCase):
+    """Shapes the reference Rust crate emits must validate (interop floor)."""
+
+    def setUp(self) -> None:
+        self.registry = cv.load_registry()
+
+    def test_policy_decision_accepts_review_handle_and_nulls(self) -> None:
+        instance = cv.load_json(cv.EXAMPLE_DIR / "policy_decision.example.json")
+        schema = self.registry["policy_decision.schema.json"]
+        for value in ("review-123", None, True, False):
+            with self.subTest(required_review=value):
+                mutated = dict(instance, required_review=value)
+                cv.validate_instance(mutated, schema, self.registry)
+
+    def test_valid_offset_and_fractional_timestamp_accepted(self) -> None:
+        instance = cv.load_json(cv.EXAMPLE_DIR / "policy_decision.example.json")
+        schema = self.registry["policy_decision.schema.json"]
+        mutated = dict(instance, created_at="2026-07-03T12:00:00.123+02:00")
+        cv.validate_instance(mutated, schema, self.registry)
+
 
 class ContractInvariantTest(unittest.TestCase):
     """Structural checks tying the examples back to final.md invariants."""

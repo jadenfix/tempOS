@@ -6,10 +6,16 @@ backlog rule is explicit: "final.md must not be shortened or weakened as part of
 implementation." With several agents editing the repo in parallel, that rule
 needs a machine check, not just etiquette.
 
-This guard pins the set of section headings and the document length in
-`tools/final_integrity.lock.json`. The check FAILS if any pinned heading
-disappears or the document shrinks below the pinned line count. Growth (new
-sections, more detail) is always allowed; only regressions fail.
+This guard pins, in `tools/final_integrity.lock.json`: the set of section
+headings, the total document length, and the body length of each section. The
+check FAILS if any pinned heading disappears, the document shrinks below the
+pinned line count, or any individual section's body shrinks below its pinned
+length (so prose cannot be gutted from one section while padding another). Growth
+(new sections, more detail) is always allowed; only regressions fail.
+
+The `sha256` field is an informational fingerprint only -- it is NOT enforced,
+because additive edits legitimately change it. Content preservation is enforced
+by the per-section line counts, not the hash.
 
 Usage:
     python tools/final_integrity.py            # check (non-zero exit on regression)
@@ -34,10 +40,23 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 def scan(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
-    headings = [m.group(0).strip() for line in lines if (m := HEADING_RE.match(line))]
+    headings: list[str] = []
+    # Body line count per heading (summed if a heading string repeats), so a
+    # section cannot be hollowed out while total line count is padded elsewhere.
+    section_lines: dict[str, int] = {}
+    current: str | None = None
+    for line in lines:
+        match = HEADING_RE.match(line)
+        if match:
+            current = match.group(0).strip()
+            headings.append(current)
+            section_lines.setdefault(current, 0)
+        elif current is not None:
+            section_lines[current] += 1
     return {
         "line_count": len(lines),
         "headings": headings,
+        "section_lines": section_lines,
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
     }
 
@@ -69,6 +88,18 @@ def check() -> int:
         problems.append(
             f"final.md shrank from {locked['line_count']} to "
             f"{current['line_count']} lines (weakening the plan is not allowed)"
+        )
+
+    locked_sections = locked.get("section_lines", {})
+    current_sections = current["section_lines"]
+    shrunk = [
+        f"{heading!r}: {current_sections.get(heading, 0)} < {pinned} lines"
+        for heading, pinned in locked_sections.items()
+        if heading in current["headings"] and current_sections.get(heading, 0) < pinned
+    ]
+    if shrunk:
+        problems.append(
+            "final.md section(s) were hollowed out:\n  - " + "\n  - ".join(shrunk)
         )
 
     if problems:

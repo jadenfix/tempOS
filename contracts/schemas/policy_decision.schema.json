@@ -30,8 +30,14 @@
       "minLength": 1,
       "description": "Human-legible reason for the decision. Denials MUST be explainable (final.md 22.9)."
     },
-    "required_review": { "type": "boolean" },
-    "required_simulation": { "type": "boolean" },
+    "required_review": {
+      "type": ["boolean", "string", "null"],
+      "description": "Whether review is required. final.md 12.4 mandates the field but not its type; accepted as a boolean flag, or as a review handle / null (the reference Rust crate uses Option<String>). See contracts/README.md interop table."
+    },
+    "required_simulation": {
+      "type": ["boolean", "string", "null"],
+      "description": "Whether simulation is required. Boolean flag, or a simulation handle / null (reference crate uses Option<String>). See contracts/README.md interop table."
+    },
     "created_at": { "$ref": "common.schema.json#/$defs/Timestamp" }
   },
   "additionalProperties": true

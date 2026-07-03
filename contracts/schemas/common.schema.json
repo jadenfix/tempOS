@@ -16,8 +16,8 @@
     },
     "Digest": {
       "type": "string",
-      "pattern": "^[a-z0-9]+:[0-9a-f]+$",
-      "description": "Content digest of the form <algo>:<hex>, e.g. sha256:ab12..."
+      "pattern": "^[a-z0-9]+:[0-9a-f]+\\Z",
+      "description": "Content digest of the form <algo>:<hex>, e.g. sha256:ab12... The \\Z anchor (Python regex; these validators are Python) rejects a trailing newline, which a bare $ would let through."
     },
     "ActionKind": {
       "type": "string",

@@ -43,6 +43,18 @@ class RegressionDetectionTest(unittest.TestCase):
         self.assertEqual(missing, [])
         self.assertGreaterEqual(current["line_count"], locked["line_count"])
 
+    def test_section_hollowing_is_detected(self) -> None:
+        # Total line count is preserved (padding under A), but B is gutted.
+        locked = self._scan_text("# A\nx\n## B\nkeep1\nkeep2\nkeep3\n")
+        current = self._scan_text("# A\nx\npad1\npad2\npad3\n## B\n")
+        self.assertGreaterEqual(current["line_count"], locked["line_count"])
+        hollowed = [
+            h
+            for h, pinned in locked["section_lines"].items()
+            if h in current["headings"] and current["section_lines"].get(h, 0) < pinned
+        ]
+        self.assertIn("## B", hollowed)
+
 
 class LockConsistencyTest(unittest.TestCase):
     def test_lock_file_matches_or_is_subset_of_current(self) -> None:

@@ -21,6 +21,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,8 +41,40 @@ EXAMPLE_TO_SCHEMA = {
 }
 
 _DATE_TIME_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
+    r"(?P<y>\d{4})-(?P<mo>\d{2})-(?P<d>\d{2})[Tt]"
+    r"(?P<h>\d{2}):(?P<mi>\d{2}):(?P<s>\d{2})(?:\.\d+)?"
+    r"(?:[Zz]|(?P<oh>[+-]\d{2}):(?P<om>\d{2}))"
 )
+
+
+def is_rfc3339_datetime(value) -> bool:
+    """True if ``value`` is a calendar-valid RFC 3339 date-time.
+
+    fullmatch rejects trailing whitespace/newlines, the field ranges reject
+    things like ``2026-99-99``, and constructing a ``datetime`` rejects
+    impossible dates like ``2026-02-30``. Second 60 (leap second) is allowed by
+    the range check but not fed to ``datetime``.
+    """
+    if not isinstance(value, str):
+        return True
+    match = _DATE_TIME_RE.fullmatch(value)
+    if match is None:
+        return False
+    year, month, day, hour, minute, second = (
+        int(match[name]) for name in ("y", "mo", "d", "h", "mi", "s")
+    )
+    if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 23 and minute <= 59):
+        return False
+    if second > 60:
+        return False
+    try:
+        datetime(year, month, day, hour, minute, min(second, 59))
+    except ValueError:
+        return False
+    if match["oh"] is not None:
+        if not (-23 <= int(match["oh"]) <= 23 and int(match["om"]) <= 59):
+            return False
+    return True
 
 
 def load_json(path: Path):
@@ -164,7 +197,7 @@ class MiniValidator:
             raise ValidationError(f"{path}: shorter than minLength {schema['minLength']}")
         if "pattern" in schema and not re.search(schema["pattern"], instance):
             raise ValidationError(f"{path}: {instance!r} does not match {schema['pattern']!r}")
-        if schema.get("format") == "date-time" and not _DATE_TIME_RE.match(instance):
+        if schema.get("format") == "date-time" and not is_rfc3339_datetime(instance):
             raise ValidationError(f"{path}: {instance!r} is not an RFC 3339 date-time")
 
     @staticmethod
@@ -205,7 +238,7 @@ def _build_format_checker():
 
     @checker.checks("date-time")
     def _is_date_time(value) -> bool:  # noqa: ANN001
-        return not isinstance(value, str) or bool(_DATE_TIME_RE.match(value))
+        return is_rfc3339_datetime(value)
 
     return checker
 
