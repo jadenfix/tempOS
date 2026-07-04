@@ -79,6 +79,10 @@ pub fn help_text() -> String {
          \x20                 --target-kind <kind> --target <id> --grants <g1,g2>\n\
          \x20                 [--risk <r>] [--side-effects <s,..>] [--data-classes <d,..>]\n\
          \x20                 [--taint <t,..>] [--idempotency-key <k>] [--summary <text>]\n\
+         \x20 action execute  --session <id> --tool <id> --command <cmd> [--arg <a>]...\n\
+         \x20                 --cwd <dir> --grants <g1,g2> [--risk <r>]\n\
+         \x20                 [--side-effects <s,..>] [--idempotency-key <k>]\n\
+         \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\
          \x20 journal verify  --session <id>\n\
          \x20 trace show      --session <id>\n\

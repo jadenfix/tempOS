@@ -43,6 +43,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-os-sandbox"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "beater-os-session"
 version = "0.1.0"
 dependencies = [
@@ -67,6 +78,7 @@ name = "beaterosctl"
 version = "0.1.0"
 dependencies = [
  "beater-os-core",
+ "beater-os-sandbox",
  "chrono",
  "serde",
  "serde_json",
