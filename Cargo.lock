@@ -23,8 +23,10 @@ version = "0.1.0"
 dependencies = [
  "beater-os-core",
  "chrono",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

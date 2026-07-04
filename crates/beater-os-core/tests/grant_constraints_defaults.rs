@@ -109,7 +109,7 @@ fn partial_constraints_still_deny_critical_risk() {
     let grant = grant_with_constraints(constraints);
     let manifest = read_manifest(RiskClass::Critical, BTreeSet::new());
     assert!(
-        !grant.allows_manifest(&manifest, now(), "agent:x"),
+        !grant.allows_manifest(&manifest, manifest.risk_class, now(), "agent:x"),
         "a partial-constraints grant must not admit a Critical-risk action"
     );
 }
@@ -122,7 +122,7 @@ fn partial_constraints_still_deny_secret_data() {
     let grant = grant_with_constraints(constraints);
     let manifest = read_manifest(RiskClass::Low, set([DataClass::Secret]));
     assert!(
-        !grant.allows_manifest(&manifest, now(), "agent:x"),
+        !grant.allows_manifest(&manifest, manifest.risk_class, now(), "agent:x"),
         "a partial-constraints grant must not admit Secret data"
     );
 }
@@ -136,7 +136,7 @@ fn in_bounds_action_is_still_admitted() {
     let grant = grant_with_constraints(constraints);
     let manifest = read_manifest(RiskClass::Low, set([DataClass::Internal]));
     assert!(
-        grant.allows_manifest(&manifest, now(), "agent:x"),
+        grant.allows_manifest(&manifest, manifest.risk_class, now(), "agent:x"),
         "an in-bounds action should still be admitted under the safe default caps"
     );
 }

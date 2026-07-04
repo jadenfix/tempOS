@@ -927,3 +927,124 @@ fn receipt_ledger_detects_reordered_or_edited_receipts() -> Result<(), Box<dyn s
     assert!(tampered.verify_chain().is_err());
     Ok(())
 }
+
+// --- Kernel-derived risk floor (#67, final.md §7.4/§12.3/§26) ---
+//
+// The agent-asserted `risk_class` may only RAISE the effective risk above the
+// kernel-derived floor, never lower it. An agent must not be able to declare
+// `Low` on a Spend/Deploy/Delegate (or a Payment/Deployment/Secret manifest) to
+// dodge the approval and simulation gates.
+
+#[test]
+fn policy_derives_high_risk_floor_when_agent_declares_low_on_payment() {
+    // Agent declares Low on a Spend + Payment (external) action. The kernel floor
+    // is High, so it must NOT be Allowed: with no simulation on file it needs one.
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Spend;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::PaymentRail,
+        resource_id: "stablecoin:x402".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Payment]);
+    manifest.required_grants = set(["grant-spend".to_string()]);
+    manifest.data_classes = BTreeSet::new();
+    manifest.risk_class = RiskClass::Low;
+    manifest.idempotency_key = Some("pay-once".to_string());
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-spend".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::PaymentRail;
+    grant.scope.selector.resource_id = "stablecoin:x402".to_string();
+    grant.scope.actions = set([ActionKind::Spend]);
+    // Ceiling and approval are permissive so the *risk floor* is what bites.
+    grant.constraints.max_risk = Some(RiskClass::Critical);
+    grant.constraints.max_data_class = Some(DataClass::Financial);
+    grant.approval = ApprovalRequirement::default();
+
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    assert_ne!(
+        decision.result,
+        DecisionResult::Allowed,
+        "an agent must not dodge gates by declaring Low on a Payment action"
+    );
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+    assert!(
+        decision
+            .matched_rules
+            .iter()
+            .any(|rule| rule.contains("effective_risk=High")),
+        "the derived High floor must be recorded for auditability: {:?}",
+        decision.matched_rules
+    );
+}
+
+#[test]
+fn policy_needs_approval_when_agent_declares_low_on_deploy() {
+    // Agent declares Low on a Deploy action; the grant's approval threshold is
+    // Medium. The kernel floor (High) crosses that threshold -> NeedsApproval.
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Deploy;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::CloudResource,
+        resource_id: "staging".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-deploy".to_string()]);
+    manifest.data_classes = BTreeSet::new();
+    manifest.risk_class = RiskClass::Low;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-deploy".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::CloudResource;
+    grant.scope.selector.resource_id = "staging".to_string();
+    grant.scope.actions = set([ActionKind::Deploy]);
+    grant.constraints.max_risk = Some(RiskClass::Critical);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::Medium,
+        reviewer_ids: vec!["user:jaden".to_string()],
+    };
+
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    assert_eq!(decision.result, DecisionResult::NeedsApproval);
+}
+
+#[test]
+fn policy_lets_agent_raise_risk_above_the_floor() {
+    // The agent CAN raise risk: declaring Critical on a benign Read must trip a
+    // Medium grant ceiling. Raising is respected even though the floor is Low.
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.risk_class = RiskClass::Critical;
+    let grant = grant_for_file(now); // max_risk == Medium
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+#[test]
+fn policy_does_not_over_gate_benign_local_write() {
+    // Regression: a benign LocalWrite with Low risk and non-sensitive data under a
+    // matching grant must still be Allowed. The floor must not over-gate.
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Write;
+    manifest.expected_side_effects = set([SideEffectClass::LocalWrite]);
+    manifest.data_classes = set([DataClass::Internal]);
+    manifest.risk_class = RiskClass::Low;
+    let decision = admit(
+        &manifest,
+        &admission_context(now, vec![grant_for_file(now)]),
+    );
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .iter()
+            .any(|rule| rule.contains("effective_risk=Low")),
+        "a benign action's effective risk must remain Low: {:?}",
+        decision.matched_rules
+    );
+}
