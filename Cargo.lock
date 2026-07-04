@@ -43,6 +43,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-os-session"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "chrono",
+ "thiserror",
+]
+
+[[package]]
 name = "beater-os-tool-registry"
 version = "0.1.0"
 dependencies = [

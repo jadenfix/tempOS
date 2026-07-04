@@ -2,6 +2,7 @@
 members = [
     "crates/beater-os-core",
     "crates/beater-os-audit",
+    "crates/beater-os-session",
     "crates/beater-os-tool-registry",
     "crates/beaterosctl",
 ]
