@@ -3,17 +3,21 @@
 //! `final.md` §8.15 argues for a small trusted computing base that can be
 //! re-verified, and §13.11 requires tamper-evident logs. This module is a
 //! deliberately *independent* second implementation of the audit invariants:
-//! it delegates the cryptographic chain check back to `beater-os-core` as one
-//! signal, then applies its own structural and cross-referential checks that
-//! do not share state with the core verifier. If the two disagree, that
-//! disagreement is itself an auditable incident.
+//! it recomputes each record's content hash itself (its own SHA-256 over the
+//! canonical pre-image), never trusting the digest emitted by the code under
+//! audit, then applies its own structural and cross-referential checks. It does
+//! not call `beater-os-core`'s verifier for any pass/fail signal — a drift in
+//! core's hashing would surface here as recomputed-hash mismatches on otherwise
+//! valid records, i.e. loud audit failures, rather than being silently trusted.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    CapabilityGrant, DecisionResult, InMemoryJournal, JournalEvent, JournalSnapshot,
+    CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot,
 };
+use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 /// Expected genesis linkage hash.
 ///
@@ -78,9 +82,10 @@ impl AuditReport {
 /// that cannot positively confirm an invariant reports `Fail`.
 pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
     let checks = vec![
-        // Delegated content-hash integrity — the ONLY signal here that recomputes
-        // record hashes. Every other check trusts `record.hash` as given, so a
-        // fully re-hashed tamper is caught only by this one.
+        // Independent content-hash integrity — recomputes every record's hash
+        // from the canonical pre-image using this crate's own SHA-256. This is
+        // the load-bearing integrity signal; the structural checks below trust
+        // `record.hash` and only add linkage.
         check_cryptographic_chain(snapshot),
         // Independent second implementations of structural invariants. The overlap
         // with `beater-os-core` is intentional (defense in depth): they catch a
@@ -102,19 +107,87 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
     }
 }
 
-/// Delegate the cryptographic hash-chain check to the core verifier. This is the
-/// only signal in this module that recomputes record content hashes; the
-/// structural checks below re-derive linkage/causality but trust `record.hash`
-/// as given. Content-hash integrity therefore rests on this delegated check.
+/// Canonical hash pre-image for a journal record.
+///
+/// This is an independent re-declaration of the exact field set and order that
+/// `beater-os-core` hashes (`seq`, `created_at`, `event`, `prev_hash`). It is
+/// duplicated here on purpose: an independent auditor must serialize and hash
+/// the record itself rather than importing the hasher under audit. If core ever
+/// changes its pre-image, this struct must change with it and the cross-check in
+/// [`check_cryptographic_chain`] will flag the divergence until it does.
+#[derive(Serialize)]
+struct JournalHashPreimage<'a> {
+    seq: u64,
+    created_at: &'a DateTime<Utc>,
+    event: &'a JournalEvent,
+    prev_hash: &'a str,
+}
+
+/// Recompute a record's content hash from scratch: SHA-256 over the canonical
+/// JSON pre-image, hex-encoded. No dependency on `beater-os-core`'s hasher.
+fn recompute_record_hash(record: &JournalRecord) -> Result<String, serde_json::Error> {
+    let preimage = JournalHashPreimage {
+        seq: record.seq,
+        created_at: &record.created_at,
+        event: &record.event,
+        prev_hash: record.prev_hash.as_str(),
+    };
+    let bytes = serde_json::to_vec(&preimage)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Independently verify the cryptographic hash chain.
+///
+/// Unlike the structural checks below, this does not trust `record.hash`: it
+/// recomputes each record's content hash locally (closing the terminal-record
+/// blind spot in [`check_hash_linkage`], which has no successor to catch a
+/// tampered last record). It calls nothing in `beater-os-core` for its verdict.
+/// Fails closed on any re-serialization error.
 fn check_cryptographic_chain(snapshot: &JournalSnapshot) -> CheckResult {
-    let journal = InMemoryJournal::from_records(snapshot.records.clone());
-    match journal.verify_chain() {
-        Ok(report) => CheckResult::pass(
-            "cryptographic_chain",
-            format!("core verifier accepted {} record(s)", report.records),
-        ),
-        Err(err) => CheckResult::fail("cryptographic_chain", err.to_string()),
+    let mut prev_hash = GENESIS_HASH;
+    for record in &snapshot.records {
+        if record.prev_hash != prev_hash {
+            return CheckResult::fail(
+                "cryptographic_chain",
+                format!(
+                    "record seq {} prev_hash {} does not link to expected {prev_hash}",
+                    record.seq, record.prev_hash
+                ),
+            );
+        }
+        let recomputed = match recompute_record_hash(record) {
+            Ok(hash) => hash,
+            Err(err) => {
+                return CheckResult::fail(
+                    "cryptographic_chain",
+                    format!(
+                        "record seq {} could not be re-serialized for hashing: {err}",
+                        record.seq
+                    ),
+                );
+            }
+        };
+        if recomputed != record.hash {
+            return CheckResult::fail(
+                "cryptographic_chain",
+                format!(
+                    "record seq {} content hash mismatch: independently recomputed {recomputed}, stored {}",
+                    record.seq, record.hash
+                ),
+            );
+        }
+        prev_hash = &record.hash;
     }
+
+    CheckResult::pass(
+        "cryptographic_chain",
+        format!(
+            "independently recomputed and linked {} record hash(es)",
+            snapshot.records.len()
+        ),
+    )
 }
 
 /// Sequence numbers must start at zero and be contiguous.

@@ -322,6 +322,41 @@ fn detects_tampered_record_hash() -> Result<(), BeaterOsError> {
 }
 
 #[test]
+fn independent_recompute_detects_terminal_record_tamper() -> Result<(), BeaterOsError> {
+    // Tamper a hashed field (`created_at`) of the LAST record while leaving its
+    // stored `hash` and `prev_hash` intact. There is no successor record, so
+    // `hash_linkage` cannot catch it — only an independent content-hash recompute
+    // can. This is the blind spot that trusting `record.hash` + delegating to
+    // core alone used to paper over.
+    let mut snapshot = valid_snapshot()?;
+    if let Some(last) = snapshot.records.last_mut() {
+        last.created_at = ts(9_999);
+    }
+
+    let report = verify_snapshot(&snapshot);
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    // The independent recompute catches the terminal-record content tamper ...
+    assert!(failed.contains("cryptographic_chain"));
+    // ... while prev-hash linkage does not (no successor; stored hash unchanged).
+    assert!(!failed.contains("hash_linkage"));
+    // Assert the recompute branch specifically fired (not merely that the check
+    // name failed): the detail must name the independent recompute. This is what
+    // proves the independent path — not linkage or a delegated verifier — is
+    // what caught the tamper.
+    let detail = report
+        .failures()
+        .find(|c| c.check == "cryptographic_chain")
+        .map(|c| c.detail.clone())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("independently recomputed"),
+        "expected the independent recompute to fire, got: {detail}"
+    );
+    Ok(())
+}
+
+#[test]
 fn detects_use_of_revoked_grant() -> Result<(), BeaterOsError> {
     // A grant is issued already revoked, then an action uses it. The core journal
     // verifier does not re-check grant validity; the audit's grant_validity must.

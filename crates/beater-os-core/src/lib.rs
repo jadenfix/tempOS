@@ -24,5 +24,5 @@ pub use hash::{HashValue, hash_json};
 pub use journal::{
     InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot, JournalVerificationReport,
 };
-pub use policy::{AdmissionContext, PolicyEngine};
+pub use policy::{AdmissionContext, PolicyEngine, derived_risk_floor};
 pub use receipt::{CapabilityReceipt, CapabilityReceiptInput, ReceiptLedger};

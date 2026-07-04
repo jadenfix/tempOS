@@ -361,9 +361,16 @@ impl CapabilityGrant {
         !self.revoked && self.expires_at > now
     }
 
+    /// Whether this grant admits `manifest` at the given `effective_risk`.
+    ///
+    /// `effective_risk` is the kernel-derived effective risk (see
+    /// `policy::derived_risk_floor`), never the raw agent-asserted
+    /// `manifest.risk_class`: the `max_risk` ceiling is checked against it so the
+    /// agent can only raise risk above the kernel floor, never lower it below.
     pub fn allows_manifest(
         &self,
         manifest: &ActionManifest,
+        effective_risk: RiskClass,
         now: DateTime<Utc>,
         actor_id: &str,
     ) -> bool {
@@ -380,7 +387,7 @@ impl CapabilityGrant {
             return false;
         }
         if let Some(max_risk) = self.constraints.max_risk
-            && manifest.risk_class > max_risk
+            && effective_risk > max_risk
         {
             return false;
         }
