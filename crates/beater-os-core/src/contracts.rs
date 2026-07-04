@@ -196,14 +196,24 @@ fn within_optional_limit(requested: Option<u64>, limit: Option<u64>) -> bool {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelPolicy {
     #[serde(default)]
     pub allowed_routes: BTreeSet<String>,
     #[serde(default)]
     pub local_only: bool,
-    #[serde(default)]
+    #[serde(default = "default_max_data_class")]
     pub max_data_class: Option<DataClass>,
+}
+
+impl Default for ModelPolicy {
+    fn default() -> Self {
+        Self {
+            allowed_routes: BTreeSet::new(),
+            local_only: false,
+            max_data_class: default_max_data_class(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,8 +286,9 @@ fn default_max_risk() -> Option<RiskClass> {
     Some(RiskClass::Medium)
 }
 
-/// Default data-class ceiling for a grant. See [`default_max_risk`]: absence must
-/// fail closed at a bounded class, not at "unlimited".
+/// Default data-class ceiling for model routes and grants. See
+/// [`default_max_risk`]: absence must fail closed at a bounded class, not at
+/// "unlimited".
 fn default_max_data_class() -> Option<DataClass> {
     Some(DataClass::Internal)
 }
