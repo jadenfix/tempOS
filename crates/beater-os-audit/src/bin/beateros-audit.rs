@@ -108,15 +108,72 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     }
 }
 
+/// Maximum accepted snapshot size. The audit tool fully materializes the
+/// snapshot in memory (`serde_json::from_str` over a `Vec<JournalRecord>`), so
+/// an unbounded read is an unbounded allocation from untrusted input. This
+/// offline reviewer never needs a journal larger than this; above it we fail
+/// closed (AGENTS.md: "bounded by construction — memory").
+const MAX_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
+
 fn read_source(source: &str) -> Result<String, String> {
     if source == "-" {
-        let mut buffer = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buffer)
-            .map_err(|err| format!("could not read snapshot from stdin: {err}"))?;
-        Ok(buffer)
+        read_capped(std::io::stdin().lock(), MAX_SNAPSHOT_BYTES, "stdin")
     } else {
-        std::fs::read_to_string(source)
-            .map_err(|err| format!("could not read snapshot file {source}: {err}"))
+        let file = std::fs::File::open(source)
+            .map_err(|err| format!("could not open snapshot file {source}: {err}"))?;
+        read_capped(file, MAX_SNAPSHOT_BYTES, source)
+    }
+}
+
+/// Read at most `cap` bytes from `reader`, failing closed if the input exceeds
+/// the cap rather than allocating without bound. `label` names the source for
+/// error messages.
+fn read_capped<R: std::io::Read>(reader: R, cap: u64, label: &str) -> Result<String, String> {
+    let mut buffer = Vec::new();
+    // take(cap + 1): reading cap+1 bytes means the input is over the limit, and
+    // we never buffer more than one byte past the cap.
+    reader
+        .take(cap.saturating_add(1))
+        .read_to_end(&mut buffer)
+        .map_err(|err| format!("could not read snapshot from {label}: {err}"))?;
+    if buffer.len() as u64 > cap {
+        return Err(format!(
+            "snapshot from {label} exceeds the {cap}-byte audit input cap; refusing to read further"
+        ));
+    }
+    String::from_utf8(buffer)
+        .map_err(|err| format!("snapshot from {label} is not valid UTF-8: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_capped;
+    use std::io::Cursor;
+
+    #[test]
+    fn reads_input_under_the_cap() {
+        let out = read_capped(Cursor::new(b"{\"records\":[]}".to_vec()), 64, "test");
+        assert_eq!(out.as_deref(), Ok("{\"records\":[]}"));
+    }
+
+    #[test]
+    fn accepts_input_exactly_at_the_cap() {
+        let out = read_capped(Cursor::new(vec![b'x'; 8]), 8, "test");
+        assert_eq!(out.as_deref(), Ok("xxxxxxxx"));
+    }
+
+    #[test]
+    fn rejects_input_one_byte_over_the_cap() {
+        let out = read_capped(Cursor::new(vec![b'x'; 9]), 8, "test");
+        assert!(out.is_err(), "expected the over-cap read to fail closed");
+        if let Err(msg) = out {
+            assert!(msg.contains("exceeds the 8-byte audit input cap"));
+        }
+    }
+
+    #[test]
+    fn rejects_non_utf8_input() {
+        let out = read_capped(Cursor::new(vec![0xff, 0xfe]), 64, "test");
+        assert!(out.is_err());
     }
 }
