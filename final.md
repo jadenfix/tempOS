@@ -672,6 +672,8 @@ Identity fields:
 
 Agent identity must be visible in every trace, receipt, and side effect.
 
+Identity should reuse existing standards rather than invent new ones. Service and sandbox-lane workload identity maps onto SPIFFE/SPIRE (short-lived X.509/JWT SVIDs with per-node attestation, no long-lived distributed secrets). "Agent X acting on behalf of user U" toward external services maps onto OAuth 2.0 Token Exchange (RFC 8693) actor claims, which the emerging IETF agent-authorization drafts extend. beaterOS should track and adopt those profiles, not parallel-invent them. (Issue #49.)
+
 ### 7.2 Agent Session
 
 A session is the container for one coherent goal or workflow.
@@ -740,6 +742,8 @@ Manifest fields:
 - Human-readable explanation.
 
 The policy engine evaluates the manifest before execution.
+
+Manifest fields split into two trust classes. Kernel-derived fields (input digests, resolved targets, data classes derived from provenance labels, observed side effects) are computed by the mediation point — gateway or sandbox — and never accepted from the agent, because every field the agent authors is authored by the principal the system distrusts. Agent-asserted fields (input summary, explanation, compensation plan) are advisory: useful for human review, never consumed by a policy rule as a security predicate. Receipts bind to observed values and a divergence between manifest and observation is an incident, not a log line. (Issue #46.)
 
 ### 7.5 Policy Decision
 
@@ -898,6 +902,8 @@ Implementation principle:
 
 - RBAC answers who may issue grants.
 - Capabilities answer what this agent can do now.
+
+Do not reinvent the grant carrier. Caveat-based capability tokens are a solved category: Macaroons (Google, NDSS 2014) implement attenuation as append-only caveats folded into a chained MAC, with third-party discharge caveats as revocation-by-indirection; Biscuit (Eclipse Foundation) does the same with public-key signed blocks, Datalog checks, and per-block revocation IDs verifiable offline by anyone holding the issuer key. These implement every CapabilityGrant invariant in section 12.2 cryptographically instead of by service-side validation. Even a bespoke implementation must keep the caveat semantics: attenuation is append-only restriction, never field mutation, so "grants cannot be broadened by the holder" is structural rather than checked. The "do not invent cryptography" rule extends to authorization token constructions. (Issue #49.)
 
 ### 8.3 Event-Sourced Journal vs Mutable State First
 
@@ -1094,6 +1100,34 @@ Potential formal targets:
 - Revocation invariants.
 - Sandbox grant construction.
 
+### 8.16 Shared Resources: Leases vs Unmanaged Conflict
+
+Recommendation: leases as grant constraints.
+
+Reason:
+
+- Two sessions or a parent and subagent can hold overlapping write grants on the same workspace path, repo, cloud resource, or memory scope, and nothing in the contracts serializes their exercise.
+- Lost updates and torn workspace state cannot be reconstructed by replay, because the journal orders events per session, not across sessions touching the same resource.
+- Classical OSs answer this with locks, leases, and transactions; an agent OS cannot skip the question.
+
+Implementation principle:
+
+- A write grant may carry an exclusivity mode (exclusive or shared), making the capability service the lock manager: issuing an exclusive-write grant against a live overlapping grant queues, attenuates to read-only, or requires explicit policy override.
+- Leases reuse the existing grant lifecycle: expiry is the lease timeout, revocation is the lease break. No separate lock service.
+- Receipt chains are per actor, with the session journal periodically anchoring all actor chain heads into one Merkle node. Verification is per-chain plus anchors. This removes the chain-head serialization point that a single linear chain would impose on concurrent subagents. (Issue #47.)
+
+### 8.17 Durable Execution: Adopt vs Rebuild
+
+Recommendation: adopt a durable-execution engine for session state; keep the audit journal bespoke.
+
+Reason:
+
+- Pausable, resumable, replayable, cancelable-with-compensation sessions with journal-before-side-effect and idempotency keys are, word for word, the durable-execution feature set that Temporal, Restate, and DBOS ship today, with documented agent integrations.
+- These engines give exactly-once state transitions plus at-least-once side effects made safe by idempotency — precisely the compromise the ActionManifest idempotency key already accepts.
+- The journal serves two masters that must not be conflated: execution durability (resume, retry, compensate — commodity, buy it) and authority/audit integrity (hash-linked receipts, policy decisions, tamper evidence — the actual invention, keep it small and bespoke). Conflating them inflates the TCB with commodity distributed-systems problems: replay determinism, workflow versioning, replay-breaking code changes.
+
+If the decision is build-anyway — defensible for a local-first Rust kernel with a small dependency budget — the plan must say so explicitly and scope what is deliberately not supported, e.g. sessions resume from receipts, not from replayed model calls. (Issue #52.)
+
 ## 9. Proposed Architecture
 
 beaterOS should be organized as layered services.
@@ -1234,6 +1268,8 @@ Candidate policy languages:
 - A small custom DSL only if existing systems cannot express agent-specific constraints.
 
 Recommendation: start with a proven policy engine and wrap it in agent-specific schemas.
+
+Specifically: Cedar for admission policy. The selection criteria are this document's own requirements, and they point one way. Admission is exactly PARC-shaped — may this principal perform this action on this resource in this context — which is the shape Cedar is purpose-built for. Cedar is default-deny with forbid-overrides-permit as language semantics; evaluation is total, loop-free, and free of external calls, with microsecond-class decisions; the authorizer and validator are formally modeled in Lean 4 with mechanized proofs and differential testing against the production Rust implementation; and SMT-based analysis makes "does policy set A permit anything B does not" a decision procedure — policy diffing becomes mechanical, which is the section 20.5 sprawl mitigation. Rego remains available for non-TCB infrastructure policy; full Rego cannot be analyzed this way (Datalog program equivalence is undecidable). A custom DSL is rejected: it is inventing cryptography, applied to authorization. This choice also collapses the section 8.15 formal target for policy evaluation semantics into inherited upstream proofs. (Issue #51.)
 
 ### 10.4 Journal Service
 
@@ -1451,6 +1487,7 @@ Important invariants:
 - A session status transition is journaled.
 - A session can be paused and resumed without losing causality.
 - A session can be exported for audit with redactions.
+- Execution-durability state (resume points, retries, compensation progress) is distinct from audit-journal events; the audit journal is authoritative and the execution engine emits into it (section 8.17).
 
 ### 12.2 CapabilityGrant
 
@@ -1506,6 +1543,8 @@ Important invariants:
 - Risk class can be raised by policy, never lowered by the agent.
 - Unknown side effects require denial or review.
 - Actions that affect external state must have receipts.
+- No policy rule may condition on an agent-asserted field. Policy predicates consume only kernel-derived fields (section 7.4). This is checkable mechanically against the policy pack.
+- Divergence between manifested and observed behavior freezes the grant and raises an incident event.
 
 ### 12.4 PolicyDecision
 
@@ -1554,6 +1593,8 @@ Important invariants:
 - Receipts are append-only.
 - Large artifacts can be content-addressed.
 - Sensitive fields can be redacted through references without breaking the receipt chain.
+- Receipt chains are per actor; concurrent subagents never contend on a single chain head. Session-level integrity comes from Merkle anchors over all actor chain heads (section 8.16).
+- Durability is tiered by risk class (section 13.11): irreversible or external side effects require the intent record and policy decision synchronously durable before execution; reversible workspace mutations may group-commit; pure observations may journal asynchronously with per-actor ordering preserved.
 
 ### 12.6 MemoryRecord
 
@@ -1676,6 +1717,8 @@ beaterOS must prevent:
 
 Every dangerous resource must require an explicit capability grant.
 
+Authority boundaries are placed where the agent cannot route around them — the tool gateway, the sandbox, network egress — never inside code the agent controls. Cooperative APIs are conveniences layered on top of non-bypassable mediation. This is the section 8.12 argument applied one layer up: prompts are advisory to models, and SDK conventions are advisory to runtimes; both times the fix is enforcement at a boundary the untrusted party cannot decline. (Issue #54.)
+
 ### 13.3 Capability Design
 
 Good grants are:
@@ -1744,6 +1787,10 @@ Required defenses:
 - Browser origin policy.
 - Content security labels.
 - Refusal to execute instructions discovered in untrusted content unless explicitly promoted by a trusted user.
+
+The defenses above are detective: they inspect what a persuaded model already decided to do, and Google's deployed experience defending Gemini shows that classifier-and-validation layers fail under adaptive attack. The primary defense is structural: fix the control flow before the agent reads untrusted content, so injected text can influence values but never which actions run. The 2025 literature converged here — CaMeL (a privileged model plans from trusted instructions only; a quarantined model parses untrusted data into typed values with no tool access; an interpreter enforces per-value capability policies, achieving 77% of AgentDojo tasks with provable security), Microsoft FIDES (deterministic information-flow labels in the planner), and the six design patterns of Beurer-Kellner et al.: action-selector, plan-then-execute, LLM map-reduce, dual LLM, code-then-execute, context-minimization.
+
+beaterOS should expose these as session execution modes — open-loop (the full detective stack above), plan-then-execute (the tool-call plan is admitted by policy before the agent reads untrusted content; later untrusted input cannot add actions), and dual-LLM/code-then-execute (CaMeL-style quarantined parsing) — and let policy require stronger modes for riskier grants, e.g. sessions holding spend or communicate capabilities must run plan-then-execute or stronger. In plan-then-execute mode, action manifests are simply admitted as a batch up front. The known CaMeL costs — hand-written data-flow policies and confirmation fatigue — are exactly what policy packs (section 20.5) and the human review service (section 10.10) exist to absorb, so the OS is the natural home for the pattern. (Issue #48.)
 
 ### 13.6 MCP And Remote Tool Security
 
@@ -1848,6 +1895,14 @@ Use this for:
 - Release attestations.
 
 Do not confuse tamper evidence with secrecy. Merkle trees help detect modification. They do not make bad policy safe.
+
+Journal durability is tiered by risk class, because a synchronous fsync'd hash-chained write on every action — including the read-only observations that dominate real traces — makes the governed path visibly slower than the bare one, and a bypassed safety layer provides zero safety:
+
+- Irreversible or external side effects (spend, communicate, deploy, submit, writes outside the workspace): intent record and policy decision synchronously durable before execution. Non-negotiable.
+- Reversible workspace mutations: journal write ordered before the effect but group-committed; a crash may lose the tail, and the filesystem diff receipt reconstructs it.
+- Pure observations: asynchronous batched journaling, per-actor ordering preserved, durability eventual.
+
+Hash-link at receipt granularity and Merkle-batch at anchor points, not per journal event. The safety claim is preserved exactly where it matters: nothing irreversible happens un-journaled, and the common case stays off the fsync path. Mediation overhead versus an ungoverned agent on the same scenarios is a first-class regression gate (section 14.6). (Issue #53.)
 
 ### 13.12 Cryptography
 
@@ -1975,6 +2030,8 @@ Required scenario classes:
 - Network failure tasks.
 - Human review timeout tasks.
 
+Bespoke scenarios are necessary but not sufficient. The security suite must also run a public external benchmark — AgentDojo (97 tasks, 629 injection cases; the field's standard for agent injection resistance, used by CaMeL, FIDES, and Progent) — so that "agent under beaterOS vs the same agent bare, utility and attack-success-rate deltas" is a falsifiable public claim rather than a self-graded one. (Issue #48.)
+
 ### 14.3 Oracle Ladder
 
 Not every task can be scored the same way.
@@ -2055,6 +2112,8 @@ Model upgrades must run paired evals:
 - New model route.
 - Compare success, cost, risk, and trace properties.
 
+Release gates also include an overhead regression check: the same scenarios run with and without beaterOS mediation, and the wall-clock and cost delta must stay within budget (section 13.11).
+
 ### 14.7 Counterfactual Replay
 
 A strong OS can ask:
@@ -2085,6 +2144,17 @@ Environment types:
 - Hardware/robotics simulator later.
 
 Do not run high-risk tasks against production first.
+
+### 14.9 Statistical Method
+
+Agents are probabilistic, so eval gates decided on single-run point estimates pass flaky agents on lucky draws and flag sampling noise as regressions. Each scenario run is a Bernoulli trial and the gate must treat it that way:
+
+- Reliability gates use pass^k — the probability that all k trials succeed — not pass@1. A 90%-per-run agent is roughly 43% at pass^8; tau-bench measured then-SOTA agents below 25% pass^8 on retail tasks while single-run rates looked respectable. Choose k per risk class: k=1 for smoke, k=4 for core workflows, k=8 for scenarios guarding irreversible actions. Report both metrics.
+- Release comparisons are paired: same scenarios, per-scenario deltas, clustered standard errors (scenario packs share fixtures and are correlated), and a pre-declared minimum detectable effect. A gate fails on a statistically supported regression, not on any negative point delta.
+- The eval runner supports sequential stopping: stop once the confidence interval clears the gate threshold. This is what makes multi-sampling affordable — agent runs are expensive, and sequential designs cut trial counts substantially in A/B practice.
+- Trace metrics (section 14.4) report distributions — p50, p95, p99 — not means.
+
+(Issue #50.)
 
 ## 15. Next-Generation Model Support
 
@@ -2323,6 +2393,8 @@ Start with:
 - Eval runner.
 
 Do not start with a full desktop OS shell.
+
+The first deliverable is a drop-in mediation layer, not a native runtime: an MCP gateway proxy plus sandbox wrapper usable with at least one popular existing agent, unmodified. MCP is a universal interposition seam — a proxying gateway sees every tool call of any MCP-speaking agent, synthesizes the action manifest from the observed call (which is also what makes manifest fields trustworthy, section 7.4), runs admission, and emits receipts with zero agent-side changes. Enforcement that depends on the governed runtime's cooperation is not enforcement, and "point your existing agent at this proxy" is an afternoon where "rewrite against beaterOS APIs" is a migration. Native beaterOS-first agents remain the deep integration where cooperative features — plan-then-execute modes, richer manifests, memory provenance — light up. (Issue #54.)
 
 ### 17.3 First Killer Workflow
 
@@ -2647,6 +2719,7 @@ Done when:
 - Tool description changes are detected.
 - Token passthrough is blocked.
 - Malicious tool evals fail closed.
+- An unmodified third-party MCP agent, pointed at the gateway as a proxy, gains manifests, admission, and receipts with measured overhead and measured AgentDojo attack-success-rate deltas (section 17.2). The gateway is the adoption wedge, not an integration detail, and this phase co-leads with Phase 2 rather than strictly following it.
 
 ### Phase 4: Browser Service
 
@@ -3023,6 +3096,7 @@ Mitigation:
 ### 23.2 Reliability Metrics
 
 - Task success rate.
+- pass^k on the scenario suite at the risk-class k values of section 14.9.
 - Pass rate on scenario suite.
 - Regression rate after model upgrades.
 - Replay success rate.
@@ -3045,6 +3119,8 @@ Mitigation:
 - Tool cost by workflow.
 - Human review cost.
 - Wasted retry cost.
+- Admission decision latency (p99; microsecond-class policy evaluation plus journal append should keep this in single-digit milliseconds locally).
+- Mediation overhead per action and as a percentage of task wall-clock versus an ungoverned baseline; the target must be small enough that nobody is tempted to disable governance.
 
 ### 23.5 UX Metrics
 
@@ -3090,6 +3166,8 @@ MVP proof:
 - It cannot push, deploy, email, browse credentialed sites, or spend money without explicit grants.
 - The final output includes a trace and receipts.
 - The same task can be replayed in a scenario.
+
+The MVP proof also has a wrapped form: an agent the project does not control, run unmodified through the beaterOS gateway and sandbox, gains manifests, policy admission, receipts, and injection resistance it did not have — with before/after utility, attack-success-rate, and overhead numbers. That is the falsifiable adoption claim. (Issue #54.)
 
 ## 25. What To Build First Later
 
@@ -3147,9 +3225,17 @@ This source list should be expanded continuously. The initial weighting is prima
 - Toward Securing AI Agents Like Operating Systems: https://arxiv.org/abs/2605.14932
 - AgentSentinel: https://arxiv.org/abs/2509.07764
 - CaMeLs CUA security work: https://arxiv.org/abs/2601.09923
+- CaMeL, Defeating Prompt Injections by Design: https://arxiv.org/abs/2503.18813
+- Design Patterns for Securing LLM Agents against Prompt Injections: https://arxiv.org/abs/2506.08837
+- FIDES, Securing AI Agents with Information-Flow Control: https://arxiv.org/abs/2505.23643
+- Progent, Securing AI Agents with Privilege Control: https://arxiv.org/abs/2504.11703
+- Lessons from Defending Gemini Against Indirect Prompt Injections: https://arxiv.org/abs/2505.14534
 
 ### 27.2 Benchmarks, Simulations, And Agent Environments
 
+- AgentDojo: https://arxiv.org/abs/2406.13352
+- tau-bench (pass^k): https://arxiv.org/abs/2406.12045
+- Adding Error Bars to Evals: https://arxiv.org/abs/2411.00640
 - OSWorld: https://arxiv.org/abs/2404.07972
 - OSWorld 2.0: https://arxiv.org/abs/2606.29537
 - WebArena: https://arxiv.org/abs/2307.13854
@@ -3174,6 +3260,7 @@ This source list should be expanded continuously. The initial weighting is prima
 
 ### 27.4 Agent Protocols And Company Direction
 
+- Model Context Protocol specification 2025-11-25 (current; supersedes the 2025-06-18 revision cited below): https://modelcontextprotocol.io/specification/2025-11-25
 - Model Context Protocol specification 2025-06-18: https://modelcontextprotocol.io/specification/2025-06-18
 - MCP authorization specification: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
 - MCP security best practices: https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices
@@ -3198,6 +3285,18 @@ This source list should be expanded continuously. The initial weighting is prima
 - SLSA: https://slsa.dev/
 - Intel TDX: https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html
 - AMD SEV-SNP: https://www.amd.com/en/developer/sev.html
+
+### 27.7 Authorization, Identity, Policy, And Durable Execution
+
+- Macaroons (NDSS 2014): https://research.google/pubs/macaroons-cookies-with-contextual-caveats-for-decentralized-authorization-in-the-cloud/
+- Biscuit: https://www.biscuitsec.org/
+- SPIFFE/SPIRE: https://spiffe.io/
+- OAuth 2.0 Token Exchange (RFC 8693): https://datatracker.ietf.org/doc/html/rfc8693
+- Cedar language paper (OOPSLA 2024): https://arxiv.org/abs/2403.04651
+- How We Built Cedar (verification-guided development): https://arxiv.org/abs/2407.01688
+- Temporal durable execution: https://temporal.io/
+- Restate: https://restate.dev/
+- DBOS: https://www.dbos.dev/
 
 ### 27.6 Crypto, Payments, And Quantum
 
