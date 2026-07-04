@@ -340,6 +340,13 @@ pub struct CapabilityGrant {
     pub issuer: String,
     pub holder: String,
     pub session_id: String,
+    /// Grant this one was delegated (attenuated) from, if any. A delegated grant
+    /// is authority *indirected* through its parent: it is only exercisable
+    /// while the whole ancestor chain is live, so revoking a parent transitively
+    /// revokes every descendant (`final.md` §6.2; issue #10). A root grant
+    /// issued directly to a principal has no parent.
+    #[serde(default)]
+    pub parent_grant_id: Option<String>,
     pub scope: CapabilityScope,
     #[serde(default)]
     pub denied_actions: BTreeSet<ActionKind>,

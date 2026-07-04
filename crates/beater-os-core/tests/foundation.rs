@@ -37,6 +37,7 @@ fn grant_for_file(now: chrono::DateTime<Utc>) -> CapabilityGrant {
         issuer: "user:jaden".to_string(),
         holder: "agent:beater-os".to_string(),
         session_id: "session-1".to_string(),
+        parent_grant_id: None,
         scope: CapabilityScope {
             selector: CapabilitySelector {
                 resource_kind: ResourceKind::FilePath,
@@ -72,6 +73,7 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         approvals: Vec::new(),
         simulations: Vec::new(),
         mandates: Vec::new(),
+        revoked_handles: BTreeSet::new(),
     }
 }
 
@@ -173,6 +175,80 @@ fn policy_requires_narrowed_grant_for_over_risk_action() {
     let ctx = admission_context(now, vec![grant_for_file(now)]);
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+fn root_grant(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-parent".to_string();
+    grant.revocation_handle = "revoke:grant-parent".to_string();
+    grant
+}
+
+fn delegated_child(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    // Reuses the repo grant (id grant-read-repo, holder agent:beater-os), now
+    // delegated from grant-parent so its liveness depends on the parent's.
+    let mut grant = grant_for_file(now);
+    grant.parent_grant_id = Some("grant-parent".to_string());
+    grant
+}
+
+#[test]
+fn policy_admits_delegated_grant_when_whole_chain_is_live() {
+    let now = fixed_time();
+    let ctx = admission_context(now, vec![root_grant(now), delegated_child(now)]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"grant_delegation_chain_active".to_string())
+    );
+}
+
+#[test]
+fn policy_denies_delegated_grant_when_parent_is_revoked_through_registry() {
+    // Revoking the parent's handle out of band transitively kills the child,
+    // even though the child's own `revoked` flag is still false (#10 §6.2).
+    let now = fixed_time();
+    let mut ctx = admission_context(now, vec![root_grant(now), delegated_child(now)]);
+    ctx.revoked_handles = set(["revoke:grant-parent".to_string()]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("delegation ancestors"));
+}
+
+#[test]
+fn policy_denies_delegated_grant_when_parent_is_expired() {
+    let now = fixed_time();
+    let mut parent = root_grant(now);
+    parent.expires_at = now - Duration::minutes(1);
+    let ctx = admission_context(now, vec![parent, delegated_child(now)]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_denies_delegated_grant_when_named_parent_is_missing() {
+    // The child names a parent that is not in the admission context: its
+    // liveness is unknown, so admission fails closed rather than assuming live.
+    let now = fixed_time();
+    let ctx = admission_context(now, vec![delegated_child(now)]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_denies_delegation_chain_with_a_cycle() {
+    let now = fixed_time();
+    let mut child = grant_for_file(now);
+    child.parent_grant_id = Some("grant-cycle".to_string());
+    let mut cycle = grant_for_file(now);
+    cycle.grant_id = "grant-cycle".to_string();
+    cycle.revocation_handle = "revoke:grant-cycle".to_string();
+    cycle.parent_grant_id = Some("grant-read-repo".to_string());
+    let ctx = admission_context(now, vec![child, cycle]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
 }
 
 #[test]

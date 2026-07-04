@@ -48,6 +48,7 @@ fn grant(id: &str, session_id: &str, holder: &str) -> CapabilityGrant {
         issuer: "user:alice".to_string(),
         holder: holder.to_string(),
         session_id: session_id.to_string(),
+        parent_grant_id: None,
         scope: CapabilityScope {
             selector: CapabilitySelector {
                 resource_kind: ResourceKind::FilePath,

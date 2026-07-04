@@ -22,6 +22,7 @@
     "issuer": { "$ref": "common.schema.json#/$defs/Identifier" },
     "holder": { "$ref": "common.schema.json#/$defs/Identifier" },
     "session_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "parent_grant_id": { "$ref": "common.schema.json#/$defs/Identifier", "description": "Grant this one was delegated from. Delegated authority is indirected through the parent: exercisable only while the whole ancestor chain is unrevoked, so revoking a parent transitively revokes it. Absent for a root grant. final.md 6.2." },
     "scope": { "$ref": "common.schema.json#/$defs/CapabilityScope" },
     "denied_actions": {
       "type": "array",

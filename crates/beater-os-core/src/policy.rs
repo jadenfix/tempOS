@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -25,6 +25,12 @@ pub struct AdmissionContext {
     /// admitted only if one of these mandates covers it. Grants authorize the
     /// *act* of spending; a mandate authorizes the *money*.
     pub mandates: Vec<PaymentMandate>,
+    /// Revocation registry: the set of `revocation_handle`s revoked out of band
+    /// (issue #10). This is the monotonic revocation epoch — it only grows, so
+    /// admission is deterministic under replay. A grant counts as revoked if its
+    /// own `revoked` flag is set *or* its handle is in this set, and a grant is
+    /// only exercisable while its whole delegation chain is unrevoked.
+    pub revoked_handles: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -146,6 +152,27 @@ impl PolicyEngine {
             ));
         }
         matched_rules.push("required_grants_available".to_string());
+
+        let grants_by_id: BTreeMap<&str, &CapabilityGrant> = ctx
+            .grants
+            .iter()
+            .map(|grant| (grant.grant_id.as_str(), grant))
+            .collect();
+        if !matching_grants
+            .iter()
+            .all(|grant| grant_chain_effectively_active(grant, ctx, &grants_by_id))
+        {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                "a required grant or one of its delegation ancestors is revoked, expired, or missing",
+                DecisionFollowup::none(),
+            ));
+        }
+        matched_rules.push("grant_delegation_chain_active".to_string());
 
         let allowed = matching_grants
             .iter()
@@ -334,6 +361,38 @@ fn payment_authorized_by_mandate(
         Err(
             "payment requires an active PaymentMandate covering the amount for this session and holder",
         )
+    }
+}
+
+/// Walk a grant's delegation chain and return whether the whole chain is live
+/// (issue #10). A delegated grant is authority indirected through its parent, so
+/// it is exercisable only while it and every ancestor are unexpired and
+/// unrevoked — by the grant's own `revoked` flag or by the revocation registry
+/// (`ctx.revoked_handles`). Fails closed on a missing named ancestor (the parent
+/// was dropped, so its liveness is unknown) and on a cycle (bounded by a visited
+/// set), so a malformed chain can never admit an action.
+fn grant_chain_effectively_active(
+    grant: &CapabilityGrant,
+    ctx: &AdmissionContext,
+    grants_by_id: &BTreeMap<&str, &CapabilityGrant>,
+) -> bool {
+    let mut current = grant;
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    loop {
+        if !visited.insert(current.grant_id.as_str()) {
+            return false;
+        }
+        let registry_revoked = ctx.revoked_handles.contains(&current.revocation_handle);
+        if !current.is_active_at(ctx.now) || registry_revoked {
+            return false;
+        }
+        let Some(parent_id) = &current.parent_grant_id else {
+            return true;
+        };
+        let Some(parent) = grants_by_id.get(parent_id.as_str()) else {
+            return false;
+        };
+        current = parent;
     }
 }
 
