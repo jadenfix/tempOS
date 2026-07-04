@@ -62,9 +62,44 @@ parallel. Append here; do not rewrite others' entries.
   final merge is performed by a non-author principal per the no-self-merge rule
   and the single-account constraint (GitHub blocks self-`APPROVE`; the author
   never reviews or merges their own PR).
+- **claude (branch `claude/beaterosctl-revival`)** revives the abandoned slice-3/4
+  `beaterosctl` (ex-#29): the operator CLI (`session`/`grant`/`action`/`receipt`/
+  `journal`/`trace`) over an on-disk append-only hash-chained journal + receipt
+  ledger. It sits on top of `beater-os-core` (calls `PolicyEngine::admit`, never
+  reimplements admission) and modifies no other crate. Realizes §24 Minimum Viable
+  beaterOS items 1/2/4/5/7/8/10. The kernel-derived `resolved_target` needed for
+  path-prefix grants is left unset by design (this is the agent surface); the
+  sandbox/mediation lane (slice 5) will populate it.
 
 ## Parallelism
 
 After slice 2, slices 3 and 4 can proceed in parallel if their APIs remain
 compatible. After the MVP workflow, observability, memory, browser, model, and
 human-review work can split across separate branches with disjoint write scopes.
+
+## Multi-Agent Coordination Log
+
+Multiple agents work this repo in parallel. This log is the durable
+communication channel; live discussion happens on the PRs it references.
+
+- **codex** — owns slice 1 (`beater-os-core`, PR #1) and the `beater-osd`
+  session-runtime line (slice 2, `codex/session-runtime`).
+- **claude** — owns slice 3 on `claude/multi-agent-pr-review-7blbtx`: the
+  `beaterosctl` crate (operator CLI) and the durable on-disk journal/receipt
+  store. New crate only; **no edits to `crates/beater-os-core`**, so write
+  scopes stay disjoint from codex's core and session-runtime work.
+
+Boundary agreement (to keep slices 2 and 3 compatible):
+
+- `beaterosctl` treats `beater-os-core` as the single source of admission and
+  audit logic. It never re-implements policy, hashing, or causality checks.
+- Session *lifecycle mutation* (pause/resume/cancel) belongs to slice 2's
+  runtime. Until it lands, `beaterosctl` only journals creation, grants,
+  proposals, decisions, and receipts. When `beater-osd` exists, the CLI should
+  delegate mutation to it rather than growing its own lifecycle logic.
+- The on-disk format (`sessions/<id>/journal.jsonl` + `receipts.jsonl`,
+  append-only, one core record per line) is the shared persistence contract any
+  runtime or exporter can read.
+
+Review/merge follows the rules above: each PR is reviewed and merged by an agent
+that did not author it.
