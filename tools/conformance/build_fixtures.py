@@ -306,6 +306,92 @@ def build_payment_bundle() -> dict:
     }
 
 
+def build_resilience_bundle() -> dict:
+    """A fail-closed resilience trace: human approval times out (final.md §14.2, §13.15).
+
+    A high-risk production deploy is proposed, policy requires human approval, and
+    NO approval ever arrives. The correct behavior is to fail closed: the action is
+    never executed (no receipt exists), the timeout is recorded as an incident, and
+    the session ends `canceled`. This exercises the resilience scenario class and the
+    `incident_annotated` journal event, neither covered by the other bundles.
+    """
+    sid = "sess-deploy-001"
+    agent = "agent:ops-2"
+    tr = "2026-07-03T14:0{}:00Z"
+
+    session = {
+        "session_id": sid,
+        "created_at": tr.format(0),
+        "created_by": "user:jaden",
+        "agent_id": agent,
+        "workspace_id": "ws:platform",
+        "goal": "Deploy release r42 to production.",
+        "constraints": ["production deploys require human approval", "fail closed on timeout"],
+        "policy_profile": "ops-default",
+        "initial_capability_ids": ["grant-deploy-prod"],
+        "journal_root": GENESIS_HASH,
+        "status": "canceled",
+    }
+
+    grant = {
+        "grant_id": "grant-deploy-prod",
+        "issuer": "user:jaden",
+        "holder": agent,
+        "session_id": sid,
+        "scope": {"selector": {"resource_kind": "cloud_resource", "resource_id": "prod/app"}, "actions": ["deploy"]},
+        "constraints": {"max_risk": "critical", "max_data_class": "internal"},
+        "approval": {"mode": "human", "threshold_risk": "high", "reviewer_ids": ["user:jaden"]},
+        "expires_at": "2026-07-03T16:00:00Z",
+        "delegation": "none",
+        "revocation_handle": "rev:grant-deploy-prod",
+        "policy_version": POLICY_VERSION,
+        "reason": "Deploy approved releases to production.",
+    }
+
+    m_deploy = {
+        "action_id": "act-deploy-r42",
+        "session_id": sid,
+        "tool_id": "deployer",
+        "action_kind": "deploy",
+        "target": {"resource_kind": "cloud_resource", "resource_id": "prod/app"},
+        "inputs_digest": "sha256:in-deploy-r42",
+        "inputs_summary": "Roll out release r42 to production.",
+        "expected_side_effects": ["deployment"],
+        "required_grants": ["grant-deploy-prod"],
+        "risk_class": "high",
+        "data_classes": ["internal"],
+        "idempotency_key": "idem-deploy-r42",
+        "human_explanation": "Deploy the approved release to production.",
+    }
+
+    d_deploy = _decision("dec-deploy", "act-deploy-r42", "needs_approval", tr.format(1),
+                         "grant policy requires human approval for this risk class")
+
+    events = [
+        {"kind": "session_created", "session": session},
+        {"kind": "capability_granted", "grant": grant},
+        {"kind": "action_proposed", "manifest": m_deploy},
+        {"kind": "policy_decided", "decision": d_deploy},
+        {"kind": "incident_annotated", "incident_id": "inc-review-timeout",
+         "note": "Human approval for act-deploy-r42 timed out past the review deadline; "
+                 "action not executed; session failing closed (final.md §14.2, §13.15)."},
+    ]
+    times = [tr.format(0), tr.format(0), tr.format(1), tr.format(1), tr.format(2)]
+    journal = _chain_journal(events, times)
+
+    return {
+        "bundle_id": "resilience-review-timeout",
+        "description": "final.md §14.2/§13.15: high-risk deploy needs approval, approval times out, system fails closed -- no receipt, incident recorded, session canceled.",
+        "policy_version": POLICY_VERSION,
+        "sessions": [session],
+        "grants": [grant],
+        "manifests": [m_deploy],
+        "decisions": [d_deploy],
+        "receipts": [],
+        "journal": journal,
+    }
+
+
 def _decision(did, aid, result, created_at, explanation):
     return {
         "decision_id": did,
@@ -362,6 +448,7 @@ def _serialize(bundle) -> str:
 FIXTURES = {
     "coding-workflow.trace.json": build_bundle,
     "payment-workflow.trace.json": build_payment_bundle,
+    "resilience-review-timeout.trace.json": build_resilience_bundle,
 }
 
 
