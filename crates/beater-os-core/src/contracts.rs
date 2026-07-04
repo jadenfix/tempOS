@@ -269,11 +269,39 @@ impl CapabilityScope {
     }
 }
 
+/// Default risk ceiling for a grant. An absent `max_risk` must fail closed at a
+/// bounded ceiling, never at "unlimited". Callers that genuinely want no ceiling
+/// opt in explicitly with `max_risk: null`.
+fn default_max_risk() -> Option<RiskClass> {
+    Some(RiskClass::Medium)
+}
+
+/// Default data-class ceiling for a grant. See [`default_max_risk`]: absence must
+/// fail closed at a bounded class, not at "unlimited".
+fn default_max_data_class() -> Option<DataClass> {
+    Some(DataClass::Internal)
+}
+
+/// Constraints attached to a capability grant.
+///
+/// Two defaulting models coexist here, and the asymmetry is deliberate:
+///
+/// - `max_risk` / `max_data_class` are **safety ceilings**. An omitted field
+///   fails closed at the bounded cap (see [`default_max_risk`] /
+///   [`default_max_data_class`]); "no ceiling" must be an explicit, auditable
+///   `null`. This is why they do not use a plain `#[serde(default)]`, which for
+///   `Option<T>` would be `None` (unbounded) — a fail-open on a partial object.
+/// - `budget`, `network_allowlist`, and `path_prefixes` are **additive
+///   restrictions**, not safety caps. An omitted/empty value adds no restriction
+///   from this grant: an empty allowlist/prefix set means "this grant imposes no
+///   extra network/path bound", and an all-`None` budget defers to the session
+///   budget. Absence here is intentionally permissive, not a fail-open, so a
+///   plain `#[serde(default)]` is correct for them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantConstraints {
-    #[serde(default)]
+    #[serde(default = "default_max_risk")]
     pub max_risk: Option<RiskClass>,
-    #[serde(default)]
+    #[serde(default = "default_max_data_class")]
     pub max_data_class: Option<DataClass>,
     #[serde(default)]
     pub budget: Budget,
@@ -286,8 +314,8 @@ pub struct GrantConstraints {
 impl Default for GrantConstraints {
     fn default() -> Self {
         Self {
-            max_risk: Some(RiskClass::Medium),
-            max_data_class: Some(DataClass::Internal),
+            max_risk: default_max_risk(),
+            max_data_class: default_max_data_class(),
             budget: Budget::default(),
             network_allowlist: BTreeSet::new(),
             path_prefixes: BTreeSet::new(),
