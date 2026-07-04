@@ -1,9 +1,11 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::contracts::{
-    ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DecisionResult,
-    PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
+    ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DataClass,
+    DecisionResult, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
 };
 use crate::error::BeaterOsResult;
 use crate::hash::HashValue;
@@ -34,6 +36,20 @@ impl PolicyEngine {
     ) -> BeaterOsResult<PolicyDecision> {
         let mut matched_rules = Vec::new();
         let manifest_hash = manifest.digest()?;
+
+        // §7.4/§12.3/§26: risk can be raised by policy from kernel-derived fields,
+        // never lowered by the agent. The agent-asserted `risk_class` may only
+        // RAISE the effective risk above this kernel-derived floor.
+        let derived_floor = derived_risk_floor(
+            &manifest.action_kind,
+            &manifest.expected_side_effects,
+            &manifest.data_classes,
+        );
+        let effective_risk = manifest.risk_class.max(derived_floor);
+        matched_rules.push(format!(
+            "kernel_derived_risk_floor={derived_floor:?};declared_risk={:?};effective_risk={effective_risk:?}",
+            manifest.risk_class
+        ));
 
         if manifest.session_id != ctx.session_id {
             return Ok(decision(
@@ -110,7 +126,7 @@ impl PolicyEngine {
 
         let allowed = matching_grants
             .iter()
-            .all(|grant| grant.allows_manifest(manifest, ctx.now, &ctx.actor_id));
+            .all(|grant| grant.allows_manifest(manifest, effective_risk, ctx.now, &ctx.actor_id));
         if !allowed {
             return Ok(decision(
                 manifest,
@@ -151,7 +167,7 @@ impl PolicyEngine {
             .iter()
             .filter(|grant| {
                 grant.approval.mode != ApprovalMode::None
-                    && manifest.risk_class >= grant.approval.threshold_risk
+                    && effective_risk >= grant.approval.threshold_risk
             })
             .any(|grant| !has_approval_for_grant(grant, manifest, &manifest_hash, ctx))
         {
@@ -170,7 +186,7 @@ impl PolicyEngine {
         }
         matched_rules.push("grant_approval_policy_checked".to_string());
 
-        if manifest.risk_class >= RiskClass::High
+        if effective_risk >= RiskClass::High
             && manifest.has_external_side_effect()
             && !has_passed_simulation_for_action(manifest, &manifest_hash, ctx)
         {
@@ -199,6 +215,57 @@ impl PolicyEngine {
             DecisionFollowup::none(),
         ))
     }
+}
+
+/// Kernel-derived risk floor (final.md §7.4/§12.3/§26).
+///
+/// Risk class can be raised by policy but never lowered by the agent, and no
+/// policy predicate may condition on an agent-asserted field. This function is a
+/// pure function of the kernel-derived fields only (`action_kind`,
+/// `expected_side_effects`, `data_classes`); it must never read the
+/// agent-asserted `risk_class`. The returned floor is the conservative maximum
+/// across the action kind and every present side effect and data class.
+pub fn derived_risk_floor(
+    action_kind: &ActionKind,
+    side_effects: &BTreeSet<SideEffectClass>,
+    data_classes: &BTreeSet<DataClass>,
+) -> RiskClass {
+    let mut floor = RiskClass::Low;
+
+    if matches!(
+        action_kind,
+        ActionKind::Spend | ActionKind::Deploy | ActionKind::Delegate
+    ) {
+        floor = floor.max(RiskClass::High);
+    }
+
+    for effect in side_effects {
+        let contribution = match effect {
+            SideEffectClass::Payment
+            | SideEffectClass::CloudMutation
+            | SideEffectClass::Deployment
+            | SideEffectClass::Delegation => RiskClass::High,
+            SideEffectClass::NetworkWrite
+            | SideEffectClass::BrowserSubmit
+            | SideEffectClass::HumanCommunication => RiskClass::Medium,
+            // Benign side effects must not be over-gated.
+            SideEffectClass::None | SideEffectClass::LocalWrite | SideEffectClass::MemoryWrite => {
+                RiskClass::Low
+            }
+        };
+        floor = floor.max(contribution);
+    }
+
+    for class in data_classes {
+        let contribution = match class {
+            DataClass::Secret | DataClass::Financial => RiskClass::High,
+            DataClass::Customer | DataClass::Personal => RiskClass::Medium,
+            _ => RiskClass::Low,
+        };
+        floor = floor.max(contribution);
+    }
+
+    floor
 }
 
 fn dangerous_untrusted_instruction(manifest: &ActionManifest) -> bool {
