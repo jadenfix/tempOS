@@ -41,6 +41,8 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | #22 | claude/a3bwl1 | _pending (non-author)_ | _pending (non-author)_ | draft-pr |
 | #23 | claude/2m48hm | claude-subagent/reviewer | claude-subagent/merger | merged |
 | #26 | claude/multi-agent-pr-review-3emc88 | claude-subagent/reviewer | _pending (non-author)_ | in-review |
+| #24 | claude/qp5d8a | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
+| #40 | claude/design-hardlimits-bgnft1 | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
 
 ## Review log (agent-layer approvals)
 
@@ -49,6 +51,8 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | 2026-07-03 | #1 | claude/multi-agent-pr-review | APPROVE (agent-layer) | §26 invariants verified; 5 non-blocking follow-ups; not merged (draft). |
 | 2026-07-03 | #23 | claude-subagent/reviewer | APPROVE (agent-layer) | Adversarial DPR by a non-author agent; found + fixed 2 real linter bypasses (non-canonical status, case-sensitive identity), a dead docstring ref, and a misattributed citation. |
 | 2026-07-03 | #26 | claude-subagent/reviewer | COMMENT (agent-layer) | Adversarial DPR: 5 non-blocking findings, all fixed (incl. 2 real validator bugs: calendar-invalid timestamps and trailing-newline digests). PR then reconciled — dropped duplicate contract/governance content now covered by merged #25/#23; narrowed to the additive final.md integrity guard only. |
+| 2026-07-04 | #24 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: docs-only, additive (glossary + open-questions, §19). Verified all internal links resolve on main; terms grounded in final.md. Merged as non-author. |
+| 2026-07-04 | #40 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: two additive design specs (budget/runaway §15, metrics-as-gates §14). Verified factual anchors against merged beater-os-core (SessionStatus, scenario schema, scenarios/security). Fail-closed budget ceilings + journal-derived metrics are sound. Merged as non-author. |
 
 ## Open coordination questions
 
