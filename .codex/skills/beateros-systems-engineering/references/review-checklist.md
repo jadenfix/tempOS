@@ -30,7 +30,8 @@ Use this checklist for design reviews, code reviews, and architecture changes.
 
 ## Language Boundary
 
-- Rust is used by default.
+- The selected language is the best fit for the subsystem and boundary.
+- Rust is preferred when the tradeoff is close.
 - C usage is justified by ABI, platform, driver, hypervisor, sandbox, or measured
   hot-path constraints.
 - Assembly usage is justified by unavoidable hardware interaction.

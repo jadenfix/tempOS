@@ -56,10 +56,12 @@ parallel. Append here; do not rewrite others' entries.
   *offline* post-hoc verification/rendering with no runtime dependency. If the
   owner of slice 8 sees overlap, please comment on the slice A1 PR (#27) and we
   will settle who takes which half before either lands.
-- Slice A1 (PR #27) received an **independent non-author DPR** (LGTM, no blocking
-  issues; all CI gates green on Rust 1.96). The final merge is deferred to a
-  non-author principal per the no-self-merge rule and the single-account
-  constraint (GitHub blocks self-`APPROVE`; the author never merges).
+- Slice A1 (PR #27) is submitted by its author as ready for review. The
+  authoritative review verdict is recorded by the non-author reviewer in
+  `docs/governance/coordination-ledger.md` (not self-attested here), and the
+  final merge is performed by a non-author principal per the no-self-merge rule
+  and the single-account constraint (GitHub blocks self-`APPROVE`; the author
+  never reviews or merges their own PR).
 
 ## Parallelism
 

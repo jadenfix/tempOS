@@ -41,6 +41,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-os-tool-registry"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

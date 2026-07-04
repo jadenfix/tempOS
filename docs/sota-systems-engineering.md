@@ -50,8 +50,25 @@ fallback, and tests that protect correctness.
 
 ## Language And Boundary Policy
 
-Rust is the default language for beaterOS because it gives predictable native
+Use the best language for the subsystem, boundary, and measurement target. When
+the tradeoff is close, prefer Rust because it gives predictable native
 performance with strong ownership and concurrency checks.
+
+Default choices:
+
+- Rust for the kernel/control plane, policy engine, sandbox orchestration,
+  journaling, receipts, tool gateway, model router, payment enforcement, CLIs,
+  local daemons, and performance-sensitive services.
+- C for stable ABI surfaces, kernel/driver/hypervisor/platform APIs, existing
+  high-quality C libraries, or hot paths where measurement proves Rust is not
+  meeting the requirement.
+- Assembly for unavoidable hardware boundaries only.
+- Python for small validation/audit/research scripts where startup latency,
+  dependency control, and runtime authority are bounded.
+- TypeScript for browser/dashboard surfaces when a web UI is the product
+  boundary, with generated contracts rather than hand-maintained schema drift.
+- SQL or purpose-built query languages for durable/query-heavy state, with
+  migrations and conformance tests as contracts.
 
 Use C only when at least one condition is true:
 
@@ -68,6 +85,8 @@ cryptographic/platform primitives where a vetted implementation requires it.
 Rules for non-Rust surfaces:
 
 - Keep the boundary small and documented.
+- State why the chosen language is better than Rust for that slice, or state
+  that Rust was chosen because the tradeoff was close.
 - Expose a safe Rust wrapper with explicit invariants.
 - Avoid sharing ownership across FFI. Prefer handles, borrowed slices with clear
   lifetimes, or copied POD structs.

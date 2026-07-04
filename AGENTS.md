@@ -44,8 +44,9 @@ authority and audit boundaries, not merely as serialization types.
 - Make macOS work. The repo must build and test on macOS, including Apple
   Silicon. Do not introduce Linux-only assumptions without an abstraction and a
   macOS path.
-- Prefer Rust for most implementation. Use C only for stable ABI, boot/platform,
-  driver, hypervisor, or measured hot-path interop needs. Use assembly only at
+- Use the best language for the subsystem and boundary. When tradeoffs are
+  close, prefer Rust. Use C for stable ABI, boot/platform, driver, hypervisor,
+  existing C library, or measured hot-path interop needs. Use assembly only at
   the hardware boundary. Isolate and review all unsafe code.
 
 ## SOTA Systems Engineering Checklist
@@ -61,7 +62,8 @@ be able to answer:
   payment spend, retries, and wall-clock time?
 - Which authority boundary does this touch, and what evidence proves it?
 - What benchmark, trace, property test, or scenario would catch a regression?
-- Why is the chosen language boundary Rust, C, or assembly?
+- Why is the chosen language boundary the best fit, and if the tradeoff was
+  close, why not Rust?
 
 ## Common Commands
 
