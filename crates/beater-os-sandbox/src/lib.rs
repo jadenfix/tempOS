@@ -7,8 +7,7 @@
 //! the user's environment.
 //!
 //! The lane enforces, in order, the non-negotiable controls from §13.8
-//! ("Shell And Code Execution Security") that are achievable in pure,
-//! macOS-first user space:
+//! ("Shell And Code Execution Security"):
 //!
 //! 1. **Canonicalized confinement.** The working directory is resolved with
 //!    `std::fs::canonicalize` (realpath), which follows every symlink, and is
@@ -16,23 +15,34 @@
 //!    prefix(es). This is the symlink-escape defense, and the returned canonical
 //!    path is the kernel-derived `resolved_target` (§7.4) that a mediation point
 //!    — never the agent — must author.
-//! 2. **Scrubbed environment.** The child is spawned with
+//! 2. **Real OS filesystem confinement.** cwd anchoring is not confinement: the
+//!    agent controls the full `sh -c` command and can name absolute paths, `..`,
+//!    or read arbitrary files regardless of cwd. So the child is wrapped in the
+//!    macOS **Seatbelt** sandbox (`/usr/bin/sandbox-exec`) with a generated
+//!    *deny-default* profile: it may WRITE only within the grant-derived
+//!    canonical prefixes (plus `/dev/null`), may READ system paths (to load a
+//!    shell/binary and the dynamic loader's shared cache) plus those prefixes,
+//!    and is DENIED every other read of user data and every write. If the
+//!    enforcer is unavailable, the lane **fails closed** — it never runs an
+//!    unconfined command. This is the macOS lane; a Linux lane (seccomp-bpf +
+//!    Landlock + mount namespaces) is a future implementor of the same
+//!    [`Confiner`] seam.
+//! 3. **Scrubbed environment.** The child is spawned with
 //!    [`Command::env_clear`](std::process::Command::env_clear); only a minimal
 //!    safe `PATH` is set. No inherited global secrets (§13.8).
-//! 3. **Bounded execution.** A wall-clock timeout kills a runaway process, and
+//! 4. **Bounded execution.** A wall-clock timeout kills a runaway process, and
 //!    captured stdout/stderr are capped so a hostile command cannot exhaust
 //!    memory. The filesystem walk is bounded by a file count and a per-file byte
 //!    ceiling.
-//! 4. **Filesystem-diff receipt.** The confined directory is snapshotted
+//! 5. **Filesystem-diff receipt.** *All* confined prefixes are snapshotted
 //!    (path -> SHA-256 of contents) before and after execution; the diff of
-//!    created / modified / deleted paths is the observed side effect.
+//!    created / modified / deleted paths is the OBSERVED side effect — the
+//!    source of truth for the receipt, never the agent's declared expectation.
 //!
 //! Everything **fails closed**: any error (canonicalization failure, confinement
-//! escape, missing confinement prefix, walk overflow) returns an [`Err`] and no
-//! outcome is produced. Number of sandbox lanes is an acceptable compromise
-//! (§26); sandbox isolation itself is not. This is the single, portable
-//! `Pure function`/local lane from §10.6 — network isolation, seccomp, and
-//! container/VM lanes are explicit future targets, not silently assumed here.
+//! escape, missing confinement prefix, unavailable enforcer, walk overflow)
+//! returns an [`Err`] and no outcome is produced. Number of sandbox lanes is an
+//! acceptable compromise (§26); sandbox isolation itself is not.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -49,6 +59,27 @@ use thiserror::Error;
 /// (which may point at attacker-writable directories) is discarded; only the
 /// standard system locations are exposed so common tools still resolve.
 const SAFE_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// Absolute path to the macOS Seatbelt runner. Hardcoded (not resolved via
+/// `PATH`) so a hostile environment cannot shim a fake enforcer in front of it.
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+/// System read-only subpaths the child needs to load a shell/binary and the
+/// dynamic loader's shared cache. These expose the OS image and libraries, not
+/// user data; reads of arbitrary user paths outside the granted prefixes stay
+/// denied. `/private/var/select` is the shell selector; `/private/var/db/dyld`
+/// is the loader database; on modern macOS the shared cache lives under
+/// `/System/Volumes/Preboot/Cryptexes`, covered by the `/System` subpath.
+const SYSTEM_READ_SUBPATHS: &[&str] = &[
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/System",
+    "/Library",
+    "/private/var/db/dyld",
+    "/private/var/select",
+    "/dev",
+];
 
 /// Poll interval for the wall-clock timeout loop.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -84,6 +115,18 @@ pub enum SandboxError {
     /// complete, trustworthy diff, so we fail closed.
     #[error("filesystem walk exceeded the {cap}-file ceiling")]
     FileCapExceeded { cap: usize },
+    /// The OS filesystem-confinement enforcer is unavailable (e.g. this is not
+    /// macOS, or `/usr/bin/sandbox-exec` is missing). We refuse to run an
+    /// unconfined command. The Linux lane is a future implementor of [`Confiner`].
+    #[error(
+        "filesystem confinement enforcer /usr/bin/sandbox-exec is unavailable; \
+         refusing to run unconfined"
+    )]
+    ConfinementUnavailable,
+    /// A granted prefix or the program path is not valid UTF-8 and cannot be
+    /// embedded into a Seatbelt profile safely, so we fail closed.
+    #[error("path {path} cannot be encoded into a sandbox profile")]
+    ProfilePath { path: String },
 }
 
 /// Bounds on a single sandboxed execution. Defaults are conservative and cheap;
@@ -144,9 +187,9 @@ pub enum SandboxStatus {
     Signaled,
 }
 
-/// The observed filesystem side effects: a diff of the confined directory
-/// snapshotted before and after execution. Paths are relative to the confined
-/// root and sorted for a deterministic, hashable receipt.
+/// The observed filesystem side effects: a diff of every confined prefix
+/// snapshotted before and after execution. Paths are absolute (unambiguous
+/// across distinct prefixes) and sorted for a deterministic, hashable receipt.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FsDiff {
     pub created: Vec<String>,
@@ -285,13 +328,19 @@ fn path_within(path: &Path, prefix: &Path) -> bool {
 pub fn execute(request: &SandboxRequest) -> SandboxResult<SandboxOutcome> {
     let resolved_target = resolve_confined(&request.working_dir, &request.path_prefixes)?;
 
+    // Observe across EVERY granted prefix, not just the cwd: the confinement
+    // permits writes anywhere within the grant's authority (e.g. a sibling
+    // prefix named by absolute path), so a receipt that watched only the cwd
+    // would under-report. Paths in the diff are absolute and unambiguous.
+    let prefixes = canonical_prefixes(&request.path_prefixes)?;
+
     // Snapshot BEFORE any side effect (fail closed if the walk overflows).
-    let before = snapshot(&resolved_target, &request.limits)?;
+    let before = snapshot_all(&prefixes, &request.limits)?;
 
     let run = run_confined(request, &resolved_target)?;
 
     // Snapshot AFTER; the diff is the observed side effect.
-    let after = snapshot(&resolved_target, &request.limits)?;
+    let after = snapshot_all(&prefixes, &request.limits)?;
     let diff = diff_snapshots(&before, &after);
 
     Ok(SandboxOutcome {
@@ -316,12 +365,183 @@ struct RunResult {
     stderr_truncated: bool,
 }
 
-/// Spawn and supervise the confined child: scrubbed environment, confined cwd,
-/// bounded output capture, and a wall-clock timeout.
+/// A filesystem-confinement backend: the mechanism that restricts what the
+/// child process can read and write. Only the enforcing mechanism differs per
+/// OS — the rest of the lane (canonicalized cwd, env scrub, timeout, output
+/// caps, fs-diff receipt) is OS-independent.
+///
+/// macOS ships [`SeatbeltConfiner`]. A Linux lane (seccomp-bpf + Landlock +
+/// mount namespaces) is a future implementor of this same seam; nothing above
+/// it changes.
+trait Confiner {
+    /// Whether this backend actually enforces on the current host. A backend
+    /// that cannot enforce must report `false` so the lane fails closed rather
+    /// than running unconfined.
+    fn enforces(&self) -> bool;
+
+    /// Build a ready-to-spawn command that runs `program` + `args` confined so
+    /// it may WRITE only within `prefixes` (canonical realpaths) plus
+    /// `/dev/null`, and may READ system paths plus those prefixes (and
+    /// `program_path`, if resolved). All other reads of user data and all writes
+    /// are denied. cwd/env/stdio are applied by the caller.
+    fn confined_command(
+        &self,
+        program: &str,
+        args: &[String],
+        prefixes: &[PathBuf],
+        program_path: Option<&Path>,
+    ) -> SandboxResult<Command>;
+}
+
+/// The macOS filesystem-confinement lane, backed by Apple Seatbelt via
+/// `/usr/bin/sandbox-exec` and a generated deny-default profile.
+struct SeatbeltConfiner;
+
+impl Confiner for SeatbeltConfiner {
+    fn enforces(&self) -> bool {
+        Path::new(SANDBOX_EXEC).is_file()
+    }
+
+    fn confined_command(
+        &self,
+        program: &str,
+        args: &[String],
+        prefixes: &[PathBuf],
+        program_path: Option<&Path>,
+    ) -> SandboxResult<Command> {
+        let profile = build_seatbelt_profile(prefixes, program_path)?;
+        let mut command = Command::new(SANDBOX_EXEC);
+        command
+            .arg("-p")
+            .arg(profile)
+            .arg("--")
+            .arg(program)
+            .args(args);
+        Ok(command)
+    }
+}
+
+/// Escape a path for embedding inside a Seatbelt string literal (`"..."`).
+/// Backslash and double-quote are the only characters that can terminate or
+/// alter the literal, so escaping them prevents a crafted prefix from injecting
+/// profile syntax (e.g. closing the string and appending an `(allow ...)`).
+fn escape_seatbelt(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        if c == '\\' || c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A canonical path -> its escaped Seatbelt string-literal contents. Rejects a
+/// non-UTF-8 path fail-closed: we will not embed a lossy path into a security
+/// profile.
+fn path_to_profile_str(path: &Path) -> SandboxResult<String> {
+    let s = path.to_str().ok_or_else(|| SandboxError::ProfilePath {
+        path: path.display().to_string(),
+    })?;
+    Ok(escape_seatbelt(s))
+}
+
+/// Build the deny-default Seatbelt profile confining the child to `prefixes`.
+///
+/// The child may READ system paths (so a shell/binary and the dyld shared cache
+/// load) plus each granted prefix, and may WRITE only within the prefixes and
+/// `/dev/null`. Every other read of user data and every write is denied.
+///
+/// `(literal "/")` grants read of the root directory *node* itself — dyld's
+/// `CacheFinder` stats `/` on startup and aborts (SIGABRT) without it — but does
+/// NOT grant the whole tree. `file-read-metadata` is allowed globally so path
+/// resolution / `getcwd` on the cwd's ancestors works; it exposes existence and
+/// size, never file contents (the read-secret exploit reads *contents* and stays
+/// denied). Every embedded path is a canonical realpath, escaped against
+/// injection.
+fn build_seatbelt_profile(
+    prefixes: &[PathBuf],
+    program_path: Option<&Path>,
+) -> SandboxResult<String> {
+    let mut reads = String::from("(literal \"/\")");
+    for sys in SYSTEM_READ_SUBPATHS {
+        // Compile-time constants: no untrusted input, no escaping needed.
+        reads.push_str(&format!(" (subpath \"{sys}\")"));
+    }
+    if let Some(program) = program_path {
+        reads.push_str(&format!(" (subpath \"{}\")", path_to_profile_str(program)?));
+    }
+
+    let mut writes = String::from("(literal \"/dev/null\")");
+    for prefix in prefixes {
+        let escaped = path_to_profile_str(prefix)?;
+        reads.push_str(&format!(" (subpath \"{escaped}\")"));
+        writes.push_str(&format!(" (subpath \"{escaped}\")"));
+    }
+
+    Ok(format!(
+        "(version 1)\n\
+         (deny default)\n\
+         (allow process-exec*)\n\
+         (allow process-fork)\n\
+         (allow signal (target self))\n\
+         (allow sysctl-read)\n\
+         (allow mach-lookup)\n\
+         (allow file-read-metadata)\n\
+         (allow file-read* {reads})\n\
+         (allow file-write* {writes})\n"
+    ))
+}
+
+/// Canonicalize each granted prefix (realpath) for the confinement profile.
+/// Prefixes that cannot be canonicalized (missing / broken) grant no authority
+/// and are dropped; if none survive we fail closed with [`SandboxError::NoConfinement`].
+fn canonical_prefixes(prefixes: &[String]) -> SandboxResult<Vec<PathBuf>> {
+    let mut out: Vec<PathBuf> = prefixes
+        .iter()
+        .filter_map(|prefix| std::fs::canonicalize(prefix).ok())
+        .collect();
+    out.sort();
+    out.dedup();
+    if out.is_empty() {
+        return Err(SandboxError::NoConfinement);
+    }
+    Ok(out)
+}
+
+/// Resolve the child program to a canonical path for the read allowlist. An
+/// absolute or path-bearing command is canonicalized directly; a bare name is
+/// resolved against [`SAFE_PATH`]. Returns `None` when it cannot be resolved —
+/// standard tools are already covered by the system read subpaths, and a program
+/// that cannot be found simply fails to exec inside the sandbox (fail-closed).
+fn resolve_program_path(command: &str) -> Option<PathBuf> {
+    if command.contains('/') {
+        return std::fs::canonicalize(command).ok();
+    }
+    SAFE_PATH
+        .split(':')
+        .find_map(|dir| std::fs::canonicalize(Path::new(dir).join(command)).ok())
+}
+
+/// Spawn and supervise the confined child: real OS filesystem confinement
+/// (macOS Seatbelt), scrubbed environment, confined cwd, bounded output capture,
+/// and a wall-clock timeout.
 fn run_confined(request: &SandboxRequest, cwd: &Path) -> SandboxResult<RunResult> {
-    let mut command = Command::new(&request.command);
+    // Real OS filesystem confinement. Fail closed if the enforcer cannot run —
+    // never fall back to an unconfined process.
+    let confiner = SeatbeltConfiner;
+    if !confiner.enforces() {
+        return Err(SandboxError::ConfinementUnavailable);
+    }
+    let prefixes = canonical_prefixes(&request.path_prefixes)?;
+    let program_path = resolve_program_path(&request.command);
+    let mut command = confiner.confined_command(
+        &request.command,
+        &request.args,
+        &prefixes,
+        program_path.as_deref(),
+    )?;
     command
-        .args(&request.args)
         .current_dir(cwd)
         // No inherited secrets (§13.8): start from an empty environment and add
         // back only a minimal safe PATH so the child still resolves tools.
@@ -418,14 +638,31 @@ where
     })
 }
 
-/// Snapshot the confined directory as `relative path -> content digest`.
+/// Snapshot every granted prefix as `absolute path -> content digest`, unioned
+/// into one map. Absolute keys keep entries unambiguous across distinct prefixes.
+/// The combined walk is bounded by `max_files` (fail closed).
+fn snapshot_all(
+    prefixes: &[PathBuf],
+    limits: &SandboxLimits,
+) -> SandboxResult<BTreeMap<String, String>> {
+    let mut entries = BTreeMap::new();
+    for root in prefixes {
+        snapshot_into(root, limits, &mut entries)?;
+    }
+    Ok(entries)
+}
+
+/// Walk one prefix, inserting `absolute path -> content digest` into `entries`.
 ///
 /// Symlinks are recorded by their target (never followed), so a diff can note a
-/// planted link without traversing outside the confined root. The walk is
-/// bounded by `max_files` (fail closed) and `max_file_bytes` (oversize files are
-/// recorded by length, not content).
-fn snapshot(root: &Path, limits: &SandboxLimits) -> SandboxResult<BTreeMap<String, String>> {
-    let mut entries = BTreeMap::new();
+/// planted link without traversing outside the confined root. Oversize files are
+/// recorded by length (not content). The cumulative `entries` count is bounded
+/// by `max_files` (fail closed).
+fn snapshot_into(
+    root: &Path,
+    limits: &SandboxLimits,
+    entries: &mut BTreeMap<String, String>,
+) -> SandboxResult<()> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)? {
@@ -434,11 +671,7 @@ fn snapshot(root: &Path, limits: &SandboxLimits) -> SandboxResult<BTreeMap<Strin
             // `DirEntry::file_type` does not traverse symlinks, so a symlinked
             // directory is classified as a symlink and never recursed into.
             let file_type = entry.file_type()?;
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
+            let key = path.to_string_lossy().to_string();
             if file_type.is_dir() {
                 stack.push(path);
                 continue;
@@ -459,7 +692,7 @@ fn snapshot(root: &Path, limits: &SandboxLimits) -> SandboxResult<BTreeMap<Strin
                 // Sockets, FIFOs, devices: record their kind, no content.
                 "special".to_string()
             };
-            entries.insert(relative, digest);
+            entries.insert(key, digest);
             if entries.len() > limits.max_files {
                 return Err(SandboxError::FileCapExceeded {
                     cap: limits.max_files,
@@ -467,7 +700,7 @@ fn snapshot(root: &Path, limits: &SandboxLimits) -> SandboxResult<BTreeMap<Strin
             }
         }
     }
-    Ok(entries)
+    Ok(())
 }
 
 /// Compute created / modified / deleted paths between two snapshots.
@@ -548,7 +781,10 @@ mod tests {
         assert_eq!(outcome.status, SandboxStatus::Ok);
         assert_eq!(outcome.exit_code, Some(0));
         assert!(dir.path.join("out.txt").is_file(), "file must really exist");
-        assert_eq!(outcome.diff.created, vec!["out.txt".to_string()]);
+        assert_eq!(
+            outcome.diff.created,
+            vec![dir.path.join("out.txt").display().to_string()]
+        );
         assert!(outcome.diff.modified.is_empty());
         assert!(outcome.diff.deleted.is_empty());
         assert_eq!(outcome.resolved_target, dir.path);
@@ -568,8 +804,14 @@ mod tests {
             limits: SandboxLimits::default(),
         })
         .expect("execute");
-        assert_eq!(outcome.diff.modified, vec!["keep.txt".to_string()]);
-        assert_eq!(outcome.diff.deleted, vec!["gone.txt".to_string()]);
+        assert_eq!(
+            outcome.diff.modified,
+            vec![dir.path.join("keep.txt").display().to_string()]
+        );
+        assert_eq!(
+            outcome.diff.deleted,
+            vec![dir.path.join("gone.txt").display().to_string()]
+        );
         assert!(outcome.diff.created.is_empty());
     }
 
@@ -593,6 +835,142 @@ mod tests {
         );
         // Nothing executed: no file was created in the escape target.
         assert!(!outside.path.join("pwned").exists());
+    }
+
+    /// The exact exploit the reviewer demonstrated: an absolute-path write
+    /// OUTSIDE the granted prefix. cwd anchoring alone admitted it; real OS
+    /// confinement must DENY it — no file created outside, and the child status
+    /// is not a clean success.
+    #[test]
+    fn absolute_write_outside_prefix_is_denied() {
+        let work = TempDir::new("work-abs");
+        let outside = TempDir::new("outside-abs");
+        let escaped = outside.path.join("escaped_abs.txt");
+        let script = format!("printf PWNED > {}", escaped.display());
+        let (command, args) = sh(&script);
+        let outcome = execute(&SandboxRequest {
+            command,
+            args,
+            working_dir: work.str(),
+            path_prefixes: vec![work.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute should still produce an outcome");
+
+        assert!(
+            !escaped.exists(),
+            "sandbox must deny the out-of-prefix write; no file may appear outside"
+        );
+        assert_ne!(
+            outcome.status,
+            SandboxStatus::Ok,
+            "a denied write must NOT be receipted as a clean success"
+        );
+        assert!(
+            outcome.diff.is_empty(),
+            "no observed side effect inside the prefix: {:?}",
+            outcome.diff
+        );
+    }
+
+    /// The `../` variant: a write to the PARENT of the granted prefix. Must be
+    /// denied by the OS sandbox regardless of cwd.
+    #[test]
+    fn dotdot_write_to_parent_is_denied() {
+        let work = TempDir::new("work-dd");
+        let parent = work
+            .path
+            .parent()
+            .expect("temp dir has a parent")
+            .to_path_buf();
+        let escaped = parent.join("dotdot_escape.txt");
+        let script = format!("printf x > {}", escaped.display());
+        let (command, args) = sh(&script);
+        let outcome = execute(&SandboxRequest {
+            command,
+            args,
+            working_dir: work.str(),
+            path_prefixes: vec![work.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute");
+        assert!(
+            !escaped.exists(),
+            "sandbox must deny the ../ write to the prefix parent"
+        );
+        assert_ne!(outcome.status, SandboxStatus::Ok);
+    }
+
+    /// Reading a secret file entirely OUTSIDE the prefix must be denied: the read
+    /// fails and no secret bytes reach stdout.
+    #[test]
+    fn read_outside_prefix_is_denied() {
+        let work = TempDir::new("work-read");
+        let outside = TempDir::new("outside-read");
+        let secret = outside.path.join("secret.txt");
+        fs::write(&secret, b"TOP-SECRET-XYZZY").unwrap();
+        let script = format!("cat {}", secret.display());
+        let (command, args) = sh(&script);
+        let outcome = execute(&SandboxRequest {
+            command,
+            args,
+            working_dir: work.str(),
+            path_prefixes: vec![work.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute");
+        let stdout = String::from_utf8_lossy(&outcome.stdout);
+        assert!(
+            !stdout.contains("TOP-SECRET-XYZZY"),
+            "secret content must not leak past the sandbox: {stdout:?}"
+        );
+        assert_ne!(
+            outcome.status,
+            SandboxStatus::Ok,
+            "a denied read must surface as a non-zero child status"
+        );
+    }
+
+    /// A legitimate write INSIDE the prefix still succeeds, and the receipt's
+    /// fs-diff truthfully shows the created file (observed, absolute path).
+    #[test]
+    fn legitimate_write_inside_prefix_succeeds_and_is_observed() {
+        let work = TempDir::new("work-legit");
+        let (command, args) = sh("echo hi > allowed.txt");
+        let outcome = execute(&SandboxRequest {
+            command,
+            args,
+            working_dir: work.str(),
+            path_prefixes: vec![work.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute");
+        assert_eq!(outcome.status, SandboxStatus::Ok);
+        assert_eq!(outcome.exit_code, Some(0));
+        let created = work.path.join("allowed.txt");
+        assert!(created.is_file(), "the in-prefix file must really exist");
+        assert_eq!(
+            outcome.diff.created,
+            vec![created.display().to_string()],
+            "the observed fs-diff must show the created file"
+        );
+    }
+
+    /// The generated profile must be a deny-default Seatbelt profile that grants
+    /// writes only within each (escaped) prefix, and a crafted prefix cannot
+    /// inject profile syntax.
+    #[test]
+    fn seatbelt_profile_is_deny_default_and_injection_safe() {
+        let prefix = PathBuf::from("/tmp/a\"b\\c");
+        let profile = build_seatbelt_profile(&[prefix], None).expect("profile");
+        assert!(profile.starts_with("(version 1)\n(deny default)\n"));
+        assert!(profile.contains("(allow file-write*"));
+        // The embedded quote/backslash are escaped, so the string literal is not
+        // terminated early: the escaped form appears verbatim.
+        assert!(
+            profile.contains("(subpath \"/tmp/a\\\"b\\\\c\")"),
+            "prefix must be escaped in the profile: {profile}"
+        );
     }
 
     #[test]

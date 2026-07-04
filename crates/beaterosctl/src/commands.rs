@@ -481,6 +481,8 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         grants: active_grants,
         approvals: Vec::new(),
         simulations: Vec::new(),
+        mandates: Vec::new(),
+        revoked_handles: std::collections::BTreeSet::new(),
     };
     let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
     store.append_event(
@@ -533,18 +535,52 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         limits,
     })?;
 
-    let side_effect_summary = format!(
-        "{} exit={:?} timed_out={} {}",
+    // OBSERVED effects are the source of truth (final.md §12.3): a non-empty
+    // filesystem diff is a LocalWrite. The agent's DECLARED (expected) effects
+    // are a prediction, recorded separately and clearly distinguished — never
+    // certified as if they happened.
+    let observed_effects: BTreeSet<SideEffectClass> = if outcome.diff.is_empty() {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([SideEffectClass::LocalWrite])
+    };
+    let observed_not_declared: Vec<SideEffectClass> = observed_effects
+        .difference(&expected_side_effects)
+        .cloned()
+        .collect();
+    let declared_not_observed: Vec<SideEffectClass> = expected_side_effects
+        .difference(&observed_effects)
+        .cloned()
+        .collect();
+
+    let mut side_effect_summary = format!(
+        "sandbox status={} exit={:?} timed_out={} | OBSERVED(source-of-truth) {} effects={:?} | DECLARED expected_effects={:?}",
         outcome.status_str(),
         outcome.exit_code,
         outcome.status == beater_os_sandbox::SandboxStatus::Timeout,
-        outcome.diff.summary()
+        outcome.diff.summary(),
+        observed_effects,
+        expected_side_effects,
     );
+    // A divergence between observed and declared effects is a §12.3 incident.
+    // Record it in the receipt (a hard incident-event is a follow-up); never
+    // silently drop an observed effect or silently promote a declared one.
+    if !observed_not_declared.is_empty() || !declared_not_observed.is_empty() {
+        side_effect_summary.push_str(&format!(
+            " | DIVERGENCE(§12.3) observed_not_declared={observed_not_declared:?} declared_not_observed={declared_not_observed:?}"
+        ));
+    }
 
-    // Receipts may only report predeclared side effects; core's causality
-    // verifier enforces the subset rule. The typed effects are the declared set;
-    // the observed filesystem diff is carried in the summary and artifact refs.
-    let side_effects: Vec<SideEffectClass> = expected_side_effects.iter().cloned().collect();
+    // The receipt's typed effects CERTIFY only what was both OBSERVED and
+    // predeclared: core's causality verifier requires receipt effects ⊆ the
+    // manifest's declared effects. Observed-but-undeclared effects are carried
+    // as the divergence note above (the fs-diff is the authoritative observed
+    // record); declared-but-unobserved effects are correctly not certified.
+    let side_effects: Vec<SideEffectClass> = observed_effects
+        .iter()
+        .filter(|effect| expected_side_effects.contains(effect))
+        .cloned()
+        .collect();
     let artifact_refs: Vec<String> = outcome
         .diff
         .created
