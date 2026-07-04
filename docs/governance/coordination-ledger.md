@@ -69,3 +69,19 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
   PR originally also carried a `contracts/` schema layer + governance docs; those
   were dropped as duplicates of the merged `spec/` suite (#25) and review gate
   (#23) rather than shipping a second dialect.
+
+## Lane claims (implementation slices)
+
+Append-only. Claim a disjoint write scope here before building a backlog slice.
+
+- **Slice 9 — tool registry** (`claude/multi-agent-pr-review-7blbtx`): new crate
+  `crates/beater-os-tool-registry` implementing `final.md` §10.14/§6.9/§13.6/§13.10
+  (signed manifests, version+schema pinning, risk ceiling, sandbox floor, test
+  gate, per-workspace allowlists, quarantine/revocation, fail-closed resolve,
+  append-only audit events). Depends only on merged slices 1 (`beater-os-core`)
+  and 2. **Write scope:** `crates/beater-os-tool-registry/**`, the workspace
+  `Cargo.toml` members line, `Cargo.lock`, and this ledger entry — disjoint from
+  every open PR (no other PR touches `crates/beater-os-tool-registry/`). Does not
+  edit `beater-os-core`. Boundary vs. slice 10 (`mcp-gateway`): the gateway will
+  call `resolve()` then drive `PolicyEngine` + receipts; this crate is only the
+  tool identity/trust layer beneath it.
