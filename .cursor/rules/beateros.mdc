@@ -17,8 +17,9 @@ Key rules:
 - Optimize architecture before micro-optimizing code: fewer copies, fewer
   syscalls, bounded queues, cache-aware layouts, deterministic admission, and
   explicit backpressure.
-- Rust is the default implementation language. C is allowed for ABI, boot,
-  driver, hypervisor, platform, or measured hot-path needs. Assembly is only for
+- Use the best language for the subsystem and boundary; when tradeoffs are
+  close, prefer Rust. C is allowed for ABI, boot, driver, hypervisor, platform,
+  existing C libraries, or measured hot-path needs. Assembly is only for
   unavoidable hardware boundaries.
 - Unsafe/C/assembly code must be isolated behind safe APIs and justified with
   tests, fuzz/property checks, or benchmarks where practical.

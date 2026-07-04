@@ -29,9 +29,10 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
      formatting off the critical path unless they are required for safety.
 
 3. Choose the lowest-risk language boundary.
-   - Use Rust by default.
-   - Use C for ABI, boot/platform, driver, hypervisor, sandbox, or measured
-     hot-path interop needs.
+   - Use the best language for the subsystem and boundary.
+   - When tradeoffs are close, prefer Rust.
+   - Use C for ABI, boot/platform, driver, hypervisor, sandbox, existing C
+     library, or measured hot-path interop needs.
    - Use assembly only for unavoidable hardware boundaries.
    - Wrap unsafe/C/assembly in small safe Rust APIs with explicit invariants.
 

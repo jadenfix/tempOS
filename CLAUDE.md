@@ -20,9 +20,11 @@ beaterOS should be designed like close-to-metal systems software:
 - Keep the policy/audit path deterministic and replayable.
 - Never trade away capability safety, receipt integrity, or sandbox isolation for
   cosmetic speed.
-- Use Rust by default. Use C when ABI, platform, driver, hypervisor, or measured
-  hot-path constraints require it. Use assembly only for boot, atomics, context
-  switching, register access, or similarly unavoidable hardware boundaries.
+- Use the best language for the subsystem and boundary. When tradeoffs are
+  close, prefer Rust. Use C when ABI, platform, driver, hypervisor, existing C
+  library, or measured hot-path constraints require it. Use assembly only for
+  boot, atomics, context switching, register access, or similarly unavoidable
+  hardware boundaries.
 - Any unsafe, C, or assembly surface must be tiny, documented, fuzzable or
   property-tested where practical, and wrapped in safe Rust APIs.
 - Keep macOS and Apple Silicon as first-class development targets. Linux-specific
@@ -38,5 +40,6 @@ For non-trivial changes, state or encode:
 - queue and retry bounds
 - failure mode under overload
 - security boundary and required evidence
+- language choice and Rust tie-breaker analysis
 - macOS impact
 - local verification command
