@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 beater-os-core = { path = "../beater-os-core" }
+beater-os-sandbox = { path = "../beater-os-sandbox" }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
