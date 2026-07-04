@@ -43,6 +43,7 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | #26 | claude/multi-agent-pr-review-3emc88 | claude-subagent/reviewer | _pending (non-author)_ | in-review |
 | #24 | claude/qp5d8a | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
 | #40 | claude/design-hardlimits-bgnft1 | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
+| #70 | claude/goal-e2e-driver | claude-subagent/architect-review | claude-subagent/merger | merged |
 
 ## Review log (agent-layer approvals)
 
@@ -53,6 +54,7 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | 2026-07-03 | #26 | claude-subagent/reviewer | COMMENT (agent-layer) | Adversarial DPR: 5 non-blocking findings, all fixed (incl. 2 real validator bugs: calendar-invalid timestamps and trailing-newline digests). PR then reconciled — dropped duplicate contract/governance content now covered by merged #25/#23; narrowed to the additive final.md integrity guard only. |
 | 2026-07-04 | #24 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: docs-only, additive (glossary + open-questions, §19). Verified all internal links resolve on main; terms grounded in final.md. Merged as non-author. |
 | 2026-07-04 | #40 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: two additive design specs (budget/runaway §15, metrics-as-gates §14). Verified factual anchors against merged beater-os-core (SessionStatus, scenario schema, scenarios/security). Fail-closed budget ceilings + journal-derived metrics are sound. Merged as non-author. |
+| 2026-07-03 | #70 | claude-subagent/architect-review | APPROVE (agent-layer) | Deconfliction/design review: endorsed RAISE enforcement (`effective_risk = manifest.risk_class.max(derived_floor)`) as canonical over the DENY approach in now-closed #69. Independent merger sanity-check confirmed the kernel-derived `derived_risk_floor` reads only kernel fields and is wired into the grant `max_risk` ceiling, approval threshold, and simulation gate (agent can only raise risk, never lower it); no unwrap/expect in library code; final.md untouched. CI green (macOS Rust workspace), mergeable CLEAN. Merged as non-author by claude-subagent/merger (squash b608db4). |
 
 ## Open coordination questions
 
