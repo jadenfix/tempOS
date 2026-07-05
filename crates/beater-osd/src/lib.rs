@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 
 use beater_os_core::{
     ActionManifest, AdmissionContext, AgentSession, CapabilityGrant, CapabilityReceipt,
-    CapabilityReceiptInput, InMemoryJournal, JournalEvent, JournalRecord, PolicyDecision,
-    PolicyEngine, ReceiptLedger,
+    CapabilityReceiptInput, CapabilityScope, DelegationMode, InMemoryJournal, JournalEvent,
+    JournalRecord, PolicyDecision, PolicyEngine, ReceiptLedger,
 };
 use chrono::{DateTime, Utc};
 
@@ -195,6 +195,7 @@ impl Store {
                     grant.grant_id
                 )));
             }
+            validate_grant_authority(&admission_state, &grant)?;
             let record = journal.append(JournalEvent::CapabilityGranted { grant }, created_at)?;
             journal.verify_chain()?;
             self.write_journal_record_unlocked(session_id, &record)?;
@@ -219,12 +220,13 @@ impl Store {
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
             let existing_proposal = admission_state.proposals.get(manifest.action_id.as_str());
-            if admission_state
-                .decided_actions
-                .contains(manifest.action_id.as_str())
+            if let Some(decision) = admission_state
+                .latest_decisions
+                .get(manifest.action_id.as_str())
+                && decision.result == beater_os_core::DecisionResult::Allowed
             {
                 return Err(DaemonError::Refused(format!(
-                    "action {} already has a policy decision",
+                    "action {} already has an allowed policy decision",
                     manifest.action_id
                 )));
             }
@@ -538,7 +540,7 @@ struct AdmissionState {
     session: AgentSession,
     grants: BTreeMap<String, CapabilityGrant>,
     proposals: BTreeMap<String, ProposedAction>,
-    decided_actions: BTreeSet<String>,
+    latest_decisions: BTreeMap<String, PolicyDecision>,
 }
 
 struct ProposedAction {
@@ -553,7 +555,7 @@ fn admission_state_from_journal(
     let mut session = None;
     let mut grants = BTreeMap::new();
     let mut proposals = BTreeMap::new();
-    let mut decided_actions = BTreeSet::new();
+    let mut latest_decisions = BTreeMap::new();
     for record in journal.records() {
         match &record.event {
             JournalEvent::SessionCreated { session: created } => {
@@ -572,7 +574,7 @@ fn admission_state_from_journal(
                 );
             }
             JournalEvent::PolicyDecided { decision } => {
-                decided_actions.insert(decision.action_id.clone());
+                latest_decisions.insert(decision.action_id.clone(), decision.clone());
             }
             JournalEvent::ReceiptAppended { .. }
             | JournalEvent::MemoryWritten { .. }
@@ -589,6 +591,120 @@ fn admission_state_from_journal(
         session,
         grants,
         proposals,
-        decided_actions,
+        latest_decisions,
     })
+}
+
+fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> DaemonResult<()> {
+    if let Some(parent_id) = &grant.parent_grant_id {
+        let Some(parent) = state.grants.get(parent_id) else {
+            return Err(DaemonError::Refused(format!(
+                "grant {} parent {} has not been issued",
+                grant.grant_id, parent_id
+            )));
+        };
+        if grant.issuer != parent.holder {
+            return Err(DaemonError::Refused(format!(
+                "grant {} issuer {} does not hold parent {}",
+                grant.grant_id, grant.issuer, parent.grant_id
+            )));
+        }
+        if parent.delegation == DelegationMode::None {
+            return Err(DaemonError::Refused(format!(
+                "grant {} parent {} is not delegable",
+                grant.grant_id, parent.grant_id
+            )));
+        }
+        if parent.delegation == DelegationMode::AttenuatedOnly
+            && !grant_is_attenuated(parent, grant)
+        {
+            return Err(DaemonError::Refused(format!(
+                "grant {} does not attenuate parent {}",
+                grant.grant_id, parent.grant_id
+            )));
+        }
+        if !grant_within_parent(parent, grant) {
+            return Err(DaemonError::Refused(format!(
+                "grant {} broadens parent {}",
+                grant.grant_id, parent.grant_id
+            )));
+        }
+    } else {
+        if !state
+            .session
+            .initial_capability_ids
+            .contains(&grant.grant_id)
+        {
+            return Err(DaemonError::Refused(format!(
+                "root grant {} was not declared in session genesis",
+                grant.grant_id
+            )));
+        }
+        if grant.issuer != state.session.created_by {
+            return Err(DaemonError::Refused(format!(
+                "root grant {} issuer {} does not match session creator {}",
+                grant.grant_id, grant.issuer, state.session.created_by
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn grant_is_attenuated(parent: &CapabilityGrant, grant: &CapabilityGrant) -> bool {
+    grant.expires_at < parent.expires_at
+        || grant.scope != parent.scope
+        || grant.denied_actions != parent.denied_actions
+        || grant.constraints != parent.constraints
+        || grant.delegation != parent.delegation
+}
+
+fn grant_within_parent(parent: &CapabilityGrant, grant: &CapabilityGrant) -> bool {
+    grant.expires_at <= parent.expires_at
+        && scope_within_parent(&parent.scope, &grant.scope)
+        && grant.denied_actions.is_superset(&parent.denied_actions)
+        && optional_ord_le(grant.constraints.max_risk, parent.constraints.max_risk)
+        && optional_ord_le(
+            grant.constraints.max_data_class,
+            parent.constraints.max_data_class,
+        )
+        && grant
+            .constraints
+            .budget
+            .fits_within(&parent.constraints.budget)
+        && restriction_set_within_parent(
+            &parent.constraints.network_allowlist,
+            &grant.constraints.network_allowlist,
+        )
+        && restriction_set_within_parent(
+            &parent.constraints.path_prefixes,
+            &grant.constraints.path_prefixes,
+        )
+        && delegation_within_parent(parent.delegation.clone(), grant.delegation.clone())
+}
+
+fn scope_within_parent(parent: &CapabilityScope, grant: &CapabilityScope) -> bool {
+    parent.selector.matches(&grant.selector) && grant.actions.is_subset(&parent.actions)
+}
+
+fn optional_ord_le<T: Ord>(child: Option<T>, parent: Option<T>) -> bool {
+    match (child, parent) {
+        (Some(child), Some(parent)) => child <= parent,
+        (Some(_), None) => true,
+        (None, None) => true,
+        (None, Some(_)) => false,
+    }
+}
+
+fn restriction_set_within_parent(parent: &BTreeSet<String>, child: &BTreeSet<String>) -> bool {
+    parent.is_empty() || (!child.is_empty() && child.is_subset(parent))
+}
+
+fn delegation_within_parent(parent: DelegationMode, child: DelegationMode) -> bool {
+    match parent {
+        DelegationMode::None => child == DelegationMode::None,
+        DelegationMode::AttenuatedOnly => {
+            matches!(child, DelegationMode::None | DelegationMode::AttenuatedOnly)
+        }
+        DelegationMode::SameScope => true,
+    }
 }

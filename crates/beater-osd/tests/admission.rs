@@ -35,6 +35,14 @@ impl Drop for TempDir {
 }
 
 fn session(root: &TempDir, id: &str) -> AgentSession {
+    session_with_initial(root, id, ["grant-write"])
+}
+
+fn session_with_initial<const N: usize>(
+    root: &TempDir,
+    id: &str,
+    grant_ids: [&str; N],
+) -> AgentSession {
     AgentSession {
         session_id: id.to_string(),
         created_at: Utc::now(),
@@ -44,7 +52,10 @@ fn session(root: &TempDir, id: &str) -> AgentSession {
         goal: "daemon-owned admission".to_string(),
         constraints: Vec::new(),
         policy_profile: "default".to_string(),
-        initial_capability_ids: BTreeSet::new(),
+        initial_capability_ids: grant_ids
+            .into_iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         budget: Budget::default(),
         model_policy: Default::default(),
         memory_scope: None,
@@ -77,6 +88,26 @@ fn grant(session_id: &str) -> CapabilityGrant {
         reason: "test grant".to_string(),
         revoked: false,
     }
+}
+
+fn parent_grant(session_id: &str) -> CapabilityGrant {
+    let mut grant = grant(session_id);
+    grant.grant_id = "grant-parent".to_string();
+    grant.scope.selector.resource_id = "*".to_string();
+    grant.scope.actions = BTreeSet::from([ActionKind::Read, ActionKind::Write]);
+    grant.delegation = DelegationMode::AttenuatedOnly;
+    grant.revocation_handle = "revoke-parent".to_string();
+    grant
+}
+
+fn delegated_grant(session_id: &str) -> CapabilityGrant {
+    let mut grant = grant(session_id);
+    grant.grant_id = "grant-child".to_string();
+    grant.issuer = "agent:runtime".to_string();
+    grant.parent_grant_id = Some("grant-parent".to_string());
+    grant.expires_at = Utc::now() + TimeDelta::minutes(30);
+    grant.revocation_handle = "revoke-child".to_string();
+    grant
 }
 
 fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
@@ -130,6 +161,19 @@ fn create_store_with_session(root_tag: &str, session_id: &str) -> (TempDir, Stor
     (root, store)
 }
 
+fn create_store_with_initial<const N: usize>(
+    root_tag: &str,
+    session_id: &str,
+    grant_ids: [&str; N],
+) -> (TempDir, Store) {
+    let root = TempDir::new(root_tag);
+    let store = Store::open(&root.path).unwrap();
+    store
+        .create_session(&session_with_initial(&root, session_id, grant_ids))
+        .unwrap();
+    (root, store)
+}
+
 fn append_grant(store: &Store, session_id: &str, grant: CapabilityGrant) {
     store.issue_grant(session_id, grant, Utc::now()).unwrap();
 }
@@ -176,10 +220,37 @@ fn duplicate_action_id_is_refused_without_append() {
     let result = store.admit_action(session_id, manifest(session_id, "act-1"));
 
     assert!(
-        matches!(result, Err(DaemonError::Refused(message)) if message.contains("already has a policy decision"))
+        matches!(result, Err(DaemonError::Refused(message)) if message.contains("already has an allowed policy decision"))
     );
     let after = store.load_journal(session_id).unwrap().records().len();
     assert_eq!(after, before);
+}
+
+#[test]
+fn readmission_after_denial_can_use_new_grant_evidence() {
+    let (_root, store) = create_store_with_session("admit-readmit", "sess_readmit");
+    let session_id = "sess_readmit";
+
+    let first = store
+        .admit_action(session_id, manifest(session_id, "act-readmit"))
+        .unwrap();
+    assert_eq!(first.decision.result, DecisionResult::Denied);
+
+    append_grant(&store, session_id, grant(session_id));
+    let second = store
+        .admit_action(session_id, manifest(session_id, "act-readmit"))
+        .unwrap();
+
+    assert_eq!(second.proposal_record.seq, first.proposal_record.seq);
+    assert_eq!(second.decision.result, DecisionResult::Allowed);
+    let journal = store.load_journal(session_id).unwrap();
+    journal.verify_chain().unwrap();
+    let decisions = journal
+        .records()
+        .iter()
+        .filter(|record| matches!(record.event, JournalEvent::PolicyDecided { .. }))
+        .count();
+    assert_eq!(decisions, 2);
 }
 
 #[test]
@@ -309,6 +380,38 @@ fn raw_grants_and_proposals_are_refused_by_public_append_event() {
         matches!(raw_proposal, Err(DaemonError::Refused(message)) if message.contains("admit_action"))
     );
     assert_eq!(store.load_journal(session_id).unwrap().records().len(), 1);
+}
+
+#[test]
+fn undeclared_root_grant_is_refused_without_append() {
+    let (_root, store) = create_store_with_initial("grant-undeclared", "sess_undeclared", []);
+    let session_id = "sess_undeclared";
+    let result = store.issue_grant(session_id, grant(session_id), Utc::now());
+
+    assert!(
+        matches!(result, Err(DaemonError::Refused(message)) if message.contains("not declared"))
+    );
+    assert_eq!(store.load_journal(session_id).unwrap().records().len(), 1);
+}
+
+#[test]
+fn delegated_grant_cannot_broaden_parent() {
+    let (_root, store) = create_store_with_initial(
+        "grant-delegated-broaden",
+        "sess_delegated",
+        ["grant-parent"],
+    );
+    let session_id = "sess_delegated";
+    append_grant(&store, session_id, parent_grant(session_id));
+    let mut child = delegated_grant(session_id);
+    child.scope.actions.insert(ActionKind::Execute);
+
+    let result = store.issue_grant(session_id, child, Utc::now());
+
+    assert!(
+        matches!(result, Err(DaemonError::Refused(message)) if message.contains("broadens parent"))
+    );
+    assert_eq!(store.project(session_id).unwrap().grants.len(), 1);
 }
 
 #[test]

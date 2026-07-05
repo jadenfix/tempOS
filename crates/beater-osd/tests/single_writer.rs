@@ -44,7 +44,7 @@ fn session(root: &TempDir, id: &str) -> AgentSession {
         goal: "serialize journal writers".to_string(),
         constraints: Vec::new(),
         policy_profile: "default".to_string(),
-        initial_capability_ids: BTreeSet::new(),
+        initial_capability_ids: (0..32).map(|index| format!("grant-{index}")).collect(),
         budget: Budget::default(),
         model_policy: Default::default(),
         memory_scope: None,
