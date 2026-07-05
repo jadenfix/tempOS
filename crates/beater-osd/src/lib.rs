@@ -14,6 +14,7 @@
 
 mod error;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,8 +22,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use beater_os_core::{
-    ActionManifest, AgentSession, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
-    InMemoryJournal, JournalEvent, JournalRecord, ReceiptLedger,
+    ActionManifest, AdmissionContext, AgentSession, CapabilityGrant, CapabilityReceipt,
+    CapabilityReceiptInput, InMemoryJournal, JournalEvent, JournalRecord, PolicyDecision,
+    PolicyEngine, ReceiptLedger,
 };
 use chrono::{DateTime, Utc};
 
@@ -32,6 +34,7 @@ const SESSIONS_DIR: &str = "sessions";
 const JOURNAL_FILE: &str = "journal.jsonl";
 const RECEIPTS_FILE: &str = "receipts.jsonl";
 const LOCK_SUFFIX: &str = ".lock";
+const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
 
 /// Runtime-store configuration.
 #[derive(Debug, Clone)]
@@ -65,6 +68,14 @@ pub struct SessionProjection {
     pub grants: Vec<CapabilityGrant>,
     pub manifests: Vec<ActionManifest>,
     pub receipts: Vec<CapabilityReceipt>,
+}
+
+/// Result of a daemon-owned policy admission transaction.
+#[derive(Debug, Clone)]
+pub struct AdmissionOutcome {
+    pub proposal_record: JournalRecord,
+    pub decision_record: JournalRecord,
+    pub decision: PolicyDecision,
 }
 
 impl Store {
@@ -110,20 +121,157 @@ impl Store {
         })
     }
 
-    /// Append one journal event while holding the per-session writer lock.
+    /// Append one non-authority journal event while holding the per-session
+    /// writer lock.
+    ///
+    /// Capability grants, action proposals, policy decisions, and receipts have
+    /// dedicated daemon APIs because they form the admission and execution
+    /// authority boundary.
     pub fn append_event(
         &self,
         session_id: &str,
         event: JournalEvent,
         created_at: DateTime<Utc>,
     ) -> DaemonResult<JournalRecord> {
-        if matches!(event, JournalEvent::ReceiptAppended { .. }) {
-            return Err(DaemonError::Refused(
-                "ReceiptAppended must be written through append_receipt".to_string(),
-            ));
+        match event {
+            JournalEvent::CapabilityGranted { .. } => {
+                return Err(DaemonError::Refused(
+                    "CapabilityGranted must be written through issue_grant".to_string(),
+                ));
+            }
+            JournalEvent::ActionProposed { .. } => {
+                return Err(DaemonError::Refused(
+                    "ActionProposed must be written through admit_action".to_string(),
+                ));
+            }
+            JournalEvent::ReceiptAppended { .. } => {
+                return Err(DaemonError::Refused(
+                    "ReceiptAppended must be written through append_receipt".to_string(),
+                ));
+            }
+            JournalEvent::PolicyDecided { .. } => {
+                return Err(DaemonError::Refused(
+                    "PolicyDecided must be written through admit_action".to_string(),
+                ));
+            }
+            _ => {}
         }
         self.with_session_lock(session_id, || {
             self.append_event_unlocked(session_id, event, created_at)
+        })
+    }
+
+    /// Issue a capability grant through the daemon-owned grant boundary.
+    pub fn issue_grant(
+        &self,
+        session_id: &str,
+        grant: CapabilityGrant,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            if grant.session_id != session_id {
+                return Err(DaemonError::Refused(format!(
+                    "grant session {} does not match daemon session {session_id}",
+                    grant.session_id
+                )));
+            }
+            if grant.policy_version != DAEMON_POLICY_VERSION {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} uses unsupported policy version {}",
+                    grant.grant_id, grant.policy_version
+                )));
+            }
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            if grant.holder != admission_state.session.agent_id {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} holder {} does not match session agent {}",
+                    grant.grant_id, grant.holder, admission_state.session.agent_id
+                )));
+            }
+            if admission_state.grants.contains_key(grant.grant_id.as_str()) {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} was already issued",
+                    grant.grant_id
+                )));
+            }
+            let record = journal.append(JournalEvent::CapabilityGranted { grant }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
+    /// Admit an action through the daemon-owned policy path and append the
+    /// proposal plus policy decision under one per-session writer lock.
+    pub fn admit_action(
+        &self,
+        session_id: &str,
+        manifest: ActionManifest,
+    ) -> DaemonResult<AdmissionOutcome> {
+        self.with_session_lock(session_id, || {
+            if manifest.session_id != session_id {
+                return Err(DaemonError::Refused(format!(
+                    "manifest session {} does not match daemon session {session_id}",
+                    manifest.session_id
+                )));
+            }
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let existing_proposal = admission_state.proposals.get(manifest.action_id.as_str());
+            if admission_state
+                .decided_actions
+                .contains(manifest.action_id.as_str())
+            {
+                return Err(DaemonError::Refused(format!(
+                    "action {} already has a policy decision",
+                    manifest.action_id
+                )));
+            }
+            if let Some(proposal) = existing_proposal
+                && proposal.manifest != manifest
+            {
+                return Err(DaemonError::Refused(format!(
+                    "action {} was already proposed with a different manifest",
+                    manifest.action_id
+                )));
+            }
+
+            let now = Utc::now();
+            let ctx = AdmissionContext {
+                now,
+                actor_id: admission_state.session.agent_id,
+                session_id: admission_state.session.session_id,
+                policy_version: DAEMON_POLICY_VERSION.to_string(),
+                grants: admission_state.grants.into_values().collect(),
+                approvals: Vec::new(),
+                simulations: Vec::new(),
+                mandates: Vec::new(),
+                revoked_handles: BTreeSet::new(),
+            };
+            let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
+            let mut records_to_write = Vec::new();
+            let proposal_record = if let Some(proposal) = existing_proposal {
+                proposal.record.clone()
+            } else {
+                let record = journal.append(JournalEvent::ActionProposed { manifest }, now)?;
+                records_to_write.push(record.clone());
+                record
+            };
+            let decision_record = journal.append(
+                JournalEvent::PolicyDecided {
+                    decision: decision.clone(),
+                },
+                now,
+            )?;
+            records_to_write.push(decision_record.clone());
+            journal.verify_chain()?;
+            self.write_journal_records_unlocked(session_id, records_to_write.iter())?;
+            Ok(AdmissionOutcome {
+                proposal_record,
+                decision_record,
+                decision,
+            })
         })
     }
 
@@ -192,11 +340,23 @@ impl Store {
         session_id: &str,
         record: &JournalRecord,
     ) -> DaemonResult<()> {
-        let line = serde_json::to_string(record)?;
+        self.write_journal_records_unlocked(session_id, [record])
+    }
+
+    fn write_journal_records_unlocked<'a>(
+        &self,
+        session_id: &str,
+        records: impl IntoIterator<Item = &'a JournalRecord>,
+    ) -> DaemonResult<()> {
+        let mut batch = String::new();
+        for record in records {
+            batch.push_str(&serde_json::to_string(record)?);
+            batch.push('\n');
+        }
         let mut file = OpenOptions::new()
             .append(true)
             .open(self.journal_path(session_id)?)?;
-        writeln!(file, "{line}")?;
+        file.write_all(batch.as_bytes())?;
         Ok(())
     }
 
@@ -372,4 +532,63 @@ fn ensure_genesis(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<(
             "session {session_id} journal does not start with SessionCreated"
         ))),
     }
+}
+
+struct AdmissionState {
+    session: AgentSession,
+    grants: BTreeMap<String, CapabilityGrant>,
+    proposals: BTreeMap<String, ProposedAction>,
+    decided_actions: BTreeSet<String>,
+}
+
+struct ProposedAction {
+    record: JournalRecord,
+    manifest: ActionManifest,
+}
+
+fn admission_state_from_journal(
+    session_id: &str,
+    journal: &InMemoryJournal,
+) -> DaemonResult<AdmissionState> {
+    let mut session = None;
+    let mut grants = BTreeMap::new();
+    let mut proposals = BTreeMap::new();
+    let mut decided_actions = BTreeSet::new();
+    for record in journal.records() {
+        match &record.event {
+            JournalEvent::SessionCreated { session: created } => {
+                session = Some(created.clone());
+            }
+            JournalEvent::CapabilityGranted { grant } => {
+                grants.insert(grant.grant_id.clone(), grant.clone());
+            }
+            JournalEvent::ActionProposed { manifest } => {
+                proposals.insert(
+                    manifest.action_id.clone(),
+                    ProposedAction {
+                        record: record.clone(),
+                        manifest: manifest.clone(),
+                    },
+                );
+            }
+            JournalEvent::PolicyDecided { decision } => {
+                decided_actions.insert(decision.action_id.clone());
+            }
+            JournalEvent::ReceiptAppended { .. }
+            | JournalEvent::MemoryWritten { .. }
+            | JournalEvent::ScenarioEvaluated { .. }
+            | JournalEvent::IncidentAnnotated { .. } => {}
+        }
+    }
+    let session = session.ok_or_else(|| {
+        DaemonError::Refused(format!(
+            "session {session_id} journal has no SessionCreated event"
+        ))
+    })?;
+    Ok(AdmissionState {
+        session,
+        grants,
+        proposals,
+        decided_actions,
+    })
 }

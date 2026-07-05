@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
     CapabilityScope, CapabilitySelector, DecisionResult, DelegationMode, GrantConstraints,
-    JournalEvent, PolicyDecision, ResourceKind, RiskClass, SessionStatus,
+    JournalEvent, ResourceKind, RiskClass, SessionStatus,
 };
 use beater_osd::{DaemonError, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
@@ -63,7 +63,7 @@ fn grant(session_id: &str, index: usize) -> CapabilityGrant {
         scope: CapabilityScope {
             selector: CapabilitySelector {
                 resource_kind: ResourceKind::FilePath,
-                resource_id: format!("/workspace/{index}"),
+                resource_id: "/workspace/out".to_string(),
             },
             actions: BTreeSet::from([ActionKind::Read, ActionKind::Write]),
         },
@@ -118,7 +118,7 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
         inputs_summary: "write output".to_string(),
         expected_outputs: Vec::new(),
         expected_side_effects: BTreeSet::new(),
-        required_grants: BTreeSet::new(),
+        required_grants: BTreeSet::from(["grant-0".to_string()]),
         requested_budget: Budget::default(),
         risk_class: RiskClass::Low,
         data_classes: BTreeSet::new(),
@@ -129,38 +129,13 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
     }
 }
 
-fn decision(manifest: &ActionManifest) -> PolicyDecision {
-    PolicyDecision {
-        decision_id: format!("decision-{}", manifest.action_id),
-        action_id: manifest.action_id.clone(),
-        manifest_hash: manifest.digest().unwrap(),
-        policy_version: "beateros-policy-v0".to_string(),
-        result: DecisionResult::Allowed,
-        matched_rules: vec!["test".to_string()],
-        explanation: "test allowed".to_string(),
-        required_review: None,
-        required_simulation: None,
-        created_at: Utc::now(),
-    }
-}
-
 fn append_allowed_action(store: &Store, session_id: &str, action_id: &str) {
     let manifest = manifest(session_id, action_id);
-    let decision = decision(&manifest);
     store
-        .append_event(
-            session_id,
-            JournalEvent::ActionProposed { manifest },
-            Utc::now(),
-        )
+        .issue_grant(session_id, grant(session_id, 0), Utc::now())
         .unwrap();
-    store
-        .append_event(
-            session_id,
-            JournalEvent::PolicyDecided { decision },
-            Utc::now(),
-        )
-        .unwrap();
+    let outcome = store.admit_action(session_id, manifest).unwrap();
+    assert_eq!(outcome.decision.result, DecisionResult::Allowed);
 }
 
 #[test]
@@ -178,13 +153,7 @@ fn concurrent_appends_serialize_without_forking_the_chain() {
         let barrier = Arc::clone(&barrier);
         handles.push(thread::spawn(move || {
             barrier.wait();
-            store.append_event(
-                session_id,
-                JournalEvent::CapabilityGranted {
-                    grant: grant(session_id, index),
-                },
-                Utc::now(),
-            )
+            store.issue_grant(session_id, grant(session_id, index), Utc::now())
         }));
     }
 
@@ -223,8 +192,9 @@ fn held_session_lock_times_out_fail_closed() {
 
     let result = store.append_event(
         session_id,
-        JournalEvent::CapabilityGranted {
-            grant: grant(session_id, 0),
+        JournalEvent::IncidentAnnotated {
+            incident_id: "incident-lock".to_string(),
+            note: "blocked on held lock".to_string(),
         },
         Utc::now(),
     );
@@ -253,8 +223,9 @@ fn held_session_lock_timeout_is_not_extended_by_poll_interval() {
     let started = Instant::now();
     let result = store.append_event(
         session_id,
-        JournalEvent::CapabilityGranted {
-            grant: grant(session_id, 0),
+        JournalEvent::IncidentAnnotated {
+            incident_id: "incident-lock-bound".to_string(),
+            note: "blocked on held lock".to_string(),
         },
         Utc::now(),
     );
