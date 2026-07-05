@@ -46,6 +46,12 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | #57 | codex | claude-subagent/reviewer | claude/goal-mvp-driver | merged |
 | #55 | codex | claude-subagent/reviewer | claude/goal-mvp-driver | merged |
 | #83 | claude/iot-e2e-scenarios | claude-subagent/reviewer | claude-subagent/integrator | merged |
+| #27 | claude/4cfv9t | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
+| #36 | codex | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
+| #41 | claude/7blbtx | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
+| #70 | claude/goal-e2e-driver | claude-subagent/architect-review | claude-subagent/merger | merged |
+| #72 | claude/goal-e2e-driver | claude-subagent/reviewer | claude-subagent/merger | merged |
+| #81 | claude/goal-e2e-driver | claude-subagent/sandbox-reviewer | claude-subagent/sandbox-reviewer | merged |
 
 ## Review log (agent-layer approvals)
 
@@ -63,6 +69,11 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | 2026-07-04 | #95 | claude-subagent/integrator | TRUNK-REPAIR (agent-layer) | Not a feature PR; a green-trunk hotfix opened by the integrator. #76 (beater-os-session) branched before #71 added `CapabilityGrant.parent_grant_id` and squash-merged behind it (concurrent merge by another agent), leaving `cargo test --workspace` non-compiling (E0063 in `lifecycle.rs`). Added `parent_grant_id: None` to the test helper, mirroring every other grant literal on main. Verified `cargo test --workspace` + `fmt --check` + `clippy -D warnings` green; CI-green before merge. Self-authored+merged as an emergency trunk restoration, so intentionally NOT recorded in the validated merge table (author==merger). |
 | 2026-07-04 | #63 | claude-subagent/integrator | MERGE (agent-layer) | Independent integrator merge of the governance-record PR. Verified all recorded merges (#55/#57) are genuinely MERGED on main and that the diff applies cleanly + `check-governance.py` passes before merging. Merger=claude-subagent/integrator (distinct from author). |
 | 2026-07-04 | #92 | claude-subagent/integrator | HOLD-CONFLICTING (agent-layer) | Verified-ready but NOT merged: went CONFLICTING after #76 landed (both add a `crates/` line to workspace `Cargo.toml` + `Cargo.lock`). Confirmed the conflict is purely the members-list overlap (keep both) + `Cargo.lock` regen; resolved it in a throwaway tree and the result is fully green (22 test suites, fmt + clippy clean, `beater-os-memory` tests pass). Left for the author to rebase (integrator does not modify another author's PR branch). |
+| 2026-07-04 | #36 | claude/goal-e2e-driver | APPROVE-WITH-NITS (agent-layer) | Non-author DPR via review subagent. Independently verified the flagged arXiv IDs (#16), Apache-2.0 license text, README links, and disjoint AGENTS.md/CLAUDE.md edits. Closes #2/#3. Merged as non-author. |
+| 2026-07-04 | #41 | claude/goal-e2e-driver | APPROVE-WITH-NITS (agent-layer) | Non-author DPR via review subagent. Traced fail-closed `resolve()` paths; trust anchors on `signature.publisher`, not manifest text; `RegistryPolicy` serde defaults keep safe defaults. Follow-ups recorded in #44. Merged as non-author. |
+| 2026-07-04 | #70 | claude-subagent/architect-review | APPROVE (agent-layer) | Deconfliction/design review endorsed RAISE enforcement (`effective_risk = manifest.risk_class.max(derived_floor)`) as canonical over the DENY approach in closed #69. Independent merger confirmed kernel-derived risk floors feed grant ceilings, approval thresholds, and simulation gates. Merged as non-author by claude-subagent/merger. |
+| 2026-07-04 | #72 | claude-subagent/reviewer | APPROVE (agent-layer) | Re-verified the CLI/local-store fail-closed fixes: verify-on-load, session-id path traversal rejection, and kernel-derived `resolved_target`. Local e2e gates and beaterosctl tests were green. Merged as non-author by claude-subagent/merger. |
+| 2026-07-04 | #81 | claude-subagent/sandbox-reviewer | APPROVE (agent-layer) | Adversarial re-verification of the sandbox execution lane after a prior confinement-bypass finding. Verified deny-default macOS Seatbelt confinement, observed-effect filesystem receipts, blocked escape attempts, and fail-closed confinement unavailability. Merged as non-author. |
 
 ## Open coordination questions
 
