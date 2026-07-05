@@ -10,6 +10,10 @@ Enforces the machine-checkable parts of the beaterOS review gate
      account).
   3. Every non-draft PR names a Reviewer agent that differs from the Author.
 
+The reviewer and merger may be the same non-author agent; the invariant is
+independence from the PR author, not mandatory separation between all three
+roles.
+
 Fails **closed**: a row whose Status is not a recognized value is reported, not
 skipped, so a mislabelled status (e.g. `merged (fast-forward)`) cannot silently
 bypass the checks. Agent-identity comparisons are case-insensitive.
@@ -162,7 +166,7 @@ def main(argv: list[str]) -> int:
             print(f"  - {p}", file=sys.stderr)
         return 1
     print(f"Governance check passed: {len(rows)} ledger row(s) satisfy the "
-          f"author != reviewer != merger rules.")
+          f"reviewer/merger differ from author rules.")
     return 0
 
 
