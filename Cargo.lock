@@ -82,6 +82,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-osd"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "chrono",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "beaterosctl"
 version = "0.1.0"
 dependencies = [
