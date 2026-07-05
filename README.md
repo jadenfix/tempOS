@@ -75,3 +75,11 @@ non-author. Do not shorten or weaken [final.md](final.md) while implementing it.
 ## License
 
 beaterOS is licensed under the [Apache License 2.0](LICENSE).
+
+## Ecosystem
+
+beaterOS is part of the [ecosystem](https://github.com/jadenfix/ecosystem) — a family of Rust-first, local-first agent-infrastructure projects. It is fully standalone: the kernel contracts, policy engine, and conformance suite are usable by any agent runtime. Within the family it is the governance spine, with designed-for connections (each lands only with a real consumer) for:
+
+- policy and authority over agents running in [beater.js](https://github.com/jadenfix/beater.js) and browsing via [tempo](https://github.com/jadenfix/tempo)
+- sandboxed side effects through [beatbox](https://github.com/jadenfix/beatbox) and memory provenance through [beater-memory](https://github.com/jadenfix/beater-memory)
+- emitting receipts and audit journals into [beater](https://github.com/jadenfix/beater) for observation and eval gating, with optional on-chain attestation anchoring on [aether](https://github.com/jadenfix/aether) at the frontier
