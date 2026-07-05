@@ -20,6 +20,9 @@ authority and audit boundaries, not merely as serialization types.
 - `Cargo.toml` is the Rust workspace.
 - `crates/beater-os-core` contains core contracts, policy admission, hashing,
   journal verification, and receipt-chain logic.
+- `crates/beater-os-sandbox` is the scoped local execution lane: canonicalized
+  filesystem confinement, scrubbed environment, bounded execution, and
+  filesystem-diff receipts (final.md §8, §13.8).
 - `docs/implementation-backlog.md` maps `final.md` into PR-sized slices and
   review rules.
 - `docs/sota-systems-engineering.md` is the performance, language, security, and

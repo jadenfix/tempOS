@@ -4,8 +4,8 @@ use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
     ApprovalRequirement, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
     CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
-    GrantConstraints, InMemoryJournal, JournalEvent, PolicyDecision, PolicyEngine, ReceiptLedger,
-    ResourceKind, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
+    GrantConstraints, InMemoryJournal, JournalEvent, PaymentMandate, PolicyDecision, PolicyEngine,
+    ReceiptLedger, ResourceKind, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
 };
 use chrono::{Duration, TimeZone, Utc};
 
@@ -37,6 +37,7 @@ fn grant_for_file(now: chrono::DateTime<Utc>) -> CapabilityGrant {
         issuer: "user:jaden".to_string(),
         holder: "agent:beater-os".to_string(),
         session_id: "session-1".to_string(),
+        parent_grant_id: None,
         scope: CapabilityScope {
             selector: CapabilitySelector {
                 resource_kind: ResourceKind::FilePath,
@@ -71,6 +72,26 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         grants,
         approvals: Vec::new(),
         simulations: Vec::new(),
+        mandates: Vec::new(),
+        revoked_handles: BTreeSet::new(),
+    }
+}
+
+fn mandate_for_spend(now: chrono::DateTime<Utc>) -> PaymentMandate {
+    PaymentMandate {
+        mandate_id: "mandate-1".to_string(),
+        issuer: "user:jaden".to_string(),
+        holder: "agent:beater-os".to_string(),
+        session_id: "session-1".to_string(),
+        rail: "stablecoin:x402".to_string(),
+        asset: "USDC".to_string(),
+        max_minor_units: 1_000,
+        counterparty_policy: "allowlist:vendors".to_string(),
+        purpose: "vendor payment".to_string(),
+        expires_at: now + Duration::hours(1),
+        approval_threshold_minor_units: 10_000,
+        idempotency_key: "pay-once".to_string(),
+        receipt_requirement: "required".to_string(),
     }
 }
 
@@ -154,6 +175,80 @@ fn policy_requires_narrowed_grant_for_over_risk_action() {
     let ctx = admission_context(now, vec![grant_for_file(now)]);
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+fn root_grant(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-parent".to_string();
+    grant.revocation_handle = "revoke:grant-parent".to_string();
+    grant
+}
+
+fn delegated_child(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    // Reuses the repo grant (id grant-read-repo, holder agent:beater-os), now
+    // delegated from grant-parent so its liveness depends on the parent's.
+    let mut grant = grant_for_file(now);
+    grant.parent_grant_id = Some("grant-parent".to_string());
+    grant
+}
+
+#[test]
+fn policy_admits_delegated_grant_when_whole_chain_is_live() {
+    let now = fixed_time();
+    let ctx = admission_context(now, vec![root_grant(now), delegated_child(now)]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"grant_delegation_chain_active".to_string())
+    );
+}
+
+#[test]
+fn policy_denies_delegated_grant_when_parent_is_revoked_through_registry() {
+    // Revoking the parent's handle out of band transitively kills the child,
+    // even though the child's own `revoked` flag is still false (#10 §6.2).
+    let now = fixed_time();
+    let mut ctx = admission_context(now, vec![root_grant(now), delegated_child(now)]);
+    ctx.revoked_handles = set(["revoke:grant-parent".to_string()]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("delegation ancestors"));
+}
+
+#[test]
+fn policy_denies_delegated_grant_when_parent_is_expired() {
+    let now = fixed_time();
+    let mut parent = root_grant(now);
+    parent.expires_at = now - Duration::minutes(1);
+    let ctx = admission_context(now, vec![parent, delegated_child(now)]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_denies_delegated_grant_when_named_parent_is_missing() {
+    // The child names a parent that is not in the admission context: its
+    // liveness is unknown, so admission fails closed rather than assuming live.
+    let now = fixed_time();
+    let ctx = admission_context(now, vec![delegated_child(now)]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_denies_delegation_chain_with_a_cycle() {
+    let now = fixed_time();
+    let mut child = grant_for_file(now);
+    child.parent_grant_id = Some("grant-cycle".to_string());
+    let mut cycle = grant_for_file(now);
+    cycle.grant_id = "grant-cycle".to_string();
+    cycle.revocation_handle = "revoke:grant-cycle".to_string();
+    cycle.parent_grant_id = Some("grant-read-repo".to_string());
+    let ctx = admission_context(now, vec![child, cycle]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
 }
 
 #[test]
@@ -278,6 +373,7 @@ fn policy_requires_review_for_untrusted_payment_instruction() {
     };
     manifest.expected_side_effects = set([SideEffectClass::Payment]);
     manifest.required_grants = set(["grant-spend".to_string()]);
+    manifest.requested_budget.max_payment_minor_units = Some(100);
     manifest.risk_class = RiskClass::Critical;
     manifest.taint = set([TaintLabel::UntrustedWeb]);
     manifest.idempotency_key = Some("pay-once".to_string());
@@ -293,7 +389,8 @@ fn policy_requires_review_for_untrusted_payment_instruction() {
         threshold_risk: RiskClass::High,
         reviewer_ids: vec!["user:jaden".to_string()],
     };
-    let ctx = admission_context(now, vec![grant]);
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.mandates = vec![mandate_for_spend(now)];
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsApproval);
     assert!(decision.explanation.contains("untrusted content"));
@@ -325,8 +422,102 @@ fn policy_requires_explicit_review_for_untrusted_payment_even_when_grant_has_no_
     grant.constraints.budget.max_payment_minor_units = Some(100);
     grant.approval = ApprovalRequirement::default();
 
-    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsApproval);
+}
+
+fn spend_manifest() -> ActionManifest {
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Spend;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::PaymentRail,
+        resource_id: "stablecoin:x402".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Payment]);
+    manifest.required_grants = set(["grant-spend".to_string()]);
+    manifest.requested_budget.max_payment_minor_units = Some(100);
+    manifest.data_classes = set([DataClass::Financial]);
+    manifest.risk_class = RiskClass::Critical;
+    manifest.idempotency_key = Some("pay-once".to_string());
+    manifest
+}
+
+fn grant_spend(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-spend".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::PaymentRail;
+    grant.scope.selector.resource_id = "stablecoin:x402".to_string();
+    grant.scope.actions = set([ActionKind::Spend]);
+    grant.constraints.max_risk = Some(RiskClass::Critical);
+    grant.constraints.max_data_class = Some(DataClass::Financial);
+    grant
+}
+
+#[test]
+fn policy_denies_payment_when_no_mandate_is_present() {
+    // §12.7: grants authorize the act of spending, but with no PaymentMandate
+    // the money is unauthorized. Fail closed even though the grant allows Spend.
+    let now = fixed_time();
+    let ctx = admission_context(now, vec![grant_spend(now)]);
+    assert!(ctx.mandates.is_empty());
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("PaymentMandate"));
+}
+
+#[test]
+fn policy_denies_payment_exceeding_the_mandate_ceiling() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.max_minor_units = 50; // manifest asks for 100
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("covering the amount"));
+}
+
+#[test]
+fn policy_denies_payment_with_undeclared_amount() {
+    // A payment that does not state how much it moves cannot be bounded.
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest.requested_budget.max_payment_minor_units = None;
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("declare its amount"));
+}
+
+#[test]
+fn policy_denies_payment_when_mandate_is_bound_to_another_session() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.session_id = "session-other".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_admits_payment_backed_by_mandate_then_gates_on_simulation() {
+    // A covered payment passes the mandate gate (rule recorded) and proceeds to
+    // the pre-existing high-risk-external-effect simulation gate.
+    let now = fixed_time();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"payment_authorized_by_mandate".to_string())
+    );
 }
 
 #[test]
@@ -952,6 +1143,9 @@ fn policy_derives_high_risk_floor_when_agent_declares_low_on_payment() {
     manifest.data_classes = BTreeSet::new();
     manifest.risk_class = RiskClass::Low;
     manifest.idempotency_key = Some("pay-once".to_string());
+    // A real payment needs a mandate (#73); supply one so the *risk floor*,
+    // not the mandate gate, is what this test exercises.
+    manifest.requested_budget.max_payment_minor_units = Some(100);
     let mut grant = grant_for_file(now);
     grant.grant_id = "grant-spend".to_string();
     grant.scope.selector.resource_kind = ResourceKind::PaymentRail;
@@ -962,7 +1156,9 @@ fn policy_derives_high_risk_floor_when_agent_declares_low_on_payment() {
     grant.constraints.max_data_class = Some(DataClass::Financial);
     grant.approval = ApprovalRequirement::default();
 
-    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
     assert_ne!(
         decision.result,
         DecisionResult::Allowed,

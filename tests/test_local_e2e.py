@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -19,7 +20,7 @@ _spec.loader.exec_module(local_e2e)
 
 class PlanTest(unittest.TestCase):
     def test_plan_runs_existing_gates_in_stable_order(self) -> None:
-        plan = local_e2e.build_plan("python3")
+        plan = local_e2e.build_plan("python3", branch_base_available=True)
         self.assertEqual(
             [(gate.name, gate.command) for gate in plan],
             [
@@ -59,6 +60,22 @@ class PlanTest(unittest.TestCase):
                 ),
             ],
         )
+
+
+    def test_branch_whitespace_uses_origin_main_when_available(self) -> None:
+        plan = local_e2e.build_plan("python3", branch_base_available=True)
+        branch = next(gate for gate in plan if gate.name == "branch-whitespace")
+        self.assertEqual(branch.command, ("git", "diff", "--check", "origin/main...HEAD"))
+
+    def test_branch_whitespace_skips_when_origin_main_missing(self) -> None:
+        # #62: a fresh/shallow clone has no origin/main ref; the gate must degrade
+        # to a passing skip rather than error on the unknown ref.
+        plan = local_e2e.build_plan("python3", branch_base_available=False)
+        branch = next(gate for gate in plan if gate.name == "branch-whitespace")
+        self.assertEqual(branch.command[:2], ("python3", "-c"))
+        completed = subprocess.run(branch.command, capture_output=True, check=False)
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn(b"skipped", completed.stdout)
 
 
 class RunnerTest(unittest.TestCase):

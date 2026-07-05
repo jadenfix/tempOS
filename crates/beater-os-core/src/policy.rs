@@ -1,11 +1,12 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::contracts::{
     ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DataClass,
-    DecisionResult, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
+    DecisionResult, PaymentMandate, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence,
+    TaintLabel,
 };
 use crate::error::BeaterOsResult;
 use crate::hash::HashValue;
@@ -19,6 +20,17 @@ pub struct AdmissionContext {
     pub grants: Vec<CapabilityGrant>,
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
+    /// Economic-authority objects available to this action (issue #73;
+    /// `final.md` §12.7 "no payment without a mandate"). A payment action is
+    /// admitted only if one of these mandates covers it. Grants authorize the
+    /// *act* of spending; a mandate authorizes the *money*.
+    pub mandates: Vec<PaymentMandate>,
+    /// Revocation registry: the set of `revocation_handle`s revoked out of band
+    /// (issue #10). This is the monotonic revocation epoch — it only grows, so
+    /// admission is deterministic under replay. A grant counts as revoked if its
+    /// own `revoked` flag is set *or* its handle is in this set, and a grant is
+    /// only exercisable while its whole delegation chain is unrevoked.
+    pub revoked_handles: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -106,6 +118,23 @@ impl PolicyEngine {
             ));
         }
 
+        if is_payment_action(manifest)
+            && let Err(reason) = payment_authorized_by_mandate(manifest, ctx)
+        {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                reason,
+                DecisionFollowup::none(),
+            ));
+        }
+        if is_payment_action(manifest) {
+            matched_rules.push("payment_authorized_by_mandate".to_string());
+        }
+
         let matching_grants: Vec<&CapabilityGrant> = ctx
             .grants
             .iter()
@@ -123,6 +152,27 @@ impl PolicyEngine {
             ));
         }
         matched_rules.push("required_grants_available".to_string());
+
+        let grants_by_id: BTreeMap<&str, &CapabilityGrant> = ctx
+            .grants
+            .iter()
+            .map(|grant| (grant.grant_id.as_str(), grant))
+            .collect();
+        if !matching_grants
+            .iter()
+            .all(|grant| grant_chain_effectively_active(grant, ctx, &grants_by_id))
+        {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                "a required grant or one of its delegation ancestors is revoked, expired, or missing",
+                DecisionFollowup::none(),
+            ));
+        }
+        matched_rules.push("grant_delegation_chain_active".to_string());
 
         let allowed = matching_grants
             .iter()
@@ -266,6 +316,84 @@ pub fn derived_risk_floor(
     }
 
     floor
+}
+
+/// An action moves money if it declares a payment side effect or uses the spend
+/// verb. Both are treated as payments so a spend cannot dodge mandate review by
+/// omitting the `Payment` side-effect label (the same anti-laundering stance as
+/// issues #46 and #8).
+fn is_payment_action(manifest: &ActionManifest) -> bool {
+    manifest
+        .expected_side_effects
+        .contains(&SideEffectClass::Payment)
+        || manifest.action_kind == ActionKind::Spend
+}
+
+/// Enforce `final.md` §12.7 "no payment without a mandate" (issue #73). Grants
+/// authorize the act of spending; a `PaymentMandate` authorizes the money. A
+/// payment is admitted only if a mandate, bound to this session and holder and
+/// still active, covers the declared amount. The amount must be declared — a
+/// payment that does not state how much it moves cannot be bounded, so it fails
+/// closed ("no silent mandate expansion").
+///
+/// This slice binds the axes the current contracts express unambiguously:
+/// presence, session/holder binding, expiry, and the amount ceiling.
+/// Counterparty, asset, and purpose binding need manifest fields that do not yet
+/// exist and are a documented follow-up (see docs/design/payment-mandate-admission.md).
+fn payment_authorized_by_mandate(
+    manifest: &ActionManifest,
+    ctx: &AdmissionContext,
+) -> Result<(), &'static str> {
+    let Some(amount) = manifest.requested_budget.max_payment_minor_units else {
+        return Err(
+            "payment action must declare its amount in requested_budget.max_payment_minor_units",
+        );
+    };
+    let covered = ctx.mandates.iter().any(|mandate| {
+        mandate.session_id == ctx.session_id
+            && mandate.holder == ctx.actor_id
+            && mandate.expires_at > ctx.now
+            && amount <= mandate.max_minor_units
+    });
+    if covered {
+        Ok(())
+    } else {
+        Err(
+            "payment requires an active PaymentMandate covering the amount for this session and holder",
+        )
+    }
+}
+
+/// Walk a grant's delegation chain and return whether the whole chain is live
+/// (issue #10). A delegated grant is authority indirected through its parent, so
+/// it is exercisable only while it and every ancestor are unexpired and
+/// unrevoked — by the grant's own `revoked` flag or by the revocation registry
+/// (`ctx.revoked_handles`). Fails closed on a missing named ancestor (the parent
+/// was dropped, so its liveness is unknown) and on a cycle (bounded by a visited
+/// set), so a malformed chain can never admit an action.
+fn grant_chain_effectively_active(
+    grant: &CapabilityGrant,
+    ctx: &AdmissionContext,
+    grants_by_id: &BTreeMap<&str, &CapabilityGrant>,
+) -> bool {
+    let mut current = grant;
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    loop {
+        if !visited.insert(current.grant_id.as_str()) {
+            return false;
+        }
+        let registry_revoked = ctx.revoked_handles.contains(&current.revocation_handle);
+        if !current.is_active_at(ctx.now) || registry_revoked {
+            return false;
+        }
+        let Some(parent_id) = &current.parent_grant_id else {
+            return true;
+        };
+        let Some(parent) = grants_by_id.get(parent_id.as_str()) else {
+            return false;
+        };
+        current = parent;
+    }
 }
 
 fn dangerous_untrusted_instruction(manifest: &ActionManifest) -> bool {

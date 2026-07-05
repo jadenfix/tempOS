@@ -38,10 +38,41 @@ class GateResult:
     elapsed_s: float
 
 
-def build_plan(python: str = "python3") -> list[Gate]:
+def origin_main_available(repo_root: Path = REPO_ROOT) -> bool:
+    """Whether an `origin/main` remote-tracking ref exists locally.
+
+    Fresh or shallow clones (and CI jobs that never fetched it) have no such ref,
+    so any gate that diffs against `origin/main` must degrade rather than error.
+    """
+    completed = subprocess.run(
+        ("git", "rev-parse", "--verify", "--quiet", "origin/main"),
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def branch_whitespace_gate(python: str, *, available: bool) -> Gate:
+    """The branch-whitespace gate, tolerant of a missing `origin/main` ref (#62).
+
+    With the ref present, check whitespace across the branch's diff from main.
+    Without it, `git diff origin/main...HEAD` would fail on the unknown ref
+    rather than reflect real content, so skip with a note: the worktree-whitespace
+    gate (`git diff HEAD --check`) already covers the local working tree.
+    """
+    if available:
+        return Gate("branch-whitespace", ("git", "diff", "--check", "origin/main...HEAD"))
+    note = "branch-whitespace skipped: origin/main not available (worktree-whitespace covers local content)"
+    return Gate("branch-whitespace", (python, "-c", f"print({note!r})"))
+
+
+def build_plan(python: str = "python3", *, branch_base_available: bool | None = None) -> list[Gate]:
+    if branch_base_available is None:
+        branch_base_available = origin_main_available()
     return [
         Gate("worktree-whitespace", ("git", "diff", "HEAD", "--check")),
-        Gate("branch-whitespace", ("git", "diff", "--check", "origin/main...HEAD")),
+        branch_whitespace_gate(python, available=branch_base_available),
         Gate("final-integrity", (python, "scripts/check-final-integrity.py")),
         Gate(
             "governance-ledger",

@@ -11,6 +11,7 @@
     "issuer": { "type": "string" },
     "holder": { "type": "string", "description": "Principal that receives authority; must equal the acting agent_id at admission." },
     "session_id": { "type": "string" },
+    "parent_grant_id": { "type": "string", "description": "Grant this one was delegated from. A delegated grant is exercisable only while its whole ancestor chain is unrevoked, so revoking a parent transitively revokes it. Absent for a root grant. final.md §6.2." },
     "scope": { "$ref": "common.schema.json#/$defs/capability_scope" },
     "denied_actions": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/action_kind" }, "uniqueItems": true },
     "constraints": { "$ref": "common.schema.json#/$defs/grant_constraints" },

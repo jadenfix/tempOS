@@ -36,6 +36,7 @@ fn grant_with_constraints(constraints: GrantConstraints) -> CapabilityGrant {
         issuer: "user:jaden".to_string(),
         holder: "agent:x".to_string(),
         session_id: "s1".to_string(),
+        parent_grant_id: None,
         scope: CapabilityScope {
             selector: repo_path(),
             actions: set([ActionKind::Read]),

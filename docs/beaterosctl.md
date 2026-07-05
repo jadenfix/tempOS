@@ -37,6 +37,7 @@ from `beater-os-core` and re-verifies them; nothing is ever rewritten in place.
 | `session show` | Summarize one session's grants, actions, decisions, receipts. |
 | `grant issue` | Issue a scoped `CapabilityGrant` and journal `CapabilityGranted`. |
 | `action propose` | Journal an `ActionProposed`, run policy admission, journal `PolicyDecided`. |
+| `action execute` | Run a scoped shell action through the **sandbox execution lane**: canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
 | `receipt record` | Record a `CapabilityReceipt` for an **admitted** action (fails closed otherwise). |
 | `journal verify` | Verify the journal and receipt hash chains and causality. |
 | `trace show` | Render the full trace: session, grants, actions, decisions, receipts. |
@@ -85,6 +86,58 @@ $ beaterosctl trace show --session demo
 ...
 ```
 
+## Sandbox execution lane
+
+`action execute` is the mediation point that actually **runs** an admitted
+action, confined and fail-closed, via the `beater-os-sandbox` crate (final.md §8,
+§10.6, §13.8). Where `action propose` only journals a policy decision,
+`action execute` turns an `Allowed` decision into a real OS process and emits a
+filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
+
+1. **Canonicalize + confine.** The sandbox resolves `--cwd` with realpath
+   (`std::fs::canonicalize`, following every symlink) and rejects it if it
+   escapes the confinement prefix. The confinement prefix is derived from the
+   **named grants' authority** (their `path_prefixes` plus any concrete file-path
+   resource), never from an agent-supplied flag, so an agent cannot widen its own
+   sandbox. The canonical path becomes the kernel-derived `resolved_target`
+   (§7.4). A symlink escape or a grant with no filesystem confinement aborts
+   before anything is journaled or executed.
+2. **Admit.** An `ActionManifest` (`action_kind = execute`, kernel-derived
+   `resolved_target`) is admitted by `PolicyEngine` — no admission logic in the
+   CLI. `ActionProposed` and `PolicyDecided` are journaled.
+3. **Execute only if `Allowed`.** The confined child runs with a **scrubbed
+   environment** (`env_clear` + a minimal `PATH` — no inherited secrets), a
+   **wall-clock timeout**, and **capped** stdout/stderr. Otherwise the decision
+   is printed and nothing runs.
+4. **Filesystem-diff receipt.** The confined directory is snapshotted (path ->
+   SHA-256) before and after; the created/modified/deleted diff is the observed
+   side effect. A `CapabilityReceipt` (input digest = command+args, output digest
+   = captured stdout, side-effect summary = the diff) is journaled as
+   `ReceiptAppended` and persisted — reusing the same store path as
+   `receipt record`, so no receipt can exist without a prior `Allowed` decision.
+
+```console
+# Execute grant confined to a canonical work directory.
+$ beaterosctl grant issue --session demo --resource-kind file_path \
+    --resource-id '*' --actions execute --path-prefix /abs/work
+issued grant <grant-id>
+
+$ beaterosctl action execute --session demo --tool shell \
+    --command sh --arg -c --arg 'printf hi > out.txt' \
+    --cwd /abs/work --grants <grant-id> --side-effects local_write
+action <id>
+  decision:    Allowed
+  resolved:    /abs/work
+  execution:   ok
+  fs-diff:     created=["out.txt"] modified=[] deleted=[]
+  receipt:     <receipt-id> hash=<...>
+```
+
+Number of sandbox lanes is a compromise beaterOS accepts (§26); this is the
+single portable local lane. Network isolation, seccomp/AppArmor/cgroups, and
+container/VM lanes (§10.6, §13.8) are explicit future targets, not silently
+assumed here.
+
 ## Invariants preserved
 
 - **No ambient authority.** An action with no matching grant is never admitted.
@@ -101,7 +154,9 @@ $ beaterosctl trace show --session demo
 ## Scope boundary
 
 This crate deliberately does **not** implement session lifecycle transitions
-(pause/resume/cancel), sandboxed execution, or tool registration. Those are
-separate backlog slices (`session-runtime`, `sandbox-shell-lane`,
-`tool-registry`). When the `beater-osd` runtime lands, `beaterosctl` should
-delegate session mutation to it rather than journaling transitions directly.
+(pause/resume/cancel) or tool registration. Those are separate backlog slices
+(`session-runtime`, `tool-registry`). The scoped shell **sandbox lane** is now
+implemented (`action execute`, via `beater-os-sandbox`); richer lanes (network,
+container/VM, browser) remain future targets. When the `beater-osd` runtime
+lands, `beaterosctl` should delegate session mutation to it rather than
+journaling transitions directly.
