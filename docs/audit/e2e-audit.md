@@ -19,8 +19,13 @@ that audit pass.
 ## Status Update (2026-07-05) — most findings have landed
 
 Since this audit, the fleet has advanced `main` well past planning-only. `main`
-now carries a Rust workspace (`crates/beater-os-core`, `crates/beaterosctl`),
-contract JSON Schemas (`contracts/`, `spec/`), a conformance suite + tests,
+now carries a Rust workspace for core contracts, session lifecycle, durable
+single-writer daemon storage, sandbox execution, operator CLI, offline audit,
+tool registry, and memory projection (`crates/beater-os-core`,
+`crates/beater-os-session`, `crates/beater-osd`, `crates/beater-os-sandbox`,
+`crates/beaterosctl`, `crates/beater-os-audit`,
+`crates/beater-os-tool-registry`, `crates/beater-os-memory`), contract JSON
+Schemas (`contracts/`, `spec/`), a conformance suite + tests,
 security/IoT/resilience scenarios, example traces, governance docs, a source
 matrix, an open-questions doc, a threat model, and a LICENSE.
 
