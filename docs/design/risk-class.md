@@ -63,8 +63,9 @@ risk).
 2. **Model-independence:** `derived_risk_floor` reads only typed
    `action_kind`/`side_effects`/`data_classes`; identical inputs → identical floor
    regardless of prompt or model.
-3. **Consequence coupling:** `High ⇒ simulation-gated`, `≥ threshold_risk ⇒
-   approval-gated` — unchanged; the floor decides the tier, not the gate.
+3. **Consequence coupling:** `High + external side effect ⇒ simulation-gated`,
+   `≥ threshold_risk ⇒ approval-gated` — unchanged; the floor decides the tier,
+   not the gate.
 
 ## 3. Proposed refinements (NOT yet shipped — design input only)
 
