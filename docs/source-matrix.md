@@ -134,7 +134,7 @@ current-version claim.
 
 | Source | beaterOS use | Caveat |
 | --- | --- | --- |
-| Rust release blog, Rust 1.96.1, 2026-06-30: https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Current Rust release verification and Cargo/rustup update provenance | Use the repo-pinned toolchain unless a PR explicitly updates it |
+| Rust release blog, Rust 1.96.1, 2026-06-30: https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Current Rust release verification and Cargo/rustup update provenance | The workspace baseline is pinned separately in `rust-toolchain.toml`; use the newer release only when a PR explicitly justifies and measures the toolchain change |
 | LLVM project home/release page, LLVM 22.1.8, 2026-06-16: https://llvm.org/ | Compiler/backend, sanitizer, C/C++/Rust backend, and toolchain-version checks | LLVM version alone does not prove a Rust, Apple Clang, or vendor compiler behavior |
 | Zig download page, 0.16.0 release and 0.17.0-dev snapshots: https://ziglang.org/download/ | Freestanding/cross-compilation experiment tracking | Zig remains non-TCB until stability and reviewer coverage are proven |
 | Swift.org macOS install page and Swift 6.3.3 announcement: https://swift.org/install/macos/ and https://forums.swift.org/t/announcing-swift-6-3-3/87888 | Apple-native platform integration and Swift build-tooling awareness | Swift is not the beaterOS authority boundary |

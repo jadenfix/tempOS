@@ -7,6 +7,54 @@ on:
       - main
 
 jobs:
+  pr-review-packet:
+    name: PR review packet
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Check optimization packet
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          body = os.environ.get("PR_BODY", "")
+          errors = []
+
+          match = re.search(
+              r"## Optimization packet(?P<section>.*?)(?:\n## |\Z)",
+              body,
+              flags=re.IGNORECASE | re.DOTALL,
+          )
+          if not match:
+              errors.append("missing '## Optimization packet' section")
+          else:
+              section = match.group("section")
+              if re.search(r"\bN/A\b", section, flags=re.IGNORECASE):
+                  sys.exit(0)
+              required = {
+                  "hot path": r"- \[[xX]\].*hot path",
+                  "bottleneck class": r"- \[[xX]\].*bottleneck class",
+                  "baseline/target/replay/regression": r"- \[[xX]\].*baseline.*target.*replay.*regression",
+                  "toolchain versions": r"- \[[xX]\].*compiler.*runtime.*backend",
+                  "authority/fallback/rollback": r"- \[[xX]\].*authority.*fallback.*rollback",
+                  "source links/dates": r"- \[[xX]\].*source links.*dates",
+              }
+              for name, pattern in required.items():
+                  if not re.search(pattern, section, flags=re.IGNORECASE | re.DOTALL):
+                      errors.append(f"optimization packet missing checked item: {name}")
+
+          if errors:
+              print("Optimization-sensitive PRs must include a completed packet, or mark this section N/A.")
+              for error in errors:
+                  print(f"- {error}")
+              sys.exit(1)
+          PY
+
   macos:
     name: macOS Rust workspace
     runs-on: macos-latest
@@ -15,11 +63,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.93.1 --profile minimal --component clippy --component rustfmt
 
-      - name: Use stable Rust
-        run: rustup default stable
+      - name: Use pinned Rust
+        run: rustup default 1.93.1
+
+      - name: Toolchain provenance
+        run: |
+          rustc -vV
+          cargo -vV
 
       - name: Format
         run: cargo fmt --all -- --check
