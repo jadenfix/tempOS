@@ -1198,17 +1198,6 @@ fn canonical_existing_file_authority_or_lexical(field: &str, value: &str) -> Dae
     }
 }
 
-fn canonical_file_authority(field: &str, value: &str) -> DaemonResult<String> {
-    validate_absolute_lexical_file_authority(field, value)?;
-    fs::canonicalize(Path::new(value))
-        .map(|canonical| canonical.display().to_string())
-        .map_err(|err| {
-            DaemonError::Refused(format!(
-                "file grant {field} {value:?} cannot be canonicalized: {err}"
-            ))
-        })
-}
-
 fn validate_absolute_lexical_file_authority(field: &str, value: &str) -> DaemonResult<()> {
     let path = Path::new(value);
     if !path.is_absolute()
