@@ -1047,8 +1047,11 @@ mod tests {
         let work = TempDir::new("shell-selector");
         let program =
             resolve_program_path("sh", &work.path).expect("sh resolves through SAFE_PATH");
-        let profile = build_seatbelt_profile(&[work.path.clone()], std::slice::from_ref(&program))
-            .expect("profile");
+        let profile = build_seatbelt_profile(
+            std::slice::from_ref(&work.path),
+            std::slice::from_ref(&program),
+        )
+        .expect("profile");
         if let Ok(selected) = fs::canonicalize("/private/var/select/sh")
             && selected != program
         {
