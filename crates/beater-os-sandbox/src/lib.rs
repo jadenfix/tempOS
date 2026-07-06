@@ -540,10 +540,11 @@ fn resolve_program_path(command: &str, cwd: &Path) -> Option<PathBuf> {
             .find_map(|dir| std::fs::canonicalize(Path::new(dir).join(command)).ok())
     }?;
 
-    if resolved
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "sh")
+    if command == "sh"
+        && resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "sh")
         && let Ok(selected) = std::fs::canonicalize("/private/var/select/sh")
     {
         return Some(selected);
@@ -1029,6 +1030,15 @@ mod tests {
         let tool = work.path.join("tool");
         fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
         let resolved = resolve_program_path("./tool", &work.path).expect("relative tool resolves");
+        assert_eq!(resolved, fs::canonicalize(tool).unwrap());
+    }
+
+    #[test]
+    fn path_bearing_sh_is_not_rewritten_to_system_shell_selector() {
+        let work = TempDir::new("relative-sh");
+        let tool = work.path.join("sh");
+        fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
+        let resolved = resolve_program_path("./sh", &work.path).expect("relative sh resolves");
         assert_eq!(resolved, fs::canonicalize(tool).unwrap());
     }
 
