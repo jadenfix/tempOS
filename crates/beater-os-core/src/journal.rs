@@ -466,6 +466,8 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
+        JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
         JournalEvent::MemoryWritten { memory } => Some(memory.memory_id.as_str()),
         JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
