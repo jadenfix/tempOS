@@ -24,6 +24,10 @@ pub const POLICY_VERSION: &str = DAEMON_POLICY_VERSION;
 
 const DEFAULT_GRANT_TTL_SECS: u64 = 3600;
 
+fn revoked_handles(args: &ParsedArgs) -> BTreeSet<String> {
+    args.csv("revoked-handle").into_iter().collect()
+}
+
 /// Dispatch a parsed command against the store.
 pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let group = args.positional(0).unwrap_or("");
@@ -210,7 +214,9 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         expires_at,
         delegation: beater_os_core::DelegationMode::None,
         approval: Default::default(),
-        revocation_handle: Uuid::new_v4().to_string(),
+        revocation_handle: args
+            .get_or("revocation-handle", &Uuid::new_v4().to_string())
+            .to_string(),
         policy_version: POLICY_VERSION.to_string(),
         reason: args.get_or("reason", "issued via beaterosctl").to_string(),
         revoked: false,
@@ -219,12 +225,13 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     store.issue_grant(&session_id, grant.clone(), now)?;
 
     Ok(format!(
-        "issued grant {}\n  holder:  {}\n  scope:   {:?} {} -> {:?}\n  expires: {}",
+        "issued grant {}\n  holder:  {}\n  scope:   {:?} {} -> {:?}\n  revokes: {}\n  expires: {}",
         grant.grant_id,
         grant.holder,
         grant.scope.selector.resource_kind,
         grant.scope.selector.resource_id,
         grant.scope.actions,
+        grant.revocation_handle,
         grant.expires_at
     ))
 }
@@ -326,7 +333,9 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             .to_string(),
     };
 
-    let decision = store.admit_action(&session_id, manifest.clone())?.decision;
+    let decision = store
+        .admit_action_with_revoked_handles(&session_id, manifest.clone(), revoked_handles(args))?
+        .decision;
 
     let mut out = vec![
         format!("action {}", manifest.action_id),
@@ -498,7 +507,9 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
 
     // (3) The daemon store journals the proposal and policy decision under the
     // same single-writer runtime lock.
-    let decision = store.admit_action(&session_id, manifest.clone())?.decision;
+    let decision = store
+        .admit_action_with_revoked_handles(&session_id, manifest.clone(), revoked_handles(args))?
+        .decision;
 
     let mut out = vec![
         format!("action {}", manifest.action_id),

@@ -410,6 +410,34 @@ fn duplicate_action_id_is_refused_without_append() {
 }
 
 #[test]
+fn revoked_handle_input_denies_daemon_owned_admission() {
+    let (_root, store) = create_store_with_session("admit-revoked-handle", "sess_revoked_handle");
+    let session_id = "sess_revoked_handle";
+    append_grant(&store, session_id, grant(session_id));
+
+    let outcome = store
+        .admit_action_with_revoked_handles(
+            session_id,
+            manifest(session_id, "act-revoked-handle"),
+            BTreeSet::from(["revoke-write".to_string()]),
+        )
+        .unwrap();
+
+    assert_eq!(outcome.decision.result, DecisionResult::Denied);
+    assert!(
+        outcome
+            .decision
+            .explanation
+            .contains("revoked, expired, or missing"),
+        "{}",
+        outcome.decision.explanation
+    );
+    let journal = store.load_journal(session_id).unwrap();
+    journal.verify_chain().unwrap();
+    assert_eq!(journal.records().len(), 4);
+}
+
+#[test]
 fn paused_session_refuses_receipt_append_after_admission() {
     let (_root, store) = create_store_with_session("receipt-paused", "sess_receipt_paused");
     let session_id = "sess_receipt_paused";

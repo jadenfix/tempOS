@@ -489,6 +489,22 @@ impl Store {
         session_id: &str,
         manifest: ActionManifest,
     ) -> DaemonResult<AdmissionOutcome> {
+        self.admit_action_with_revoked_handles(session_id, manifest, BTreeSet::new())
+    }
+
+    /// Admit an action through the daemon-owned policy path while applying an
+    /// operator-supplied revocation registry snapshot.
+    ///
+    /// Revocation handles are live external evidence: the CLI or daemon front
+    /// end may receive a monotonic registry epoch from an operator, but the
+    /// daemon remains the single authority that projects grants, builds the
+    /// admission context, and journals the proposal/decision pair.
+    pub fn admit_action_with_revoked_handles(
+        &self,
+        session_id: &str,
+        manifest: ActionManifest,
+        revoked_handles: BTreeSet<String>,
+    ) -> DaemonResult<AdmissionOutcome> {
         self.with_session_lock(session_id, || {
             if manifest.session_id != session_id {
                 return Err(DaemonError::Refused(format!(
@@ -529,7 +545,7 @@ impl Store {
                 approvals: admission_state.approvals,
                 simulations: admission_state.simulations,
                 mandates: admission_state.mandates.into_values().collect(),
-                revoked_handles: BTreeSet::new(),
+                revoked_handles,
                 tool_registry: self.options.tool_registry.clone(),
                 require_registered_tools: self.options.require_registered_tools,
             };

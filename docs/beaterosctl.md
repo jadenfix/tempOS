@@ -54,6 +54,14 @@ Enum-valued flags use the snake_case names from `beater-os-core`
 `critical`, `local_write`, `code`). Run `beaterosctl help` for the full flag
 list.
 
+`grant issue` generates a revocation handle by default and prints it with the
+grant. Operators can provide a stable handle with `--revocation-handle <h>`.
+`action propose` and `action execute` accept repeatable `--revoked-handle <h>`
+flags; those handles are passed to `beater-osd` as a per-admission revocation
+registry snapshot in `AdmissionContext`, so a grant or delegated ancestor with a
+matching handle fails closed at admission. Durable revocation-list storage is a
+separate runtime service; these flags are the replay/operator input surface.
+
 ## Worked MVP flow
 
 This is the `final.md` §24 MVP proof: a repo task where the agent can read and

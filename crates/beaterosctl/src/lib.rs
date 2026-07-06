@@ -76,14 +76,17 @@ pub fn help_text() -> String {
          \x20 session cancel  --session <id>\n\
          \x20 grant issue     --session <id> --resource-kind <kind> --resource-id <id>\n\
          \x20                 --actions <a,b> [--path-prefix <p>]... [--network-allow <h>]...\n\
-         \x20                 [--max-risk <r>] [--expires-in-secs <n>] [--reason <text>]\n\
+         \x20                 [--max-risk <r>] [--expires-in-secs <n>]\n\
+         \x20                 [--revocation-handle <h>] [--reason <text>]\n\
          \x20 action propose  --session <id> --tool <id> --kind <action>\n\
          \x20                 --target-kind <kind> --target <id> --grants <g1,g2>\n\
          \x20                 [--risk <r>] [--side-effects <s,..>] [--data-classes <d,..>]\n\
-         \x20                 [--taint <t,..>] [--idempotency-key <k>] [--summary <text>]\n\
+         \x20                 [--taint <t,..>] [--revoked-handle <h>]...\n\
+         \x20                 [--idempotency-key <k>] [--summary <text>]\n\
          \x20 action execute  --session <id> --tool <id> --command <cmd> [--arg <a>]...\n\
          \x20                 --cwd <dir> --grants <g1,g2> [--risk <r>]\n\
-         \x20                 [--side-effects <s,..>] [--idempotency-key <k>]\n\
+         \x20                 [--side-effects <s,..>] [--revoked-handle <h>]...\n\
+         \x20                 [--idempotency-key <k>]\n\
          \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\
          \x20                 [--env <NAME=VALUE>]...\n\
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\

@@ -431,6 +431,20 @@ fn delegated_child(now: chrono::DateTime<Utc>) -> CapabilityGrant {
     grant
 }
 
+fn delegated_middle(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-middle".to_string();
+    grant.revocation_handle = "revoke:grant-middle".to_string();
+    grant.parent_grant_id = Some("grant-parent".to_string());
+    grant
+}
+
+fn delegated_grandchild(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    let mut grant = grant_for_file(now);
+    grant.parent_grant_id = Some("grant-middle".to_string());
+    grant
+}
+
 #[test]
 fn policy_admits_delegated_grant_when_whole_chain_is_live() {
     let now = fixed_time();
@@ -451,6 +465,38 @@ fn policy_denies_delegated_grant_when_parent_is_revoked_through_registry() {
     let now = fixed_time();
     let mut ctx = admission_context(now, vec![root_grant(now), delegated_child(now)]);
     ctx.revoked_handles = set(["revoke:grant-parent".to_string()]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("delegation ancestors"));
+}
+
+#[test]
+fn policy_denies_three_level_delegation_when_ancestor_is_revoked_through_registry() {
+    let now = fixed_time();
+    let mut ctx = admission_context(
+        now,
+        vec![
+            root_grant(now),
+            delegated_middle(now),
+            delegated_grandchild(now),
+        ],
+    );
+    ctx.revoked_handles = set(["revoke:grant-parent".to_string()]);
+
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("delegation ancestors"));
+
+    let mut ctx = admission_context(
+        now,
+        vec![
+            root_grant(now),
+            delegated_middle(now),
+            delegated_grandchild(now),
+        ],
+    );
+    ctx.revoked_handles = set(["revoke:grant-middle".to_string()]);
+
     let decision = admit(&read_manifest(), &ctx);
     assert_eq!(decision.result, DecisionResult::Denied);
     assert!(decision.explanation.contains("delegation ancestors"));
