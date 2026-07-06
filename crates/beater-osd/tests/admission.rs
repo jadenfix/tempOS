@@ -676,6 +676,56 @@ fn non_denied_payment_decision_reserves_mandate_capacity_for_next_admission() {
 }
 
 #[test]
+fn reserving_payment_decision_without_intent_refuses_replay() {
+    let (root, store) = create_store_with_initial(
+        "payment-replay-missing-intent",
+        "sess_payment_replay",
+        ["grant-spend"],
+    );
+    let session_id = "sess_payment_replay";
+    store
+        .issue_grant(session_id, payment_grant(session_id), Utc::now())
+        .unwrap();
+    store
+        .issue_payment_mandate(session_id, payment_mandate(session_id), Utc::now())
+        .unwrap();
+
+    let mut malformed = payment_manifest(session_id, "act-pay-malformed");
+    malformed.payment_intent = None;
+    let mut decision = fake_decision(&malformed);
+    decision.result = DecisionResult::NeedsSimulation;
+    decision.policy_version = "beateros-policy-v0".to_string();
+
+    let mut journal = store.load_journal(session_id).unwrap();
+    let proposal_record = journal
+        .append(
+            JournalEvent::ActionProposed {
+                manifest: Box::new(malformed),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    let decision_record = journal
+        .append(JournalEvent::PolicyDecided { decision }, Utc::now())
+        .unwrap();
+    journal.verify_chain().unwrap();
+    let journal_path = root
+        .path
+        .join("sessions")
+        .join(session_id)
+        .join("journal.jsonl");
+    let mut file = OpenOptions::new().append(true).open(journal_path).unwrap();
+    writeln!(file, "{}", serde_json::to_string(&proposal_record).unwrap()).unwrap();
+    writeln!(file, "{}", serde_json::to_string(&decision_record).unwrap()).unwrap();
+
+    let result = store.admit_action(session_id, payment_manifest(session_id, "act-pay-next"));
+
+    assert!(
+        matches!(result, Err(DaemonError::Refused(message)) if message.contains("payment_intent"))
+    );
+}
+
+#[test]
 fn unregistered_tool_denies_through_daemon_admission() {
     let (_root, store) = create_store_with_session("admit-unregistered", "sess_unregistered");
     let session_id = "sess_unregistered";

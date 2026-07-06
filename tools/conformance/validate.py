@@ -71,22 +71,41 @@ def _payment_reserved_by_mandate(
     manifests: dict[str, dict],
     excluded_action_id: str,
 ) -> dict[str, int]:
-    reserved: dict[str, int] = {}
+    latest_decisions: dict[str, dict] = {}
     for decision in prior_decisions:
-        if decision.get("result") not in RESERVING_PAYMENT_RESULTS:
-            continue
         action_id = decision.get("action_id")
         if action_id == excluded_action_id:
             continue
-        manifest = manifests.get(action_id)
-        if manifest is None or not _is_payment_manifest(manifest):
+        latest_decisions[action_id] = decision
+
+    reserved: dict[str, int] = {}
+    for action_id, decision in latest_decisions.items():
+        if decision.get("result") not in RESERVING_PAYMENT_RESULTS:
             continue
-        intent = manifest.get("payment_intent") or {}
+        manifest = manifests.get(action_id)
+        if manifest is None:
+            raise ValueError(
+                f"reserving policy decision for action {action_id} has no manifest"
+            )
+        if not _is_payment_manifest(manifest):
+            continue
+        intent = manifest.get("payment_intent")
+        if not isinstance(intent, dict):
+            raise ValueError(
+                f"reserving payment decision for action {action_id} has no payment_intent"
+            )
         mandate_id = intent.get("mandate_id")
         amount = intent.get("amount_minor_units")
-        if not mandate_id or not isinstance(amount, int):
-            continue
-        reserved[mandate_id] = reserved.get(mandate_id, 0) + amount
+        if not mandate_id or type(amount) is not int or amount < 0:
+            raise ValueError(
+                f"reserving payment decision for action {action_id} has an invalid payment_intent"
+            )
+        next_total = reserved.get(mandate_id, 0) + amount
+        if next_total > 2**64 - 1:
+            raise ValueError(
+                f"payment cumulative reservation overflowed mandate meter for {mandate_id}"
+            )
+        reserved[mandate_id] = next_total
     return reserved
 
 
@@ -125,6 +144,15 @@ def check_trace_bundle(rep: Report, reg, path: Path) -> None:
             f"trace {name} decision {decision['decision_id']} manifest-hash",
             f"recorded={decision.get('manifest_hash')} recomputed={expected_hash}",
         )
+        try:
+            payment_reserved_by_mandate = _payment_reserved_by_mandate(
+                decisions[:index],
+                manifests,
+                aid,
+            )
+        except ValueError as exc:
+            rep.add_errors(f"trace {name} payment reservation replay", [str(exc)])
+            continue
         ctx = {
             "now": decision["created_at"],
             "actor_id": session["agent_id"],
@@ -134,11 +162,7 @@ def check_trace_bundle(rep: Report, reg, path: Path) -> None:
             "approvals": bundle.get("approvals", []),
             "simulations": bundle.get("simulations", []),
             "mandates": bundle.get("payment_mandates", []),
-            "payment_reserved_by_mandate": _payment_reserved_by_mandate(
-                decisions[:index],
-                manifests,
-                aid,
-            ),
+            "payment_reserved_by_mandate": payment_reserved_by_mandate,
         }
         got = admission.admit(manifest, ctx)
         rep.check(

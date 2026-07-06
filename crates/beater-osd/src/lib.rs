@@ -1332,18 +1332,29 @@ fn admission_state_from_journal(
             continue;
         }
         let Some(proposal) = proposals.get(action_id) else {
-            continue;
+            return Err(DaemonError::Refused(format!(
+                "reserving policy decision for action {action_id} has no proposed manifest"
+            )));
         };
         if !is_payment_manifest(&proposal.manifest) {
             continue;
         }
         let Some(intent) = &proposal.manifest.payment_intent else {
-            continue;
+            return Err(DaemonError::Refused(format!(
+                "reserving payment decision for action {action_id} has no payment_intent"
+            )));
         };
         let entry = payment_reserved_by_mandate
             .entry(intent.mandate_id.clone())
             .or_insert(0_u64);
-        *entry = entry.saturating_add(intent.amount_minor_units);
+        *entry = entry
+            .checked_add(intent.amount_minor_units)
+            .ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "payment cumulative reservation overflowed mandate meter during replay for {}",
+                    intent.mandate_id
+                ))
+            })?;
     }
 
     Ok(AdmissionState {
