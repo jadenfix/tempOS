@@ -1,22 +1,20 @@
 //! `beaterosctl`: the operator CLI and durable local store for the beaterOS
 //! agent kernel.
 //!
-//! This crate is the human/operator surface over `beater-os-core`. It persists
-//! sessions to an append-only, hash-chained journal on disk and exposes the
-//! kernel's deterministic policy admission as inspectable commands. It adds no
-//! authority of its own: every capability check is delegated to the core policy
-//! engine, outside of any model output.
+//! This crate is the human/operator surface over the hosted `beater-osd`
+//! runtime. It opens the daemon-owned durable store directly for now, so grants,
+//! admission decisions, and receipts are written through the same single-writer
+//! authority boundary that a long-running daemon process will expose later.
 //!
 //! See `docs/beaterosctl.md` for the command reference and a worked MVP flow.
 
 mod args;
 mod commands;
 mod error;
-mod store;
 
+pub use beater_osd::{SessionProjection, Store};
 pub use commands::POLICY_VERSION;
 pub use error::{CliError, CliResult};
-pub use store::{SessionProjection, Store};
 
 use std::env;
 use std::path::PathBuf;
@@ -70,8 +68,12 @@ pub fn help_text() -> String {
          COMMANDS\n\
          \x20 session create --agent <id> --workspace <id> --goal <text>\n\
          \x20                [--session <id>] [--created-by <id>] [--policy-profile <p>]\n\
+         \x20                [--initial-capability-id <id>]...\n\
          \x20 session list\n\
          \x20 session show    --session <id>\n\
+         \x20 session pause   --session <id>\n\
+         \x20 session resume  --session <id>\n\
+         \x20 session cancel  --session <id>\n\
          \x20 grant issue     --session <id> --resource-kind <kind> --resource-id <id>\n\
          \x20                 --actions <a,b> [--path-prefix <p>]... [--network-allow <h>]...\n\
          \x20                 [--max-risk <r>] [--expires-in-secs <n>] [--reason <text>]\n\
@@ -83,6 +85,7 @@ pub fn help_text() -> String {
          \x20                 --cwd <dir> --grants <g1,g2> [--risk <r>]\n\
          \x20                 [--side-effects <s,..>] [--idempotency-key <k>]\n\
          \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\
+         \x20                 [--env <NAME=VALUE>]...\n\
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\
          \x20 journal verify  --session <id>\n\
          \x20 trace show      --session <id>\n\

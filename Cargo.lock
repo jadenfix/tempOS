@@ -71,6 +71,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-os-tool-gateway"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "beater-os-sandbox",
+ "beater-os-tool-registry",
+ "beater-osd",
+ "chrono",
+ "sha2",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "beater-os-tool-registry"
 version = "0.1.0"
 dependencies = [
@@ -87,6 +101,7 @@ version = "0.1.0"
 dependencies = [
  "beater-os-core",
  "chrono",
+ "serde",
  "serde_json",
  "thiserror",
  "uuid",
@@ -98,6 +113,7 @@ version = "0.1.0"
 dependencies = [
  "beater-os-core",
  "beater-os-sandbox",
+ "beater-osd",
  "chrono",
  "serde",
  "serde_json",

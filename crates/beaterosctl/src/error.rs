@@ -15,6 +15,9 @@ pub enum CliError {
     Json(#[from] serde_json::Error),
     #[error("core error: {0}")]
     Core(#[from] beater_os_core::BeaterOsError),
+    /// The hosted runtime store refused or failed the operation.
+    #[error("runtime error: {0}")]
+    Runtime(#[from] beater_osd::DaemonError),
     /// The sandbox execution lane refused or failed (fail closed).
     #[error("sandbox error: {0}")]
     Sandbox(#[from] beater_os_sandbox::SandboxError),

@@ -36,11 +36,17 @@ that a real metal-touching agent OS would need.
 | --- | --- | --- |
 | Product thesis | [final.md](final.md) | Full first-principles plan for hosted and metal-touching beaterOS |
 | Agent startup context | [AGENTS.md](AGENTS.md) | Repo map, non-negotiables, and common commands |
+| Repository map | [docs/repo-map.md](docs/repo-map.md) | Runtime ownership boundaries and migration frontier |
+| Review skill | [beateros-pr-review SKILL](.codex/skills/beateros-pr-review/SKILL.md) | Non-author review and repetitive infra/docs duty flow |
+| Systems skill | [beateros-systems-engineering SKILL](.codex/skills/beateros-systems-engineering/SKILL.md) | Runtime and systems engineering doctrine |
 | Implementation sequence | [docs/implementation-backlog.md](docs/implementation-backlog.md) | PR-sized slices and no-self-merge review rules |
+| Runtime-to-metal architecture | [docs/architecture-runtime-to-metal-path.md](docs/architecture-runtime-to-metal-path.md) | Runtime-first migration map, layer boundaries, and migration-gate expectations |
 | Systems engineering | [docs/sota-systems-engineering.md](docs/sota-systems-engineering.md) | Hot-path, Rust/C/assembly, security, and macOS doctrine |
+| Optimization infrastructure | [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md) | Bottleneck taxonomy, benchmarks, language baselines, and accelerator review gates |
 | Threat model | [docs/threat-model.md](docs/threat-model.md) | Assets, trust boundaries, attacks, mitigations, residual risk |
 | Wire contracts | [spec/README.md](spec/README.md) | Language-neutral JSON Schema and conformance suite |
 | Rust core | [crates/beater-os-core](crates/beater-os-core) | Agent sessions, grants, manifests, decisions, receipts, journals |
+| Tool gateway | [crates/beater-os-tool-gateway](crates/beater-os-tool-gateway) | Registered-tool resolution, daemon admission, sandbox execution, and receipts |
 | Source audit | [docs/source-matrix.md](docs/source-matrix.md) | Citation verification and source-maintenance rules |
 
 Important `final.md` sections:

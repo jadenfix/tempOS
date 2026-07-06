@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
@@ -6,7 +6,7 @@ use beater_os_core::{
     CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
     DelegationMode, GrantConstraints, HashValue, InMemoryJournal, JournalEvent, MemoryRecord,
     PaymentIntent, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind,
-    RiskClass, SideEffectClass, SimulationEvidence, TaintLabel, hash_json,
+    RiskClass, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest, hash_json,
 };
 use chrono::{Duration, TimeZone, Utc};
 use serde::Serialize;
@@ -76,7 +76,33 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         simulations: Vec::new(),
         mandates: Vec::new(),
         revoked_handles: BTreeSet::new(),
+        tool_registry: BTreeMap::new(),
+        require_registered_tools: false,
     }
+}
+
+fn registered_tool(
+    tool_id: &str,
+    risk_class: RiskClass,
+    side_effects: impl IntoIterator<Item = SideEffectClass>,
+) -> ToolManifest {
+    ToolManifest {
+        tool_id: tool_id.to_string(),
+        publisher: "beater.tools".to_string(),
+        version: "1.0.0".to_string(),
+        transport: "local".to_string(),
+        required_capabilities: Vec::new(),
+        side_effects: set(side_effects),
+        risk_class,
+        sandbox_required: false,
+    }
+}
+
+fn registry(tools: impl IntoIterator<Item = ToolManifest>) -> BTreeMap<String, ToolManifest> {
+    tools
+        .into_iter()
+        .map(|tool| (tool.tool_id.clone(), tool))
+        .collect()
 }
 
 fn mandate_for_spend(now: chrono::DateTime<Utc>) -> PaymentMandate {
@@ -230,6 +256,144 @@ fn policy_requires_narrowed_grant_for_over_risk_action() {
     let ctx = admission_context(now, vec![grant_for_file(now)]);
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+#[test]
+fn policy_raises_effective_risk_for_registered_tool_floor() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::High,
+        [SideEffectClass::None],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+    assert!(
+        decision
+            .matched_rules
+            .iter()
+            .any(|rule| rule.contains("registered_tool_grounding=present")
+                && rule.contains("effective_risk=High")),
+        "registered tool floor must be recorded: {:?}",
+        decision.matched_rules
+    );
+}
+
+#[test]
+fn policy_denies_manifest_that_omits_registered_tool_side_effect() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::Medium,
+        [SideEffectClass::NetworkWrite],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("omits a side effect"));
+}
+
+#[test]
+fn policy_admits_manifest_that_over_declares_registered_tool() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.risk_class = RiskClass::Medium;
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::Low,
+        [SideEffectClass::None],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+}
+
+#[test]
+fn policy_denies_unregistered_tool_when_required_by_context() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.require_registered_tools = true;
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("not registered"));
+}
+
+#[test]
+fn policy_records_explicit_compatibility_for_unregistered_tool() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let ctx = admission_context(now, vec![grant_for_file(now)]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"tool_registry_lookup=missing;require_registered_tools=false".to_string())
+    );
+}
+
+#[test]
+fn registered_payment_side_effect_cannot_be_laundered_as_read() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.expected_side_effects = set([SideEffectClass::Payment]);
+    manifest.idempotency_key = Some("pay-once".to_string());
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::High,
+        [SideEffectClass::Payment],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("spend action kind"));
+}
+
+#[test]
+fn registered_deployment_side_effect_cannot_be_laundered_as_execute() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Execute;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::Tool,
+        resource_id: "deploy-runner".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-execute".to_string()]);
+    manifest.risk_class = RiskClass::High;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-execute".to_string();
+    grant.scope.selector = CapabilitySelector {
+        resource_kind: ResourceKind::Tool,
+        resource_id: "deploy-runner".to_string(),
+    };
+    grant.scope.actions = set([ActionKind::Execute]);
+    grant.constraints.max_risk = Some(RiskClass::Critical);
+    grant.approval = ApprovalRequirement::default();
+
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::High,
+        [SideEffectClass::Deployment],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("deploy action kind"));
 }
 
 fn root_grant(now: chrono::DateTime<Utc>) -> CapabilityGrant {
@@ -879,7 +1043,7 @@ fn policy_requires_action_bound_simulation_evidence() {
         simulation_id: "sim-1".to_string(),
         action_id: "different-action".to_string(),
         manifest_hash: manifest_hash(&manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now,
         policy_version: "policy-v1".to_string(),
     });
@@ -887,6 +1051,11 @@ fn policy_requires_action_bound_simulation_evidence() {
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
 
     ctx.simulations[0].action_id = "action-1".to_string();
+    ctx.simulations[0].scenario_id = "scenario:wrong".to_string();
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+
+    ctx.simulations[0].scenario_id = "action:action-1:high-risk-side-effect-simulation".to_string();
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::Allowed);
 }
@@ -932,7 +1101,7 @@ fn policy_rejects_simulation_evidence_for_stale_manifest_hash() {
         simulation_id: "sim-1".to_string(),
         action_id: "action-1".to_string(),
         manifest_hash: manifest_hash(&stale_manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now,
         policy_version: "policy-v1".to_string(),
     });
@@ -978,7 +1147,7 @@ fn policy_rejects_future_dated_simulation_evidence() {
         simulation_id: "sim-1".to_string(),
         action_id: "action-1".to_string(),
         manifest_hash: manifest_hash(&manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now + Duration::minutes(1),
         policy_version: "policy-v1".to_string(),
     });

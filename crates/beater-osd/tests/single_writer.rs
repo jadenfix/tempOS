@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
     CapabilityScope, CapabilitySelector, DecisionResult, DelegationMode, GrantConstraints,
-    JournalEvent, ResourceKind, RiskClass, SessionStatus,
+    JournalEvent, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
 };
 use beater_osd::{DaemonError, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
@@ -117,7 +117,7 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
         inputs_digest: "input-digest".to_string(),
         inputs_summary: "write output".to_string(),
         expected_outputs: Vec::new(),
-        expected_side_effects: BTreeSet::new(),
+        expected_side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
         required_grants: BTreeSet::from(["grant-0".to_string()]),
         requested_budget: Budget::default(),
         risk_class: RiskClass::Low,
@@ -181,6 +181,7 @@ fn held_session_lock_times_out_fail_closed() {
         StoreOptions {
             lock_timeout: Duration::from_millis(10),
             lock_poll_interval: Duration::from_millis(1),
+            ..StoreOptions::default()
         },
     )
     .unwrap();
@@ -211,6 +212,7 @@ fn held_session_lock_timeout_is_not_extended_by_poll_interval() {
         StoreOptions {
             lock_timeout: Duration::from_millis(10),
             lock_poll_interval: Duration::from_secs(60),
+            ..StoreOptions::default()
         },
     )
     .unwrap();
