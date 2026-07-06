@@ -85,6 +85,7 @@
     {
       "decision_id": "dec-deploy",
       "action_id": "act-deploy-r42",
+      "manifest_hash": "85d96ace013671c6d037545f916b7a9a13ed0386df916c5d7685c7d83ed1cfc3",
       "policy_version": "policy-2026-07-03.dev",
       "result": "needs_approval",
       "explanation": "grant policy requires human approval for this risk class",
@@ -201,6 +202,7 @@
         "decision": {
           "decision_id": "dec-deploy",
           "action_id": "act-deploy-r42",
+          "manifest_hash": "85d96ace013671c6d037545f916b7a9a13ed0386df916c5d7685c7d83ed1cfc3",
           "policy_version": "policy-2026-07-03.dev",
           "result": "needs_approval",
           "explanation": "grant policy requires human approval for this risk class",
@@ -208,7 +210,7 @@
         }
       },
       "prev_hash": "7b5a62def2ff0fd4e30778338f95ffa9b35c23c732763313409e421d27ecc7bc",
-      "hash": "0c7a8c8737ba74b47fa6b3895c0197152faad5c5a40ec80851663a66c0b42b7f"
+      "hash": "c6f1414c9914cf47a6849dfcfe4a8a5fe8f7194871f786a7b8ec8c33eb7d7b40"
     },
     {
       "seq": 4,
@@ -218,8 +220,8 @@
         "incident_id": "inc-review-timeout",
         "note": "Human approval for act-deploy-r42 timed out past the review deadline; action not executed; session failing closed (final.md §14.2, §13.15)."
       },
-      "prev_hash": "0c7a8c8737ba74b47fa6b3895c0197152faad5c5a40ec80851663a66c0b42b7f",
-      "hash": "ef900cfa7f3d5bb6d0a794f76a6455e8c4e7b01d9645ae6e0a225fd8b6d50f0b"
+      "prev_hash": "c6f1414c9914cf47a6849dfcfe4a8a5fe8f7194871f786a7b8ec8c33eb7d7b40",
+      "hash": "f3fb6453360e78ece10dbaa717240b102fa6fff1b6a32bd2b8b97bdc8011dd3e"
     }
   ]
 }
