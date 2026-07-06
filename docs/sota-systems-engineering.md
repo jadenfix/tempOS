@@ -284,6 +284,12 @@ On macOS, prefer Instruments, `sample`, `spindump`, `dtrace` where available,
 and Rust-level benchmarks. On Linux future targets, add `perf`, eBPF, and
 io_uring-specific checks behind platform gates.
 
+For optimization-heavy work, also apply
+[`docs/optimization-agent-playbook.md`](optimization-agent-playbook.md). That
+document is the operational review gate for bottleneck classification,
+language-version review, accelerator backends, benchmark evidence, and profiler
+selection.
+
 ## macOS And Apple Silicon
 
 macOS is a first-class development and runtime host for early beaterOS work.

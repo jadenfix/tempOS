@@ -13,7 +13,7 @@
 //! that actually entered the sandbox lane rather than to a caller-supplied tool
 //! label.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,7 +24,7 @@ use beater_os_core::{
 };
 use beater_os_sandbox::{
     SandboxLimits, SandboxOutcome, SandboxRequest, SandboxStatus, execute as sandbox_execute,
-    resolve_confined,
+    resolve_confined, safe_path_environment,
 };
 use beater_os_tool_registry::{ResolveRequest, ToolRegistry};
 use beater_osd::{DaemonError, Store};
@@ -32,7 +32,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-const LOCAL_SHELL_DIGEST_VERSION: &str = "beateros.local_shell_tool.v1";
+const LOCAL_SHELL_DIGEST_VERSION: &str = "beateros.local_shell_tool.v2";
 const SAFE_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 /// Result alias for gateway operations.
@@ -67,7 +67,19 @@ pub fn local_shell_tool_digest(
         digest.update(arg.as_bytes());
         digest.update([0]);
     }
+    let environment = local_shell_environment();
+    digest.update((environment.len() as u64).to_le_bytes());
+    for (name, value) in environment {
+        digest.update(name.as_bytes());
+        digest.update([0]);
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+fn local_shell_environment() -> BTreeMap<String, String> {
+    safe_path_environment()
 }
 
 /// Errors surfaced by the runtime tool gateway. Every error is fail-closed:
@@ -149,6 +161,7 @@ pub fn execute_local_tool(
     if invocation.required_grants.is_empty() {
         return Err(GatewayError::MissingGrant);
     }
+    let environment = local_shell_environment();
     let inputs_digest =
         local_shell_tool_digest(&invocation.cwd, &invocation.command, &invocation.args)?;
     match &invocation.expected_tool_digest {
@@ -249,6 +262,7 @@ pub fn execute_local_tool(
             let execution = sandbox_execute(&SandboxRequest {
                 command: invocation.command.clone(),
                 args: invocation.args.clone(),
+                environment: environment.clone(),
                 working_dir: resolved.display().to_string(),
                 path_prefixes: confinement_prefixes,
                 limits: invocation.limits.clone(),
