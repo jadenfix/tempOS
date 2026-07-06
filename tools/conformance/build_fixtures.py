@@ -132,13 +132,13 @@ def build_bundle() -> dict:
         "human_explanation": "Execute the test runner to confirm the fix.",
     }
 
-    d_read = _decision("dec-read", "act-read-parser", "allowed", T.format(1),
+    d_read = _decision("dec-read", m_read, "allowed", T.format(1),
                        "action admitted by explicit active capability grant")
-    d_escape = _decision("dec-escape", "act-write-escape", "needs_narrowed_grant", T.format(2),
+    d_escape = _decision("dec-escape", m_escape, "needs_narrowed_grant", T.format(2),
                          "available grants do not allow this action, target, risk, data class, or time window")
-    d_fix = _decision("dec-fix", "act-write-fix", "allowed", T.format(3),
+    d_fix = _decision("dec-fix", m_fix, "allowed", T.format(3),
                       "action admitted by explicit active capability grant")
-    d_test = _decision("dec-test", "act-run-tests", "allowed", T.format(4),
+    d_test = _decision("dec-test", m_test, "allowed", T.format(4),
                        "action admitted by explicit active capability grant")
 
     # Receipts (only for allowed, executed actions), hash-linked in order.
@@ -280,13 +280,14 @@ def build_payment_bundle() -> dict:
     approval = {
         "review_id": "review-pay",
         "action_id": "act-pay-invoice",
+        "manifest_hash": sha256_hex(m_pay),
         "grant_id": "grant-vendor-spend",
         "reviewer_id": "user:jaden",
         "approved_at": tp.format(1),
         "policy_version": POLICY_VERSION,
     }
 
-    d_pay = _decision("dec-pay", "act-pay-invoice", "allowed", tp.format(2),
+    d_pay = _decision("dec-pay", m_pay, "allowed", tp.format(2),
                       "action admitted by explicit active capability grant with valid human approval")
 
     receipts = _chain_receipts([
@@ -381,7 +382,7 @@ def build_resilience_bundle() -> dict:
         "human_explanation": "Deploy the approved release to production.",
     }
 
-    d_deploy = _decision("dec-deploy", "act-deploy-r42", "needs_approval", tr.format(1),
+    d_deploy = _decision("dec-deploy", m_deploy, "needs_approval", tr.format(1),
                          "grant policy requires human approval for this risk class")
 
     events = [
@@ -409,10 +410,11 @@ def build_resilience_bundle() -> dict:
     }
 
 
-def _decision(did, aid, result, created_at, explanation):
+def _decision(did, manifest, result, created_at, explanation):
     return {
         "decision_id": did,
-        "action_id": aid,
+        "action_id": manifest["action_id"],
+        "manifest_hash": sha256_hex(manifest),
         "policy_version": POLICY_VERSION,
         "result": result,
         "explanation": explanation,

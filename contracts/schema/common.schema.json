@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "common.schema.json",
   "title": "beaterOS shared contract vocabulary",
-  "description": "Enums and shared structures for the core contracts. Pinned field-for-field to crates/beater-os-core (commit 3e5625a): snake_case enum values match serde(rename_all = snake_case).",
+  "description": "Enums and shared structures for the core contracts. Schema names and snake_case enum values mirror the Rust wire format in crates/beater-os-core.",
   "$defs": {
     "timestamp": {
       "type": "string",
@@ -41,6 +41,11 @@
     "decision_result": {
       "type": "string",
       "enum": ["allowed", "denied", "needs_approval", "needs_simulation", "needs_narrowed_grant"]
+    },
+    "hash_value": {
+      "description": "Lowercase hex SHA-256 digest. GENESIS_HASH is 64 zeros (hash.rs).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "delegation_mode": {
       "type": "string",
@@ -112,10 +117,11 @@
     "approval_evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["review_id", "action_id", "grant_id", "reviewer_id", "approved_at", "policy_version"],
+      "required": ["review_id", "action_id", "manifest_hash", "grant_id", "reviewer_id", "approved_at", "policy_version"],
       "properties": {
         "review_id": { "type": "string" },
         "action_id": { "type": "string" },
+        "manifest_hash": { "$ref": "#/$defs/hash_value" },
         "grant_id": { "type": "string" },
         "reviewer_id": { "type": "string" },
         "approved_at": { "$ref": "#/$defs/timestamp" },
@@ -125,10 +131,11 @@
     "simulation_evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["simulation_id", "action_id", "scenario_id", "passed_at", "policy_version"],
+      "required": ["simulation_id", "action_id", "manifest_hash", "scenario_id", "passed_at", "policy_version"],
       "properties": {
         "simulation_id": { "type": "string" },
         "action_id": { "type": "string" },
+        "manifest_hash": { "$ref": "#/$defs/hash_value" },
         "scenario_id": { "type": "string" },
         "passed_at": { "$ref": "#/$defs/timestamp" },
         "policy_version": { "type": "string" }

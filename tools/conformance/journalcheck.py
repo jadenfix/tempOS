@@ -7,10 +7,11 @@ language-neutral invariants any conformant implementation must satisfy:
 - Receipts and journal records form a hash-linked chain: seq starts at 0 and is
   contiguous, each `prev_*` equals the previous element's hash, and each hash
   recomputes over the element's canonical preimage.
-- Journal causality (`final.md` §4.5, §5.5, §26): a receipt may only appear
-  after its action was proposed AND that action's latest policy decision was
-  `allowed`, and the receipt must be bound to the manifest's tool, input digest,
-  target, and declared side-effect classes.
+- Journal causality (`final.md` §4.5, §5.5, §26): a policy decision must bind
+  to the exact proposed manifest digest; a receipt may only appear after its
+  action was proposed AND that action's latest policy decision was `allowed`;
+  and the receipt must be bound to the manifest's tool, input digest, target,
+  and declared side-effect classes.
 
 Digest recomputation uses this repo's JCS canonical form (`canonical.py`); see
 the harness README for the cross-language convergence note.
@@ -57,7 +58,7 @@ def verify_journal_chain(records: list[dict]) -> list[str]:
     errors: list[str] = []
     prev = GENESIS_HASH
     proposed: dict[str, dict] = {}
-    allowed: set[str] = set()
+    allowed: dict[str, str] = {}
     latest_decision: dict[str, str] = {}
 
     for idx, rec in enumerate(records):
@@ -81,7 +82,7 @@ def _causality(
     idx: int,
     record: dict,
     proposed: dict[str, dict],
-    allowed: set[str],
+    allowed: dict[str, str],
     latest_decision: dict[str, str],
 ) -> list[str]:
     event = record.get("event", {})
@@ -103,11 +104,18 @@ def _causality(
                 f"journal[{idx}] decision {decision['decision_id']} references action "
                 f"{aid} before it was proposed"
             )
+        else:
+            expected_hash = sha256_hex(proposed[aid])
+            if decision.get("manifest_hash") != expected_hash:
+                errors.append(
+                    f"journal[{idx}] decision {decision['decision_id']} manifest_hash "
+                    f"{decision.get('manifest_hash')} != action digest {expected_hash}"
+                )
         latest_decision[aid] = decision["result"]
         if decision["result"] == "allowed":
-            allowed.add(aid)
+            allowed[aid] = decision.get("manifest_hash", "")
         else:
-            allowed.discard(aid)
+            allowed.pop(aid, None)
 
     elif kind == "receipt_appended":
         receipt = event["receipt"]
@@ -124,6 +132,11 @@ def _causality(
             errors.append(
                 f"journal[{idx}] receipt {receipt['receipt_id']} references action {aid} "
                 f"without a prior allowed decision (latest: {latest})"
+            )
+        elif allowed[aid] != sha256_hex(manifest):
+            errors.append(
+                f"journal[{idx}] receipt {receipt['receipt_id']} follows stale allowed "
+                f"decision hash for action {aid}"
             )
         if receipt["tool_id"] != manifest["tool_id"]:
             errors.append(

@@ -42,9 +42,9 @@ open PR:
 | `tools/conformance/**` (this gate) | Slice plan `docs/implementation-backlog.md` — PR #1 |
 | `.github/workflows/contracts.yml` | Rust CI `ci.yml`, governance CI — PR #1/#19 |
 
-The JSON Schemas are pinned **field-for-field to PR #1's Rust types** (exact
-field names, snake_case enum values as of commit `3e5625a`) so they are a
-canonical cross-language mirror, not a competing vocabulary.
+The JSON Schemas mirror the Rust wire types exactly enough to catch drift
+(field names and snake_case enum values), so they are a canonical
+cross-language mirror, not a competing vocabulary.
 
 ## Open cross-implementation item: canonical hashing
 
@@ -57,3 +57,6 @@ Rust core, adopts JCS so receipt/journal digests are byte-identical everywhere.
 Raised with the core author on PR #1; needs a small joint follow-up to `hash.rs`.
 Until then, this gate verifies chain *linkage and causality* (which are
 language-neutral) and recomputes digests under its own documented canonical form.
+`PolicyDecision.manifest_hash` is checked under that same conformance canonical
+form until the Rust core and the language-neutral harness converge on one
+cross-implementation hash preimage.
