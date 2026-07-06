@@ -950,6 +950,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command: "rm".to_string(),
             args: vec!["gone.txt".to_string()],
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits: SandboxLimits::default(),
@@ -1117,6 +1118,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: work.str(),
             path_prefixes: vec![work.str()],
             limits: SandboxLimits::default(),
