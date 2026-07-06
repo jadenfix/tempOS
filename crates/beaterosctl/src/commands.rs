@@ -169,9 +169,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             Some(args::parse_enum::<DataClass>("max-data-class", max_data)?);
     }
     for prefix in args.csv("path-prefix") {
-        constraints.path_prefixes.insert(
-            canonicalize_existing_file_authority("path-prefix", &prefix)?,
-        );
+        constraints
+            .path_prefixes
+            .insert(canonicalize_existing_file_authority(
+                "path-prefix",
+                &prefix,
+            )?);
     }
     for host in args.csv("network-allow") {
         constraints.network_allowlist.insert(host);
