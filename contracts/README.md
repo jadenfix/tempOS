@@ -24,9 +24,9 @@ should serialize to and validate against.
 
 ## Versioning & provenance
 
-- These schemas are **pinned field-for-field to `crates/beater-os-core`** as of
-  commit `3e5625a` (PR #1): exact field names, and snake_case enum values that
-  match serde's `rename_all = "snake_case"`.
+- These schemas mirror the `crates/beater-os-core` wire format: exact field
+  names, and snake_case enum values that match serde's
+  `rename_all = "snake_case"`.
 - `additionalProperties: false` throughout, so the corpus is validated strictly.
   When the Rust core adds a field, add it here in the same or a follow-up change
   and note it in `AGENTS.md` (PR #19/#20 own that coordination doc).

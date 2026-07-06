@@ -14,7 +14,7 @@ from pathlib import Path
 
 import admission
 from canonical import GENESIS_HASH, hash_preimage, sha256_hex
-from journalcheck import verify_receipt_chain
+from journalcheck import verify_journal_chain, verify_receipt_chain
 from schema import SchemaRegistry, validate
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "contracts" / "schema"
@@ -83,7 +83,58 @@ def run() -> list[str]:
     errs = validate(bad_manifest, "action-manifest.schema.json", reg)
     expect(bool(errs), "schema should reject an unknown property")
 
-    # 3. Admission denies a session mismatch.
+    # 3. Policy decisions must bind to an action manifest digest.
+    bad_decision = {
+        "decision_id": "d",
+        "action_id": "a",
+        "policy_version": "p",
+        "result": "allowed",
+        "explanation": "missing manifest hash",
+        "created_at": "2026-07-03T00:00:00Z",
+    }
+    errs = validate(bad_decision, "policy-decision.schema.json", reg)
+    expect(bool(errs), "schema should reject policy decision missing manifest_hash")
+
+    bad_evidence_bundle = {
+        "bundle_id": "bad-evidence",
+        "policy_version": "p",
+        "sessions": [{
+            "session_id": "S",
+            "created_at": "2026-07-03T00:00:00Z",
+            "created_by": "u",
+            "agent_id": "agent",
+            "workspace_id": "ws",
+            "goal": "test",
+            "policy_profile": "p",
+            "journal_root": GENESIS_HASH,
+            "status": "running",
+        }],
+        "approvals": [{
+            "review_id": "rv",
+            "action_id": "a",
+            "grant_id": "g",
+            "reviewer_id": "u",
+            "approved_at": "2026-07-03T00:00:00Z",
+            "policy_version": "p",
+        }],
+        "simulations": [{
+            "simulation_id": "sim",
+            "action_id": "a",
+            "scenario_id": "scn",
+            "passed_at": "2026-07-03T00:00:00Z",
+            "policy_version": "p",
+        }],
+        "manifests": [],
+        "decisions": [],
+        "journal": [],
+    }
+    errs = validate(bad_evidence_bundle, "trace-bundle.schema.json", reg)
+    expect(
+        sum("manifest_hash" in err for err in errs) >= 2,
+        "schema should reject approval/simulation evidence missing manifest_hash",
+    )
+
+    # 4. Admission denies a session mismatch.
     manifest = {
         "action_id": "a", "session_id": "S1", "tool_id": "t", "action_kind": "read",
         "target": {"resource_kind": "file_path", "resource_id": "/x"},
@@ -94,7 +145,7 @@ def run() -> list[str]:
            "policy_version": "p", "grants": [], "approvals": [], "simulations": []}
     expect(admission.admit(manifest, ctx)["result"] == "denied", "session mismatch should deny")
 
-    # 4. Admission blocks untrusted-web spend without approval.
+    # 5. Admission blocks untrusted-web spend without approval.
     spend = {
         "action_id": "s", "session_id": "S", "tool_id": "pay", "action_kind": "spend",
         "target": {"resource_kind": "payment_rail", "resource_id": "r"},
@@ -118,7 +169,7 @@ def run() -> list[str]:
     expect(admission.admit(spend, ctx2)["result"] == "needs_approval",
            "untrusted-web spend without approval should escalate")
 
-    # 5. Grant with an ABSENT constraints field must inherit Medium/Internal
+    # 6. Grant with an ABSENT constraints field must inherit Medium/Internal
     #    ceilings (serde default), not be treated as unbounded. Regression for a
     #    fail-open divergence caught in independent review.
     hot = {
@@ -139,7 +190,7 @@ def run() -> list[str]:
     expect(admission.admit(hot, ctx3)["result"] == "needs_narrowed_grant",
            "constraint-less grant must not admit critical/secret action (default ceilings apply)")
 
-    # 6. Expired grants are not live authority. They must hard-deny before the
+    # 7. Expired grants are not live authority. They must hard-deny before the
     #    generic "needs narrowed grant" path because there is no grant to narrow.
     expired_grant = dict(grant)
     expired_grant["expires_at"] = "2026-07-03T00:00:00Z"
@@ -157,7 +208,7 @@ def run() -> list[str]:
     expect(admission.admit(spend, no_mandate_ctx)["result"] == "denied",
            "missing payment mandate must hard-deny")
 
-    # 8. Untrusted-taint gate must reject an approval from an UNAUTHORIZED reviewer
+    # 9. Untrusted-taint gate must reject an approval from an UNAUTHORIZED reviewer
     #    (not just any bound approval). Regression for the second review finding.
     unauth_spend = {
         "action_id": "u", "session_id": "S", "tool_id": "pay", "action_kind": "spend",
@@ -180,13 +231,14 @@ def run() -> list[str]:
     ctx4 = {"now": "2026-07-03T00:30:00Z", "actor_id": "agent", "session_id": "S",
             "policy_version": "p", "grants": [grant_human],
             "approvals": [{"review_id": "rv", "action_id": "u", "grant_id": "g",
+                           "manifest_hash": sha256_hex(unauth_spend),
                            "reviewer_id": "attacker", "approved_at": "2026-07-03T00:10:00Z",
                            "policy_version": "p"}],
             "simulations": [], "mandates": [_payment_mandate()]}
     expect(admission.admit(unauth_spend, ctx4)["result"] == "needs_approval",
            "approval from an unauthorized reviewer must not satisfy the untrusted-taint gate")
 
-    # 9. Receipt chain detects a tampered hash.
+    # 10. Receipt chain detects a tampered hash.
     r = {"receipt_id": "r", "seq": 0, "action_id": "a", "tool_id": "t",
          "target": {"resource_kind": "tool", "resource_id": "x"},
          "started_at": "2026-07-03T00:00:00Z", "finished_at": "2026-07-03T00:00:00Z",
@@ -196,6 +248,40 @@ def run() -> list[str]:
     expect(not verify_receipt_chain([r]), "valid receipt chain should pass")
     r["status"] = "tampered"
     expect(bool(verify_receipt_chain([r])), "tampered receipt should be detected")
+
+    # 11. Journal causality must reject a decision bound to the wrong manifest
+    #    digest, even when action_id and result look plausible.
+    bound_manifest = {
+        "action_id": "bound", "session_id": "S", "tool_id": "t", "action_kind": "read",
+        "target": {"resource_kind": "file_path", "resource_id": "/x"},
+        "inputs_digest": "d", "inputs_summary": "", "risk_class": "low",
+        "human_explanation": "", "required_grants": ["g"],
+    }
+    bad_decision = {
+        "decision_id": "dec-bound",
+        "action_id": "bound",
+        "manifest_hash": "f" * 64,
+        "policy_version": "p",
+        "result": "allowed",
+        "explanation": "bad binding",
+        "created_at": "2026-07-03T00:00:00Z",
+    }
+    records = [
+        {"seq": 0, "created_at": "2026-07-03T00:00:00Z",
+         "event": {"kind": "action_proposed", "manifest": bound_manifest},
+         "prev_hash": GENESIS_HASH},
+    ]
+    records[0]["hash"] = sha256_hex(hash_preimage(records[0], "hash"))
+    records.append(
+        {"seq": 1, "created_at": "2026-07-03T00:00:01Z",
+         "event": {"kind": "policy_decided", "decision": bad_decision},
+         "prev_hash": records[0]["hash"]}
+    )
+    records[1]["hash"] = sha256_hex(hash_preimage(records[1], "hash"))
+    expect(
+        any("manifest_hash" in err for err in verify_journal_chain(records)),
+        "journal should reject policy decision with wrong manifest_hash",
+    )
 
     return fails
 
