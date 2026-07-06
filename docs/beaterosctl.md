@@ -117,10 +117,12 @@ execute` turns an `Allowed` decision into a real OS process and emits a
 filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
 
 1. **Resolve a pinned local shell tool.** The CLI asks the daemon store to
-   persist the exact `--tool` + `--tool-version` local shell digest in
+   persist the exact `--tool` + version + local shell digest in
    `<home>/tool-registry.json`, under a bounded registry lock. Operators can
    pass `--tool-digest <sha256>` to pin the expected executable+args+environment
    digest explicitly; otherwise the CLI computes the digest for compatibility.
+   If `--tool-version` is omitted, the CLI derives a stable `local-<digest>`
+   version so different command digests do not collide under `shell@local`.
    The gateway reloads the daemon-owned `ToolRegistry`, checks the workspace
    allowlist, recomputes the digest, and resolves the pinned tool before any
    action is admitted.

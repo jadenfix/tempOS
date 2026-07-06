@@ -468,13 +468,19 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     };
     validate_environment(&environment, &limits)?;
 
-    let tool_version = args.get_or("tool-version", "local").to_string();
     let computed_digest =
         local_shell_tool_digest_with_environment(&cwd, &command, &command_args, &environment)?;
     let expected_tool_digest = args
         .get("tool-digest")
         .map(str::to_string)
         .unwrap_or_else(|| computed_digest.clone());
+    let tool_version = args
+        .get("tool-version")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let prefix_len = expected_tool_digest.len().min(16);
+            format!("local-{}", &expected_tool_digest[..prefix_len])
+        });
     let registry = store.register_local_shell_tool(LocalShellToolRegistration {
         workspace_id: projection.session.workspace_id.clone(),
         tool_id: tool_id.clone(),
