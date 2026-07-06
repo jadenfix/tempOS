@@ -187,7 +187,7 @@ def profile_supports_host(profile: dict[str, Any], host: HostContext) -> bool:
     return True
 
 
-def check(manifest: dict[str, Any], host_check: bool = False) -> int:
+def check(manifest: dict[str, Any], host_check: bool = False, require_profile: str | None = None) -> int:
     errors = validate_manifest(manifest)
     if errors:
         for err in errors:
@@ -205,10 +205,45 @@ def check(manifest: dict[str, Any], host_check: bool = False) -> int:
         print("ERROR: no manifest profile supports the current host context")
         return 1
 
+    if require_profile is not None and require_profile not in matching_profiles:
+        print(f"ERROR: required profile not supported on current host: {require_profile}")
+        return 1
+
     print(f"INFO: host context = os={host.os_name}, arch={host.arch}, cpus={host.cpu_cores or 'unknown'}")
     print(f"INFO: matching profiles = {', '.join(matching_profiles)}")
     print("PASS: host context is represented in the bare-metal readiness manifest")
     return 0
+
+
+def run_and_dump_json(args: argparse.Namespace, manifest: dict[str, Any]) -> int:
+    if not args.report:
+        return check(
+            manifest,
+            host_check=args.check_host or args.require_profile is not None,
+            require_profile=args.require_profile,
+        )
+
+    host = normalize_host_context()
+    profiles = manifest.get("profiles", [])
+    matching_profiles = [p["name"] for p in profiles if profile_supports_host(p, host)]
+    payload = {
+        "schema_version": manifest.get("schema_version"),
+        "profiles": len(profiles),
+        "supported_profiles": matching_profiles,
+        "host": {
+            "os": host.os_name,
+            "arch": host.arch,
+            "cpu_cores": host.cpu_cores,
+            "accelerators": sorted(host.accelerators),
+        },
+    }
+    print(json.dumps(payload, sort_keys=True))
+    code = check(
+        manifest,
+        host_check=args.check_host or args.require_profile is not None,
+        require_profile=args.require_profile,
+    )
+    return code
 
 
 def main() -> int:
@@ -224,13 +259,23 @@ def main() -> int:
         action="store_true",
         help="require that at least one manifest profile supports the current host",
     )
+    parser.add_argument(
+        "--require-profile",
+        metavar="NAME",
+        help="require the specified profile to be compatible with the current host",
+    )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="print JSON host-profile coverage report",
+    )
     args = parser.parse_args()
     try:
         manifest = load_manifest(args.manifest)
     except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}")
         return 1
-    return check(manifest, host_check=args.check_host)
+    return run_and_dump_json(args, manifest)
 
 
 if __name__ == "__main__":

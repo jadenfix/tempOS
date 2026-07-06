@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location(
@@ -110,3 +112,28 @@ class TestBareMetalReadiness(unittest.TestCase):
             os.environ["BEATEROS_HOST_ARCH"] = "arm64"
             os.environ["BEATEROS_ACCELERATOR_CPU"] = "0"
             self.assertEqual(MODULE.check(loaded, host_check=True), 1)
+
+    def test_report_mode_emits_machine_coverage_json(self) -> None:
+        manifest = _valid_manifest()
+        with tempfile.TemporaryDirectory() as td:
+            path = _write_manifest(Path(td), manifest)
+            loaded = MODULE.load_manifest(path)
+            os.environ["BEATEROS_HOST_OS"] = "linux"
+            os.environ["BEATEROS_HOST_ARCH"] = "x86_64"
+            os.environ["BEATEROS_ACCELERATOR_CPU"] = "1"
+            args = type(
+                "Args",
+                (),
+                {
+                    "check_host": True,
+                    "require_profile": None,
+                    "report": True,
+                },
+            )()
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                MODULE.run_and_dump_json(args, loaded)
+            lines = [line for line in buf.getvalue().splitlines() if line.strip()]
+            payload = json.loads(lines[0])
+            self.assertEqual(payload["host"]["os"], "linux")
+            self.assertIn("test-host", payload["supported_profiles"])

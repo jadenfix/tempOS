@@ -80,7 +80,7 @@ def build_plan(python: str = "python3", *, branch_base_available: bool | None = 
         ),
         Gate(
             "bare-metal-readiness",
-            (python, "scripts/check-bare-metal-readiness.py"),
+            (python, "scripts/check-bare-metal-readiness.py", "--report"),
         ),
         Gate("python-unit-tests", (python, "-m", "unittest", "discover", "-s", "tests")),
         Gate("spec-conformance", (python, "spec/conformance/validate.py", "--quiet")),
