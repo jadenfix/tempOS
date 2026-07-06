@@ -257,6 +257,7 @@ fn denied_execute_emits_decision_but_no_receipt_or_side_effect() {
     create_session(&h, session);
     let grant_id = issue_file_grant(&h, session, "read", &workdir);
     let forbidden = PathBuf::from(&workdir).join("should-not-exist.txt");
+    let forbidden_arg = format!("printf denied > {}", forbidden.display());
 
     let out = ok(
         &h,
@@ -272,7 +273,7 @@ fn denied_execute_emits_decision_but_no_receipt_or_side_effect() {
             "--arg",
             "-c",
             "--arg",
-            "printf denied > should-not-exist.txt",
+            &forbidden_arg,
             "--cwd",
             &workdir,
             "--grants",
