@@ -127,7 +127,7 @@ impl PolicyEngine {
                 ctx,
                 DecisionResult::Denied,
                 matched_rules,
-                reason,
+                reason.as_str(),
                 DecisionFollowup::none(),
             ));
         }
@@ -336,32 +336,145 @@ fn is_payment_action(manifest: &ActionManifest) -> bool {
 /// payment that does not state how much it moves cannot be bounded, so it fails
 /// closed ("no silent mandate expansion").
 ///
-/// This slice binds the axes the current contracts express unambiguously:
-/// presence, session/holder binding, expiry, and the amount ceiling.
-/// Counterparty, asset, and purpose binding need manifest fields that do not yet
-/// exist and are a documented follow-up (see docs/design/payment-mandate-admission.md).
+/// Payment intent is chain-neutral. Aether, Stripe, x402, cards, and fake rails
+/// all project into the same normalized fields, while each adapter owns envelope
+/// parsing and signature/settlement verification outside the policy TCB.
 fn payment_authorized_by_mandate(
     manifest: &ActionManifest,
     ctx: &AdmissionContext,
-) -> Result<(), &'static str> {
+) -> Result<(), String> {
     let Some(amount) = manifest.requested_budget.max_payment_minor_units else {
         return Err(
-            "payment action must declare its amount in requested_budget.max_payment_minor_units",
+            "payment action must declare its amount in requested_budget.max_payment_minor_units"
+                .to_string(),
         );
     };
-    let covered = ctx.mandates.iter().any(|mandate| {
-        mandate.session_id == ctx.session_id
-            && mandate.holder == ctx.actor_id
-            && mandate.expires_at > ctx.now
-            && amount <= mandate.max_minor_units
-    });
-    if covered {
-        Ok(())
-    } else {
-        Err(
-            "payment requires an active PaymentMandate covering the amount for this session and holder",
-        )
+
+    let Some(intent) = &manifest.payment_intent else {
+        return Err("payment actions require a payment_intent".to_string());
+    };
+
+    if manifest.target.resource_kind != crate::contracts::ResourceKind::PaymentRail {
+        return Err("payment intent target must be a payment_rail".to_string());
     }
+    if manifest.target.resource_id != intent.rail {
+        return Err("payment intent rail must match the manifest payment_rail target".to_string());
+    }
+    if intent.amount_minor_units == 0 {
+        return Err("payment intent amount must be non-zero".to_string());
+    }
+    if intent.amount_minor_units != amount {
+        return Err(
+            "payment intent amount must match requested_budget.max_payment_minor_units".to_string(),
+        );
+    }
+    if manifest.idempotency_key.as_deref() != Some(intent.payment_idempotency_key.as_str()) {
+        return Err(
+            "payment intent idempotency key must match the manifest idempotency key".to_string(),
+        );
+    }
+    if intent.mandate_id.is_empty()
+        || intent.rail.is_empty()
+        || intent.adapter_id.is_empty()
+        || intent.asset.is_empty()
+        || intent.counterparty_ref.is_empty()
+        || intent.purpose.is_empty()
+        || intent.payment_idempotency_key.is_empty()
+        || intent.envelope_format.is_empty()
+    {
+        return Err("payment intent fields must be non-empty".to_string());
+    }
+    if !is_hex_64(&intent.counterparty_binding_hash) || !is_hex_64(&intent.envelope_hash) {
+        return Err("payment intent hashes must be lowercase 32-byte hex".to_string());
+    }
+    if intent
+        .envelope_expires_at
+        .as_ref()
+        .is_some_and(|expires_at| expires_at <= &ctx.now)
+    {
+        return Err("payment intent envelope is expired".to_string());
+    }
+
+    let mut matching = ctx.mandates.iter().filter(|mandate| {
+        mandate.mandate_id == intent.mandate_id
+            && mandate.session_id == ctx.session_id
+            && mandate.holder == ctx.actor_id
+    });
+    let Some(mandate) = matching.next() else {
+        return Err(
+            "payment requires an active PaymentMandate covering the amount for this session and holder"
+                .to_string(),
+        );
+    };
+    if matching.next().is_some() {
+        return Err("payment intent mandate_id must select exactly one mandate".to_string());
+    }
+
+    if mandate.expires_at <= ctx.now {
+        return Err("payment mandate is expired".to_string());
+    }
+    if intent.rail != mandate.rail {
+        return Err("payment intent rail does not match mandate rail".to_string());
+    }
+    if intent.asset != mandate.asset {
+        return Err("payment intent asset does not match mandate asset".to_string());
+    }
+    if intent.amount_minor_units > mandate.max_minor_units {
+        return Err("payment intent amount exceeds mandate ceiling".to_string());
+    }
+    if intent.purpose != mandate.purpose {
+        return Err("payment intent purpose does not match mandate purpose".to_string());
+    }
+    if !counterparty_policy_allows(
+        &mandate.counterparty_policy,
+        &intent.counterparty_ref,
+        &intent.counterparty_binding_hash,
+    ) {
+        return Err("payment intent counterparty is not allowed by mandate".to_string());
+    }
+    if intent.payment_idempotency_key != mandate.idempotency_key {
+        return Err("payment intent idempotency key does not match mandate".to_string());
+    }
+    if !mandate.allowed_adapter_ids.is_empty()
+        && !mandate.allowed_adapter_ids.contains(&intent.adapter_id)
+    {
+        return Err("payment intent adapter is not allowed by mandate".to_string());
+    }
+    if !mandate.allowed_envelope_formats.is_empty()
+        && !mandate
+            .allowed_envelope_formats
+            .contains(&intent.envelope_format)
+    {
+        return Err("payment intent envelope format is not allowed by mandate".to_string());
+    }
+
+    Ok(())
+}
+
+fn counterparty_policy_allows(policy: &str, counterparty_ref: &str, binding_hash: &str) -> bool {
+    if policy == "any" {
+        return true;
+    }
+    let Some((kind, value)) = policy.split_once(':') else {
+        return false;
+    };
+    match kind {
+        "exact" => counterparty_ref == value,
+        "prefix" => counterparty_ref.starts_with(value),
+        "hash" => binding_hash == value,
+        "allowlist" => value
+            .split(',')
+            .map(str::trim)
+            .any(|allowed| !allowed.is_empty() && counterparty_ref == allowed),
+        _ => false,
+    }
+}
+
+fn is_hex_64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Walk a grant's delegation chain and return whether the whole chain is live

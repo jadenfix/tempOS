@@ -71,6 +71,7 @@ fn read_manifest(risk: RiskClass, data: BTreeSet<DataClass>) -> ActionManifest {
         data_classes: data,
         taint: BTreeSet::new(),
         idempotency_key: None,
+        payment_intent: None,
         compensation_plan: None,
         human_explanation: "read the repo".to_string(),
     }

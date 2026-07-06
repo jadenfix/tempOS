@@ -3,6 +3,9 @@
 This document defines how beaterOS agents should design and review systems work.
 It applies to architecture docs, Rust code, future C/assembly boundaries,
 sandboxing, model routing, payment rails, journals, memory, and release gates.
+For detailed optimization-agent workflow, bottleneck taxonomy, toolchain
+freshness rules, and accelerator review packets, also use
+`docs/optimization-agent-playbook.md`.
 
 ## First Principles
 
@@ -35,6 +38,9 @@ Every performance-sensitive change should name its budget:
 - CPU: expected core use, lock contention, context switches
 - IO: syscalls, fsyncs, network round trips, bytes copied
 - model/tool cost: calls, tokens, wall-clock, retries, and spend
+- accelerator cost when relevant: host-device copies, device-memory residency,
+  queue delay, launch count, occupancy, partition contention, throttling, and
+  fallback latency
 
 Optimization order:
 
@@ -48,11 +54,45 @@ Optimization order:
 Do not introduce clever low-level code without a measurable bottleneck, a simpler
 fallback, and tests that protect correctness.
 
+Before optimizing, classify the bottleneck:
+
+- contract work: unnecessary action, receipt, model call, hash, retry, or scan
+- algorithm: wrong complexity, missing index, avoidable recomputation, or
+  unbounded fan-out
+- data layout: poor locality, cold fields in hot structs, allocation churn, or
+  pointer chasing
+- copy/encoding: clone storms, JSON churn, string formatting, buffer growth, or
+  host-device transfer
+- syscall/IO: process spawn, fsync, descriptor churn, network round trip, or
+  storage flush
+- concurrency: lock contention, queue backlog, priority inversion, async leak,
+  or retry amplification
+- scheduler/platform: context switch, page fault, CPU affinity, timer, power, or
+  kernel feature gap
+- accelerator: launch overhead, model residency miss, memory pressure,
+  partition contention, precision conversion, or batch mismatch
+- provider/runtime: model cold start, SDK retry, rate limit, remote queue, or
+  browser/cloud control-plane delay
+
 ## Language And Boundary Policy
 
 Use the best language for the subsystem, boundary, and measurement target. When
 the tradeoff is close, prefer Rust because it gives predictable native
 performance with strong ownership and concurrency checks.
+
+The goal is metal-grade performance, not performative low-level code. Start from
+the contract, measure the hot path, and choose the lowest-risk boundary that can
+meet the latency, throughput, memory, syscall, and security budget. Moving a
+component closer to the metal is justified by evidence: a trace, benchmark,
+profile, proof obligation, or platform boundary that the current layer cannot
+satisfy.
+
+Toolchain facts are temporal. For a performance-sensitive PR, record the date
+and primary source for the compiler/runtime version if the change depends on
+language or compiler behavior. `docs/source-matrix.md` keeps the
+repo-maintained current-version snapshot for language and accelerator inputs.
+Those entries are not beaterOS pins; they are a reminder that agents must
+verify current versions before making current-version claims.
 
 Default choices:
 
@@ -62,13 +102,74 @@ Default choices:
 - C for stable ABI surfaces, kernel/driver/hypervisor/platform APIs, existing
   high-quality C libraries, or hot paths where measurement proves Rust is not
   meeting the requirement.
+- C++ for vendor SDKs, browser/embedder integration, compiler/runtime extension,
+  or existing libraries where replacement is riskier than isolation. Keep it out
+  of the authority boundary unless ownership, exceptions, allocation, threading,
+  and failure behavior are reviewed explicitly.
 - Assembly for unavoidable hardware boundaries only.
+- Zig for isolated freestanding experiments and cross-compilation probes, not
+  TCB authority paths until toolchain stability and reviewer depth are proven.
+- Swift for Apple-native UI or platform integration where it is the platform
+  boundary, not for beaterOS policy or receipts.
+- Go for non-TCB infrastructure daemons where static deployment and iteration
+  matter more than lowest-latency ownership control.
 - Python for small validation/audit/research scripts where startup latency,
   dependency control, and runtime authority are bounded.
 - TypeScript for browser/dashboard surfaces when a web UI is the product
   boundary, with generated contracts rather than hand-maintained schema drift.
 - SQL or purpose-built query languages for durable/query-heavy state, with
   migrations and conformance tests as contracts.
+
+Ecosystem boundary rule:
+
+- Tempo and browser-facing surfaces may use TypeScript for UI and browser
+  integration, but authority, policy admission, receipt writing, trace
+  verification, and scheduler-facing operations must terminate in native
+  beaterOS contracts.
+- Agent SDKs may be ergonomic in TypeScript or another host language, but they
+  are clients of the Rust authority boundary, not substitutes for it.
+- High-volume trace, screenshot/DOM metadata, journal, memory, sandbox, and
+  tool-gateway paths should avoid avoidable JSON churn. Use generated schemas,
+  stable binary encodings, mmap/shared-memory, ring buffers, or zero-copy
+  handoff only when measurements show the simpler path is too slow.
+- Platform-specific acceleration is allowed behind portable contracts. Linux
+  paths may use `io_uring`, eBPF, XDP, cgroups, namespaces, seccomp, and KVM
+  when available. macOS paths must keep a real implementation or explicit
+  abstraction, not a silent no-op.
+- GPU, TPU, LPU, NPU, media-engine, secure-enclave, and custom-silicon paths are
+  accelerator backends behind beaterOS contracts. They must not bypass
+  admission, data-class policy, receipts, cancellation, queue bounds, or spend
+  limits.
+
+Accelerator engineering rules:
+
+- Model accelerator work as schedulable jobs with device class, model/artifact
+  digest, runtime/compiler version, memory budget, precision/quantization,
+  batch/streaming mode, tenant isolation, timeout, and fallback route.
+- Count host-device copies, HBM/VRAM/SRAM residency, pinned memory, DMA, memory
+  bandwidth, cache pressure, synchronization/fence cost, page migration, queue
+  delay, kernel launch overhead, and thermal/power throttling as part of the hot
+  path.
+- Prefer keeping weights and hot embeddings resident when the authority and
+  data-sensitivity boundary allows it. Eviction and cache reuse are policy
+  decisions, not hidden SDK behavior.
+- Treat discrete-device memory and Apple-style unified memory differently.
+  Discrete accelerators pay explicit copy/DMA/pinning costs; unified-memory
+  systems still pay bandwidth, cache, synchronization, page-migration, and
+  shared-RSS costs. A copy-vs-map decision needs evidence.
+- Accelerator queues need bounded depth, admission class, priority/fairness
+  rules, maximum batch wait, cancellation-drain behavior, tenant isolation,
+  overload behavior, and enqueue/dequeue/start/finish receipt evidence.
+- Use hardware partitioning when available, such as GPU MIG or VM/pod-level
+  accelerator slices. When unavailable, isolate with processes, sandboxes,
+  microVMs, device ACLs, and conservative scheduling.
+- Never hard-code one accelerator vendor as the OS contract. GPU, TPU, LPU,
+  NPU, Apple Silicon, and future ASIC paths must implement the same admission,
+  receipt, telemetry, and fallback shape.
+- On Apple Silicon, name whether a path uses CPU SIMD, Metal GPU, Metal
+  Performance Shaders, Core ML, ANE/Core AI-style framework routing, media
+  engines, or the secure enclave. If placement, timing, or throttling is hidden
+  by the framework, record that limitation and provide a fallback.
 
 Use C only when at least one condition is true:
 
@@ -176,6 +277,8 @@ Use the smallest relevant proof:
 - benchmarks for hot-path changes
 - traces for queueing, syscall, model/tool, sandbox, and journal latency
 - flamegraphs or platform profilers for unclear CPU bottlenecks
+- accelerator telemetry for device occupancy, memory residency, host-device
+  copies, queue delay, launch count, throttling, and fallback behavior
 
 On macOS, prefer Instruments, `sample`, `spindump`, `dtrace` where available,
 and Rust-level benchmarks. On Linux future targets, add `perf`, eBPF, and
@@ -196,6 +299,9 @@ Important constraints:
   eventing behavior.
 - Apple Silicon is `aarch64`; consider alignment, atomics, SIMD, endian
   assumptions, and page-size differences.
+- SIMD work must document feature detection, target features, compiler flags,
+  alignment, scalar fallback, vector-width assumptions, precision/determinism
+  drift, and benchmarks showing that auto-vectorization or intrinsics help.
 - Bare-metal boot on modern Macs is not the first target. Prefer a macOS-hosted
   runtime, simulator, or hypervisor-backed path first, then define separate
   hardware bring-up targets.
@@ -207,6 +313,8 @@ Important constraints:
 Use this checklist on architecture and implementation PRs:
 
 - The critical path and resource budgets are stated.
+- The bottleneck class, baseline, target, and replay command are stated.
+- Compiler/runtime versions are recorded when they are part of the claim.
 - No unbounded queues, retries, memory growth, fan-out, or model/tool spend were
   introduced.
 - Authority is explicit and least-privilege.
@@ -215,5 +323,7 @@ Use this checklist on architecture and implementation PRs:
   churn.
 - C/assembly/unsafe code is justified, isolated, and tested.
 - macOS support is preserved.
+- Accelerator paths retain admission, scheduling, data-class policy, receipts,
+  cancellation, telemetry, and portable fallback.
 - The change adds or identifies the benchmark, trace, property test, scenario, or
   CI gate that would catch the most likely regression.

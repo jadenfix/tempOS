@@ -24,6 +24,42 @@ def _reg() -> SchemaRegistry:
     return SchemaRegistry().load_dir(SCHEMA_DIR)
 
 
+def _payment_intent(action_id: str) -> dict:
+    return {
+        "mandate_id": "m",
+        "rail": "r",
+        "adapter_id": "test-adapter",
+        "asset": "USD",
+        "amount_minor_units": 1,
+        "counterparty_ref": "vendor:test",
+        "counterparty_binding_hash": "1" * 64,
+        "purpose": "test payment",
+        "payment_idempotency_key": "i",
+        "envelope_format": "test-payment-v1",
+        "envelope_hash": ("2" if action_id == "s" else "3") * 64,
+    }
+
+
+def _payment_mandate() -> dict:
+    return {
+        "mandate_id": "m",
+        "issuer": "u",
+        "holder": "agent",
+        "session_id": "S",
+        "rail": "r",
+        "asset": "USD",
+        "max_minor_units": 1000,
+        "counterparty_policy": "prefix:vendor:",
+        "purpose": "test payment",
+        "expires_at": "2026-07-03T01:00:00Z",
+        "approval_threshold_minor_units": 100,
+        "idempotency_key": "i",
+        "receipt_requirement": "required",
+        "allowed_adapter_ids": ["test-adapter"],
+        "allowed_envelope_formats": ["test-payment-v1"],
+    }
+
+
 def run() -> list[str]:
     reg = _reg()
     fails: list[str] = []
@@ -66,6 +102,7 @@ def run() -> list[str]:
         "required_grants": ["g"], "expected_side_effects": ["payment"], "idempotency_key": "i",
         "taint": ["untrusted_web"], "data_classes": ["financial"],
         "requested_budget": {"max_payment_minor_units": 1},
+        "payment_intent": _payment_intent("s"),
     }
     grant = {
         "grant_id": "g", "issuer": "u", "holder": "agent", "session_id": "S",
@@ -76,7 +113,8 @@ def run() -> list[str]:
         "revocation_handle": "rev", "policy_version": "p", "reason": "",
     }
     ctx2 = {"now": "2026-07-03T00:30:00Z", "actor_id": "agent", "session_id": "S",
-            "policy_version": "p", "grants": [grant], "approvals": [], "simulations": []}
+            "policy_version": "p", "grants": [grant], "approvals": [], "simulations": [],
+            "mandates": [_payment_mandate()]}
     expect(admission.admit(spend, ctx2)["result"] == "needs_approval",
            "untrusted-web spend without approval should escalate")
 
@@ -110,6 +148,7 @@ def run() -> list[str]:
         "required_grants": ["g"], "expected_side_effects": ["payment"], "idempotency_key": "i",
         "taint": ["untrusted_web"], "data_classes": ["financial"],
         "requested_budget": {"max_payment_minor_units": 1},
+        "payment_intent": _payment_intent("u"),
     }
     grant_human = {
         "grant_id": "g", "issuer": "u", "holder": "agent", "session_id": "S",
@@ -125,7 +164,7 @@ def run() -> list[str]:
             "approvals": [{"review_id": "rv", "action_id": "u", "grant_id": "g",
                            "reviewer_id": "attacker", "approved_at": "2026-07-03T00:10:00Z",
                            "policy_version": "p"}],
-            "simulations": []}
+            "simulations": [], "mandates": [_payment_mandate()]}
     expect(admission.admit(unauth_spend, ctx4)["result"] == "needs_approval",
            "approval from an unauthorized reviewer must not satisfy the untrusted-taint gate")
 

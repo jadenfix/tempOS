@@ -124,6 +124,7 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
         data_classes: BTreeSet::new(),
         taint: BTreeSet::new(),
         idempotency_key: Some(format!("idem-{action_id}")),
+        payment_intent: None,
         compensation_plan: None,
         human_explanation: "test action".to_string(),
     }

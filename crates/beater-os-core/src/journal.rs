@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    ActionManifest, AgentSession, CapabilityGrant, DecisionResult, MemoryRecord, PolicyDecision,
-    ScenarioManifest,
+    ActionManifest, AgentSession, CapabilityGrant, DecisionResult, MemoryRecord, PaymentMandate,
+    PolicyDecision, ScenarioManifest,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
@@ -20,8 +20,11 @@ pub enum JournalEvent {
     CapabilityGranted {
         grant: CapabilityGrant,
     },
+    PaymentMandateIssued {
+        mandate: PaymentMandate,
+    },
     ActionProposed {
-        manifest: ActionManifest,
+        manifest: Box<ActionManifest>,
     },
     PolicyDecided {
         decision: PolicyDecision,
@@ -192,7 +195,7 @@ fn verify_event_causality(
     match &record.event {
         JournalEvent::ActionProposed { manifest } => {
             if proposed_actions
-                .insert(manifest.action_id.clone(), manifest.clone())
+                .insert(manifest.action_id.clone(), manifest.as_ref().clone())
                 .is_some()
             {
                 return causality_error(
@@ -310,6 +313,7 @@ fn verify_event_causality(
         }
         JournalEvent::SessionCreated { .. }
         | JournalEvent::CapabilityGranted { .. }
+        | JournalEvent::PaymentMandateIssued { .. }
         | JournalEvent::MemoryWritten { .. }
         | JournalEvent::ScenarioEvaluated { .. }
         | JournalEvent::IncidentAnnotated { .. } => {}

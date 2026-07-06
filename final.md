@@ -8,11 +8,13 @@ Repo objective: define what must be true for beaterOS to become a successful age
 
 ## 1. Executive Thesis
 
-beaterOS should not begin as a bare-metal operating system.
+beaterOS is a long-horizon operating-system project for agentic computing. The end state is not just an app, a framework, or a desktop shell. The end state is an OS stack that can touch metal where that is the right engineering boundary: scheduler, memory, IO, devices, isolation, authority, audit, and recovery designed from first principles for probabilistic agents.
 
-It should begin as an agent-first operating layer: a user-space control plane that sits above Linux, macOS, cloud VMs, browsers, containers, and model providers. Its job is to make agent work safe, observable, reproducible, permissioned, testable, and economically bounded.
+It should not begin by trying to replace Linux or macOS wholesale.
 
-The first winning version is an "agent kernel", not a replacement for Linux. It owns the agent-specific primitives that conventional operating systems do not have:
+It should begin as an agent-first operating layer: a user-space control plane that sits above Linux, macOS, cloud VMs, browsers, containers, and model providers. Its job is to make agent work safe, observable, reproducible, permissioned, testable, and economically bounded. This lane is not a retreat from building a real OS. It is the bootstrapping path that lets the project validate contracts, policy, traces, and workloads before committing to hardware, kernel, and driver boundaries.
+
+The first winning version is an "agent kernel" hosted by existing operating systems. The later winning version is a metal-touching OS stack whose low-level components are justified by measured agent workloads. In both cases, beaterOS owns the agent-specific primitives that conventional operating systems do not have:
 
 - Goals, tasks, sessions, and long-running plans.
 - Tool and action capability grants.
@@ -35,7 +37,7 @@ That is a different operating problem.
 
 Can we make an agent-first operating system?
 
-Yes, if we choose the right first target.
+Yes, if we choose the right sequence.
 
 The wrong first target is "build a new Linux" or "make a beautiful AI desktop shell". That absorbs years into drivers, hardware support, GUI polish, package management, and compatibility before the agent-specific problem is solved.
 
@@ -50,7 +52,14 @@ The right first target is:
 7. A small but strict security model.
 8. Adapters into existing OS surfaces, browsers, MCP servers, CLIs, APIs, and Beater components.
 
-Only after those contracts work should beaterOS become a distro, a desktop, a VM image, or a true kernel research project.
+Only after those contracts work should beaterOS become a Linux add-on, distro, desktop, VM image, unikernel, library OS, microkernel appliance, or true metal-touching kernel project.
+
+The strategic split is:
+
+- **Compatibility lane:** make Linux, macOS, containers, browsers, and cloud VMs safer for agents now.
+- **Metal lane:** build the parts of a new OS only where measurements show the host OS cannot express the right authority, latency, isolation, memory, IO, or audit contract.
+
+The metal lane is a years-long research and implementation program, not a weekend kernel hobby project. It should advance through proofs, simulators, microVMs, hypervisors, narrow appliances, and hardware-backed isolation before broad device support.
 
 ## 3. What Must Be True For Success
 
@@ -886,6 +895,62 @@ Future path:
 
 - If the control plane proves valuable, create a hardened Linux distro or VM image.
 - Later, explore seL4 or CHERI-based high-assurance agent appliances for narrow workloads.
+
+This is a sequencing decision, not a product ceiling. beaterOS should keep two explicit engineering lanes:
+
+1. **Linux/macOS add-on lane.** Build the agent kernel, policy engine, sandbox lane, memory provenance, scenario runner, receipts, and audit tools on existing kernels. On Linux, use cgroups, namespaces, seccomp, LSMs, eBPF, io_uring, and microVMs where they provide measurable wins. On macOS, keep a first-class local development path with portable Rust contracts and explicit platform abstraction.
+2. **Metal-touching OS lane.** Build the smallest new low-level OS pieces that agent workloads actually require: capability-secure task admission, policy-aware scheduling, bounded memory and context management, zero-copy trace and receipt paths, high-assurance sandboxing, and recoverable journals. This lane may pass through a simulator, a microkernel appliance, a library OS, a hypervisor-backed runtime, or a RISC-V/ARM research target before general hardware support.
+
+The rule is: do not move a subsystem into the metal lane until the hosted lane has produced a workload, trace, benchmark, or security proof that the host substrate cannot satisfy cleanly.
+
+### 8.1.1 What An Operating System Built In 2026 Should Look Like
+
+An OS started in 2026 should not copy the 1990s desktop/kernel split and then bolt agents on top. It should begin from scarce resources and trust boundaries:
+
+- **Authority-first kernel boundary.** Every meaningful side effect has a capability, policy decision, and receipt before the system optimizes for convenience.
+- **Memory-safe default implementation.** Rust is the default for kernel/control-plane services. C is used only at stable ABI, driver, hypervisor, or proven hot-path boundaries. Assembly is limited to hardware entry points.
+- **Small trusted core.** The kernel is not a warehouse for policy, drivers, parsers, and UI. The core names principals, grants, address spaces, queues, clocks, interrupts, and evidence. Everything else is a service with explicit authority.
+- **Capability hardware and microkernel influence.** seL4 proves that small capability kernels can be verified. CHERI shows how hardware capabilities can make memory safety and compartmentalization a hardware property. beaterOS should learn from both without pretending broad hardware support is free.
+- **Policy-aware scheduling.** Scheduling cannot only optimize CPU fairness. It must know about tool risk, human review queues, model spend, payment spend, context-window pressure, IO priority, rollback cost, and p95/p99 latency.
+- **Modern IO path.** Use rings, batching, completion queues, zero-copy where possible, and explicit backpressure. Linux `io_uring`, DPDK, SPDK, XDP, and eBPF show the shape: avoid needless syscalls, copies, interrupts, and lock handoffs, but preserve audit and safety.
+- **Accelerator fabric as an OS resource.** GPUs, TPUs, LPUs, NPUs, media engines, secure enclaves, and future agent ASICs are not just libraries behind SDK calls. They are scarce devices with queues, memory, power, thermals, tenants, placement constraints, model residency, data-sensitivity constraints, and side-channel risk. beaterOS should schedule accelerator work with the same discipline as CPU, IO, memory, network, model spend, and payment spend.
+- **Memory hierarchy as an OS service.** Agent memory spans RAM, local SSD, remote stores, embeddings, traces, CXL/far memory, and redacted audit archives. Hot context, durable evidence, and cold provenance should be different tiers with explicit movement rules.
+- **Virtualization as a primitive, not an afterthought.** MicroVMs and confidential-computing enclaves are useful isolation boundaries for risky tools and third-party workloads, but attestation and firmware trust remain attack surfaces. Use them as evidence-bearing compartments, not magic.
+- **Observable by construction.** Tracepoints, receipts, policy decisions, model routes, queue depth, spend, and filesystem/network effects are first-class records, not logs scraped after an incident.
+
+This is the deeper beaterOS direction: a compatibility-first agent OS that earns the right to become a metal-touching OS by proving which low-level boundaries must exist.
+
+### 8.1.2 Ecosystem Runtime Contract
+
+beaterOS must be the OS substrate for the rest of the ecosystem, including Tempo, beater.js, beatbox, beater-memory, and future agent surfaces. That does not mean every project is folded into one repo. It means the hot contracts are shared, typed, and measurable:
+
+- **Tempo/browser lane.** Browser actions must pass through action manifests, capability grants, tool registry checks, screenshot/DOM/accessibility evidence, network/origin policy, and receipts. The hot path should avoid JSON string churn where possible: use generated schemas, stable binary encodings for high-volume traces, shared-memory or ring-buffer transport where justified, and native Rust services for policy/admission/receipt work. Tempo UI code can stay in the browser stack, but authority, audit, and scheduler-facing operations belong in native beaterOS services.
+- **beater.js/agent lane.** JavaScript/TypeScript can remain the ergonomic agent authoring surface, but it must not be the authority boundary. It calls into the Rust policy, journal, memory, and tool-gateway contracts through a narrow API.
+- **beatbox/sandbox lane.** Sandbox execution is a low-level service. The fast path is canonicalize, admit, execute under confinement, diff, receipt, and append. Optimize syscalls, copies, environment setup, and diffing before adding abstractions.
+- **beater-memory lane.** Memory projection is a derived view over journals and receipts, not ambient truth. Hot memory queries need indexes and cache-aware layouts; durable provenance stays append-only and replayable.
+- **Model/tool/payment lanes.** Provider SDKs are adapters. Authority lives in beaterOS contracts. Expensive calls must be budgeted, cancellable, traceable, and tied to receipts.
+- **Accelerator lane.** GPU, TPU, LPU, NPU, and custom-silicon execution must be modeled as admitted work. A run names the model/artifact, accelerator class, memory budget, data class, precision/quantization profile, expected latency, batch/streaming mode, tenant/isolation requirement, and fallback route. Receipts record placement, device class, driver/runtime version, accelerator partition (for example MIG or a VM/pod slice), memory movement, queue delay, execution time, output digest, and thermal/power throttling when observable.
+
+The language rule for ecosystem integration is strict:
+
+- Rust owns TCB services, hot policy paths, journals, receipts, schedulers, sandbox orchestration, memory projection, native IPC, and kernel/hypervisor-facing code.
+- TypeScript owns UI and high-level agent ergonomics only where latency, authority, and memory safety are not the boundary.
+- C/C++ are allowed for stable ABI, platform APIs, browser/embedder interop, drivers, hypervisors, and measured hot-path library integration.
+- Assembly is allowed only at unavoidable hardware entry points.
+- WASM is allowed for portable untrusted plugins when deterministic sandboxing is more important than raw native speed.
+
+Optimization is by evidence: first remove work, then batch/cache, then reduce copies/syscalls/allocations, then specialize, then move closer to the metal. A subsystem moves from TypeScript to Rust, from Rust to C, or from user space to kernel/driver/hypervisor only when a trace, benchmark, or security review proves the current boundary is the limiting factor.
+
+Every serious optimization PR must carry an optimization packet: current compiler/runtime versions when relevant, the bottleneck class, the replayable workload, baseline p50/p95/p99 or throughput/memory/copy/syscall/device metrics, the target budget, the profile or trace that identifies the limiter, the authority boundary that must not change, the macOS path, and the regression gate. "Use a faster language" is not an argument until ownership, cancellation, error propagation, audit evidence, unsafe/FFI review, and rollback are explicit.
+
+Accelerator optimization follows the same rule, but the cost model is different:
+
+- Keep model weights resident when safe; avoid repeated host-device transfer.
+- Treat HBM/SRAM/VRAM as schedulable memory tiers, not opaque implementation detail.
+- Batch only when it does not violate latency, cancellation, priority, or human-review constraints.
+- Route tokens and embeddings to the right silicon class: GPU for general parallel kernels and model serving, TPU for XLA/JAX/PyTorch matrix-heavy training and inference where available, LPU or similar deterministic inference silicon for low-jitter token generation when the provider exposes it, NPU/media/Apple Neural Engine-style local accelerators for private low-power local tasks when platform APIs allow it.
+- Partition accelerators by hardware support where possible, such as NVIDIA MIG or VM/pod-level TPU isolation, and fall back to process/microVM isolation plus policy when hardware partitioning is unavailable.
+- Make every accelerator path replayable enough for audit: device class and version, runtime/compiler version, model digest, quantization, precision, seed where meaningful, and admission context.
 
 ### 8.2 Capability Security vs ACL/RBAC First
 
@@ -2494,6 +2559,16 @@ Linux security primitives:
 - seccomp, cgroups, namespaces, LSMs, and eBPF are practical substrate controls.
 - Relevant immediately for sandbox lanes.
 
+2026 systems optimization lessons:
+
+- Linux `sched_ext` shows that scheduler policy can be safely extended with BPF programs and turned on/off dynamically. beaterOS should use this as a Linux add-on experiment for policy-aware agent scheduling before designing a native scheduler.
+- `io_uring` and its zero-copy receive work show the value of shared submission/completion rings, batching, and copy avoidance while keeping the kernel network stack in the path. beaterOS trace, receipt, and sandbox IO should use the same shape: bounded rings, explicit completion records, and minimal copies.
+- XDP/eBPF show that safe, dynamically loaded programs at kernel hook points can handle packet filtering, tracing, and enforcement before expensive allocations. beaterOS should treat eBPF as a Linux enforcement and observability substrate, not as portable policy truth.
+- DPDK and SPDK show when kernel bypass is justified: polled-mode queues, direct descriptors, zero-copy, and lockless paths can win for high-throughput devices, but only with explicit CPU, isolation, and audit budgets.
+- Firecracker shows the value of minimal device models and fast microVM startup for workload isolation. beaterOS should prefer minimal virtual devices for risky agent lanes instead of exposing broad host surfaces.
+- CXL/far-memory tiering shows that modern OS memory management is no longer just RAM versus disk. beaterOS memory must distinguish hot context, active working sets, cold provenance, embeddings, traces, and archives.
+- Rust-for-Linux confirms that memory-safe kernel-adjacent code is now a serious systems path. beaterOS should default to Rust for all new low-level code unless an ABI, driver, or measured hot path requires C.
+
 ### 18.2 Agent OS Research Lessons
 
 AIOS:
@@ -2962,18 +3037,25 @@ By enforcing boundaries that frameworks usually treat as conventions:
 
 Near-term non-goals:
 
-- Bare-metal kernel.
-- Hardware driver stack.
+- Bare-metal kernel as the first implementation target.
+- Broad hardware driver stack before agent workloads justify it.
 - Full desktop environment.
 - Custom browser engine.
 - Custom cryptographic primitives.
 - Blockchain-first architecture.
 - Fully autonomous financial agent.
 - Unbounded multi-agent society.
-- Replacing Linux or macOS.
+- Replacing Linux or macOS before the hosted agent kernel proves value.
 - Solving general AGI alignment.
 
-These are intentionally excluded to keep the project focused on the missing OS layer for agents.
+These are intentionally excluded from the first implementation phase to keep the project focused on the missing OS layer for agents.
+
+Long-term, a metal-touching beaterOS is in scope when it is driven by evidence:
+
+- The hosted runtime exposes a real workload the host kernel cannot mediate safely or fast enough.
+- A low-level component has a crisp authority, memory, IO, scheduling, or audit boundary.
+- The implementation has a macOS-compatible development path, a Linux compatibility story, and a simulator or hardware target.
+- The subsystem can be tested with traces, benchmarks, property tests, or formal models before it carries user authority.
 
 ## 22. Failure Modes
 
@@ -3257,6 +3339,23 @@ This source list should be expanded continuously. The initial weighting is prima
 - OSDev wiki: https://wiki.osdev.org/Main_Page
 - OSDev Beginner Mistakes: https://wiki.osdev.org/Beginner_Mistakes
 - OSDev Required Knowledge: https://wiki.osdev.org/Required_Knowledge
+- Linux sched_ext: https://docs.kernel.org/scheduler/sched-ext.html
+- Linux io_uring: https://man7.org/linux/man-pages/man7/io_uring.7.html
+- Linux io_uring zero-copy receive: https://docs.kernel.org/networking/iou-zcrx.html
+- Linux Rust documentation: https://docs.kernel.org/rust/index.html
+- eBPF/XDP program type documentation: https://docs.ebpf.io/linux/program-type/BPF_PROG_TYPE_XDP/
+- DPDK poll mode driver documentation: https://doc.dpdk.org/guides/prog_guide/poll_mode_drv.html
+- SPDK overview: https://spdk.io/doc/about.html
+- Firecracker microVM documentation: https://firecracker-microvm.github.io/
+- Linux CXL memory tiering background: https://kernel-internals.org/mm/cxl-memory-tiering/
+- NVIDIA CUDA Programming Guide: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html
+- NVIDIA CUDA Best Practices Guide: https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html
+- NVIDIA Multi-Instance GPU User Guide: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/index.html
+- Google Cloud TPU documentation: https://docs.cloud.google.com/tpu/docs
+- Google Cloud TPU architecture: https://docs.cloud.google.com/tpu/docs/system-architecture-tpu-vm
+- Groq LPU architecture: https://groq.com/lpu-architecture
+- Apple Metal documentation: https://developer.apple.com/metal/
+- Apple Core ML documentation: https://developer.apple.com/documentation/coreml
 
 ### 27.4 Agent Protocols And Company Direction
 
@@ -3308,9 +3407,9 @@ This source list should be expanded continuously. The initial weighting is prima
 
 ## 28. Final Strategic Recommendation
 
-Build beaterOS as a local-first agent operating layer with a minimal trusted agent kernel.
+Build beaterOS as a local-first agent operating layer with a minimal trusted agent kernel, and use that hosted kernel to earn the data needed for a future metal-touching OS.
 
-The core invention is not a prettier chatbot, not a Linux replacement, and not a crypto network. The core invention is a set of operating-system-grade contracts for agent work:
+The core invention is not a prettier chatbot, not an immediate Linux replacement, and not a crypto network. The core invention is a set of operating-system-grade contracts for agent work:
 
 - Sessions for goals.
 - Capabilities for authority.
@@ -3336,6 +3435,6 @@ The design center should be:
 - Payment-aware.
 - Crypto-agile.
 - Human-legible.
+- Metal-ready when evidence demands it.
 
-The first version should make a narrow set of agent workflows dramatically safer and more debuggable than current agent frameworks. If it does that, the project earns the right to become a distro, a desktop environment, a cloud runtime, and eventually a high-assurance OS research platform.
-
+The first version should make a narrow set of agent workflows dramatically safer and more debuggable than current agent frameworks. If it does that, the project earns the right to become a Linux add-on, a distro, a desktop environment, a cloud runtime, a microVM appliance, and eventually a high-assurance OS research platform whose low-level pieces touch metal for measured reasons.

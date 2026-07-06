@@ -14,6 +14,8 @@ auditable evidence, and platform-aware implementation.
 For the full doctrine, read
 `docs/sota-systems-engineering.md` in the repository. Read `AGENTS.md` for the
 repo map and `final.md` when product intent or OS-level direction is unclear.
+For performance-sensitive work, language-boundary changes, accelerator paths, or
+optimization claims, also read `docs/optimization-agent-playbook.md`.
 
 ## Workflow
 
@@ -27,9 +29,14 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
    - Name latency, allocation, copy, syscall, queue, and retry expectations.
    - Move audit explanation, diagnostics, summarization, and expensive
      formatting off the critical path unless they are required for safety.
+   - Classify the bottleneck before editing: contract work, algorithm, data
+     layout, copy/encoding, syscall/IO, concurrency, scheduler/platform,
+     accelerator, or provider/runtime.
 
 3. Choose the lowest-risk language boundary.
    - Use the best language for the subsystem and boundary.
+   - Verify current compiler/runtime facts from primary sources when the change
+     makes a language, compiler, or performance claim.
    - When tradeoffs are close, prefer Rust.
    - Use C for ABI, boot/platform, driver, hypervisor, sandbox, existing C
      library, or measured hot-path interop needs.
@@ -48,7 +55,14 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
    - Preserve canonical encodings, schema versions, hashes, and receipt chains.
    - Do not treat model memory as privileged truth without provenance.
 
-6. Verify on macOS.
+6. Require the optimization packet for performance claims.
+   - Record workload, replay command, bottleneck class, baseline, target budget,
+     profile/trace artifact, compiler/runtime/backend versions, authority
+     boundary, macOS path, fallback, regression gate, and independent reviewer.
+   - Reject noisy benchmark claims, cold-path tuning, and complexity-raising
+     FFI/unsafe/accelerator paths unless the measured bottleneck justifies them.
+
+7. Verify on macOS.
    - Keep `cargo fmt --all -- --check`, `cargo test --workspace --locked`, and
      `cargo clippy --workspace --all-targets --locked -- -D warnings` passing.
    - Do not add Linux-only APIs without a platform abstraction or macOS path.
@@ -62,6 +76,12 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
 - Use bounded queues, structured concurrency, cancellation, and backpressure.
 - Keep hot records compact; move diagnostics, strings, and large blobs out of
   hot structs.
+- For accelerator paths, account for host-device copies, queue delay, model
+  residency, unified-memory pressure, partitioning, precision, throttling,
+  cancellation, telemetry, and fallback routes.
+- For Apple Silicon and SIMD paths, require placement/fallback clarity, feature
+  detection, scalar fallback, alignment rules, precision/determinism checks, and
+  evidence that vectorization or accelerator placement helps.
 - Add a benchmark, trace, property test, scenario, or CI gate for every serious
   performance or safety claim.
 
@@ -80,3 +100,6 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
 
 - `references/review-checklist.md`: use for PR review and design review.
 - Repository `docs/sota-systems-engineering.md`: full doctrine.
+- Repository `docs/optimization-agent-playbook.md`: optimization workflow,
+  bottleneck taxonomy, language/toolchain discipline, and accelerator review
+  packet.

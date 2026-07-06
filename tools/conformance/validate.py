@@ -91,6 +91,7 @@ def check_trace_bundle(rep: Report, reg, path: Path) -> None:
             "grants": bundle.get("grants", []),
             "approvals": bundle.get("approvals", []),
             "simulations": bundle.get("simulations", []),
+            "mandates": bundle.get("payment_mandates", []),
         }
         got = admission.admit(manifest, ctx)
         rep.check(

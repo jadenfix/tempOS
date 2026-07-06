@@ -32,10 +32,21 @@ action, admission fails closed unless a mandate covers it:
 1. **Amount is declared.** `requested_budget.max_payment_minor_units` must be
    `Some`. A payment that does not state how much it moves cannot be bounded, so
    it is denied ("no silent mandate expansion" begins with knowing the amount).
-2. **A covering mandate exists**, where the mandate is
+2. **A payment intent is declared.** `payment_intent` normalizes the concrete
+   rail payload into chain-neutral fields: mandate id, rail, adapter id, asset,
+   integer amount, counterparty reference and digest, purpose, idempotency key,
+   envelope format, envelope hash, and optional envelope expiry.
+3. **The intent is internally bound.** The manifest target must be a
+   `payment_rail`; the target rail, requested budget amount, and manifest
+   idempotency key must match the payment intent; hashes must be lowercase
+   32-byte hex.
+4. **A covering mandate exists**, where the mandate is
    - bound to this session (`session_id`) and holder (`actor_id`),
    - still active (`expires_at > now`), and
-   - sufficient for the amount (`amount <= max_minor_units`).
+   - selected by `payment_intent.mandate_id`.
+5. **The mandate covers the intent**, where rail, asset, purpose, idempotency
+   key, amount ceiling, allowed adapter ids, and allowed envelope formats all
+   match.
 
 On success the rule `payment_authorized_by_mandate` is recorded and admission
 proceeds to the existing grant, approval, and simulation gates — so a payment
@@ -49,35 +60,46 @@ The mandate gate runs immediately after the payment/spend consistency check and
 payment invariant: a mandate-less payment is denied outright, regardless of which
 grants are held or whether the content is trusted.
 
+## Adapter model
+
+beaterOS remains payment-rail neutral. Stripe, cards, bank APIs, x402, and Aether
+all enter policy as the same `PaymentIntent`. The adapter is responsible for
+verifying concrete rail artifacts, such as a Stripe PaymentIntent or Aether
+`aether-agent-payment-v1` envelope. Policy admits only the normalized projection:
+rail, adapter, envelope format, envelope hash, amount, counterparty binding, and
+mandate id.
+
+For Aether, a mandate can set:
+
+- `rail = "aether:aic"` or another logical Aether rail id,
+- `allowed_adapter_ids = ["aether"]`,
+- `allowed_envelope_formats = ["aether-agent-payment-v1"]`.
+
+That makes Aether native to beaterOS policy without moving chain id, signature
+algorithm, slot expiry, nonce, or settlement proof parsing into the OS authority
+contract. Those fields stay in the Aether envelope and receipt artifacts.
+
 ## Deliberately deferred (documented, not coded)
 
-The current contracts do not yet express every axis §12.7 and §6.8 describe, so
-this slice binds what is unambiguous and leaves the rest as a tracked follow-up
-rather than inventing manifest fields:
-
-- **Counterparty / asset / purpose binding.** The mandate carries
-  `counterparty_policy`, `asset`, and `purpose`, but the manifest has no
-  counterparty or purpose field to match against. Binding these needs a manifest
-  extension (a payment sub-record) and belongs to the full payment lane (backlog
-  slice 15).
 - **Mandate-driven approval threshold.** `approval_threshold_minor_units` should
   force human approval above a per-mandate limit. The approval machinery exists
   on grants; wiring the mandate threshold into it is the next increment.
-- **Payment receipt requirement.** `receipt_requirement` should gate completion,
-  which lives in the execution/receipt lane, not admission.
-- **Idempotency at the money layer.** The manifest already requires an
-  `idempotency_key` for external effects; binding it to the mandate's
-  `idempotency_key` so a retried-then-cancelled step cannot double-commit is part
-  of the full lane.
+- **Typed payment receipts.** `receipt_requirement` should gate completion, and
+  receipts should carry mandate id, rail, adapter id, envelope hash,
+  rail-receipt hash, and settlement status. That belongs to the execution/receipt
+  lane, not pure admission.
+- **Spend counters and replay storage.** The manifest and mandate bind
+  idempotency keys, but durable uniqueness and aggregate spend accounting need a
+  mandate store/projection path.
 
 ## Verification
 
-Admission tests cover: no mandate present (denied), amount over ceiling (denied),
-undeclared amount (denied), mandate bound to another session (denied), and a
-covered payment that passes the gate and then routes to simulation. The two
-pre-existing untrusted-payment tests were updated to supply a covering mandate,
-and still assert their `NeedsApproval` outcome — proving the mandate gate sits
-cleanly ahead of the taint/approval gates.
+Admission tests cover: no mandate present (denied), missing payment intent
+(denied), amount over ceiling (denied), undeclared amount (denied), mandate bound
+to another session (denied), invalid envelope hash (denied), Aether adapter or
+envelope format mismatch (denied), and a covered payment that passes the gate
+and then routes to simulation. The independent Python conformance port and
+adversarial payment scenarios exercise the same gates.
 
 Related: #8 (risk floor — payments are Critical), #67/#40 (budget ceilings are a
 *different* axis from mandate authority), #10 (a revoked grant already fails

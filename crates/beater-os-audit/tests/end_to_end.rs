@@ -89,6 +89,7 @@ fn manifest(action_id: &str, session_id: &str, tool: &str, grants: &[&str]) -> A
         data_classes: BTreeSet::new(),
         taint: BTreeSet::new(),
         idempotency_key: None,
+        payment_intent: None,
         compensation_plan: None,
         human_explanation: "read a workspace file".to_string(),
     }
@@ -153,7 +154,7 @@ fn valid_snapshot() -> Result<JournalSnapshot, BeaterOsError> {
     let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: m.clone(),
+            manifest: Box::new(m.clone()),
         },
         ts(1_002),
     )?;
@@ -236,7 +237,7 @@ fn detects_grant_used_before_it_was_issued() -> Result<(), BeaterOsError> {
     )?;
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: manifest("A1", "S1", "tool:fs", &["G-missing"]),
+            manifest: Box::new(manifest("A1", "S1", "tool:fs", &["G-missing"])),
         },
         ts(1_001),
     )?;
@@ -287,7 +288,7 @@ fn detects_unexplained_denial() -> Result<(), BeaterOsError> {
     let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: m.clone(),
+            manifest: Box::new(m.clone()),
         },
         ts(1_002),
     )?;
@@ -373,7 +374,7 @@ fn detects_use_of_revoked_grant() -> Result<(), BeaterOsError> {
     journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_001))?;
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: manifest("A1", "S1", "tool:fs", &["G1"]),
+            manifest: Box::new(manifest("A1", "S1", "tool:fs", &["G1"])),
         },
         ts(1_002),
     )?;
@@ -400,7 +401,7 @@ fn detects_use_of_expired_grant() -> Result<(), BeaterOsError> {
     journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_000))?;
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: manifest("A1", "S1", "tool:fs", &["G1"]),
+            manifest: Box::new(manifest("A1", "S1", "tool:fs", &["G1"])),
         },
         ts(1_002),
     )?;

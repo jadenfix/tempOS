@@ -8,6 +8,7 @@ pub(crate) fn event_kind(event: &JournalEvent) -> &'static str {
     match event {
         JournalEvent::SessionCreated { .. } => "session_created",
         JournalEvent::CapabilityGranted { .. } => "capability_granted",
+        JournalEvent::PaymentMandateIssued { .. } => "payment_mandate_issued",
         JournalEvent::ActionProposed { .. } => "action_proposed",
         JournalEvent::PolicyDecided { .. } => "policy_decided",
         JournalEvent::ReceiptAppended { .. } => "receipt_appended",
