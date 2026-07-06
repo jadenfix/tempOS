@@ -45,13 +45,20 @@ action, admission fails closed unless a mandate covers it:
    - still active (`expires_at > now`), and
    - selected by `payment_intent.mandate_id`.
 5. **The mandate covers the intent**, where rail, asset, purpose, idempotency
-   key, amount ceiling, allowed adapter ids, and allowed envelope formats all
-   match.
+   key, per-action amount ceiling, allowed adapter ids, and allowed envelope
+   formats all match.
+6. **The mandate has remaining capacity.** Admission receives a replay-derived
+   `payment_reserved_by_mandate` meter. Until cancellation/release semantics
+   exist, every prior non-denied payment decision (`Allowed`, `NeedsApproval`, or
+   `NeedsSimulation`) reserves capacity against the mandate fail-closed, so
+   parallel or staged payments cannot silently oversubscribe the ceiling before a
+   receipt is emitted.
 
 On success the rule `payment_authorized_by_mandate` is recorded and admission
 proceeds to the existing grant, approval, and simulation gates — so a payment
 now must satisfy **both** a grant and a mandate, and a high-risk one still routes
-to simulation. `AdmissionContext` gains `mandates: Vec<PaymentMandate>`.
+to simulation. `AdmissionContext` carries `mandates: Vec<PaymentMandate>` plus
+the replay-derived `payment_reserved_by_mandate` meter.
 
 ## Placement
 
@@ -88,18 +95,21 @@ contract. Those fields stay in the Aether envelope and receipt artifacts.
   receipts should carry mandate id, rail, adapter id, envelope hash,
   rail-receipt hash, and settlement status. That belongs to the execution/receipt
   lane, not pure admission.
-- **Spend counters and replay storage.** The manifest and mandate bind
-  idempotency keys, but durable uniqueness and aggregate spend accounting need a
-  mandate store/projection path.
+- **Payment release/cancellation semantics.** The current meter reserves capacity
+  for every non-denied payment decision. A later slice should add explicit
+  release/cancel evidence so abandoned payment attempts can free reserved
+  capacity without weakening replay.
 
 ## Verification
 
 Admission tests cover: no mandate present (denied), missing payment intent
-(denied), amount over ceiling (denied), undeclared amount (denied), mandate bound
-to another session (denied), invalid envelope hash (denied), Aether adapter or
-envelope format mismatch (denied), and a covered payment that passes the gate
-and then routes to simulation. The independent Python conformance port and
-adversarial payment scenarios exercise the same gates.
+(denied), amount over per-action and cumulative ceilings (denied), undeclared
+amount (denied), mandate bound to another session or holder (denied), expired
+mandate/envelope (denied), rail/asset/purpose/idempotency/counterparty mismatch
+(denied), invalid envelope hash (denied), Aether adapter or envelope format
+mismatch (denied), daemon replay reservation, and a covered payment that passes
+the gate and then routes to simulation. The independent Python conformance port
+and adversarial payment scenarios exercise the same gates.
 
 Related: #8 (risk floor — payments are Critical), #67/#40 (budget ceilings are a
 *different* axis from mandate authority), #10 (a revoked grant already fails

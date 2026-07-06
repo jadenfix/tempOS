@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
@@ -74,6 +74,7 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         approvals: Vec::new(),
         simulations: Vec::new(),
         mandates: Vec::new(),
+        payment_reserved_by_mandate: BTreeMap::new(),
         revoked_handles: BTreeSet::new(),
     }
 }
@@ -563,6 +564,38 @@ fn policy_denies_payment_exceeding_the_mandate_ceiling() {
 }
 
 #[test]
+fn policy_denies_payment_exceeding_cumulative_mandate_ceiling() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.max_minor_units = 150;
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    ctx.payment_reserved_by_mandate
+        .insert("mandate-1".to_string(), 75);
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("cumulative ceiling"));
+}
+
+#[test]
+fn policy_admits_payment_when_cumulative_mandate_capacity_remains() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.max_minor_units = 200;
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    ctx.payment_reserved_by_mandate
+        .insert("mandate-1".to_string(), 75);
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"payment_authorized_by_mandate".to_string())
+    );
+}
+
+#[test]
 fn policy_denies_payment_when_counterparty_policy_does_not_match() {
     let now = fixed_time();
     let mut mandate = mandate_for_spend(now);
@@ -596,6 +629,111 @@ fn policy_denies_payment_when_mandate_is_bound_to_another_session() {
     ctx.mandates = vec![mandate];
     let decision = admit(&spend_manifest(), &ctx);
     assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_denies_payment_when_mandate_is_bound_to_another_holder() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.holder = "agent:other".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("PaymentMandate"));
+}
+
+#[test]
+fn policy_denies_payment_when_mandate_is_expired() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.expires_at = now - Duration::seconds(1);
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("expired"));
+}
+
+#[test]
+fn policy_denies_payment_when_intent_rail_does_not_match_target() {
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest
+        .payment_intent
+        .as_mut()
+        .unwrap_or_else(|| panic!("spend manifest should have payment intent"))
+        .rail = "stablecoin:other".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("payment_rail target"));
+}
+
+#[test]
+fn policy_denies_payment_when_intent_asset_does_not_match_mandate() {
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest
+        .payment_intent
+        .as_mut()
+        .unwrap_or_else(|| panic!("spend manifest should have payment intent"))
+        .asset = "EURC".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("asset"));
+}
+
+#[test]
+fn policy_denies_payment_when_intent_purpose_does_not_match_mandate() {
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest
+        .payment_intent
+        .as_mut()
+        .unwrap_or_else(|| panic!("spend manifest should have payment intent"))
+        .purpose = "unapproved purpose".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("purpose"));
+}
+
+#[test]
+fn policy_denies_payment_when_intent_idempotency_does_not_match_mandate() {
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest.idempotency_key = Some("pay-twice".to_string());
+    manifest
+        .payment_intent
+        .as_mut()
+        .unwrap_or_else(|| panic!("spend manifest should have payment intent"))
+        .payment_idempotency_key = "pay-twice".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("idempotency"));
+}
+
+#[test]
+fn policy_denies_payment_when_intent_envelope_is_expired() {
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest
+        .payment_intent
+        .as_mut()
+        .unwrap_or_else(|| panic!("spend manifest should have payment intent"))
+        .envelope_expires_at = Some(now - Duration::seconds(1));
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("envelope is expired"));
 }
 
 #[test]

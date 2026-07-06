@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use beater_os_core::{
-    ActionManifest, AgentSession, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
-    InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, ReceiptLedger,
+    ActionKind, ActionManifest, AgentSession, CapabilityGrant, CapabilityReceipt,
+    CapabilityReceiptInput, DecisionResult, InMemoryJournal, JournalEvent, JournalRecord,
+    PaymentMandate, PolicyDecision, ReceiptLedger, SideEffectClass,
 };
 use chrono::{DateTime, Utc};
 
@@ -71,6 +73,55 @@ impl SessionProjection {
             .iter()
             .find(|manifest| manifest.action_id == action_id)
     }
+
+    /// Replay non-denied payment decisions into a per-mandate reservation meter.
+    ///
+    /// The projection is rebuilt from the verified append-only journal on every
+    /// command, so this meter is replayable evidence rather than process memory.
+    /// Until release semantics exist, Allowed/NeedsApproval/NeedsSimulation
+    /// decisions all reserve capacity fail-closed; Denied/NeedsNarrowedGrant do
+    /// not.
+    pub fn payment_reserved_by_mandate(&self) -> BTreeMap<String, u64> {
+        let mut reserved = BTreeMap::new();
+
+        for manifest in &self.manifests {
+            let Some(decision) = self
+                .decisions
+                .iter()
+                .rev()
+                .find(|decision| decision.action_id == manifest.action_id)
+            else {
+                continue;
+            };
+            if !reserves_payment_capacity(decision.result.clone()) {
+                continue;
+            }
+            if !is_payment_manifest(manifest) {
+                continue;
+            }
+            let Some(intent) = &manifest.payment_intent else {
+                continue;
+            };
+            let entry = reserved.entry(intent.mandate_id.clone()).or_insert(0_u64);
+            *entry = entry.saturating_add(intent.amount_minor_units);
+        }
+
+        reserved
+    }
+}
+
+fn reserves_payment_capacity(result: DecisionResult) -> bool {
+    matches!(
+        result,
+        DecisionResult::Allowed | DecisionResult::NeedsApproval | DecisionResult::NeedsSimulation
+    )
+}
+
+fn is_payment_manifest(manifest: &ActionManifest) -> bool {
+    manifest.action_kind == ActionKind::Spend
+        || manifest
+            .expected_side_effects
+            .contains(&SideEffectClass::Payment)
 }
 
 impl Store {

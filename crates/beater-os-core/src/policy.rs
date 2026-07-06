@@ -25,6 +25,12 @@ pub struct AdmissionContext {
     /// admitted only if one of these mandates covers it. Grants authorize the
     /// *act* of spending; a mandate authorizes the *money*.
     pub mandates: Vec<PaymentMandate>,
+    /// Replay-derived payment capacity already reserved under each mandate id.
+    /// This is kept outside `PaymentMandate` so mandates stay immutable authority
+    /// objects while admission can still enforce cumulative ceilings from journal
+    /// evidence. Until cancellation/release semantics exist, any prior non-denied
+    /// payment decision reserves capacity fail-closed.
+    pub payment_reserved_by_mandate: BTreeMap<String, u64>,
     /// Revocation registry: the set of `revocation_handle`s revoked out of band
     /// (issue #10). This is the monotonic revocation epoch — it only grows, so
     /// admission is deterministic under replay. A grant counts as revoked if its
@@ -421,6 +427,20 @@ fn payment_authorized_by_mandate(
     }
     if intent.amount_minor_units > mandate.max_minor_units {
         return Err("payment intent amount exceeds mandate ceiling".to_string());
+    }
+    let already_reserved = ctx
+        .payment_reserved_by_mandate
+        .get(&mandate.mandate_id)
+        .copied()
+        .unwrap_or_default();
+    let projected_reserved = already_reserved
+        .checked_add(intent.amount_minor_units)
+        .ok_or_else(|| "payment cumulative reservation overflowed mandate meter".to_string())?;
+    if projected_reserved > mandate.max_minor_units {
+        return Err(format!(
+            "payment intent would exceed mandate cumulative ceiling: already reserved {already_reserved}, requested {}, ceiling {}",
+            intent.amount_minor_units, mandate.max_minor_units
+        ));
     }
     if intent.purpose != mandate.purpose {
         return Err("payment intent purpose does not match mandate purpose".to_string());
