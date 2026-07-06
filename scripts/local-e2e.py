@@ -108,6 +108,7 @@ def build_plan(
         )
     )
     gates.append(Gate("bare-metal-e2e-matrix", (python, "scripts/run-bare-metal-e2e-matrix.py")))
+    gates.append(Gate("optimization-docs", (python, "scripts/check-optimization-docs.py")))
     gates.extend(
         [
         Gate("python-unit-tests", (python, "-m", "unittest", "discover", "-s", "tests")),

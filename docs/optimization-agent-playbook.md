@@ -8,6 +8,8 @@ This playbook supplements `final.md` and `docs/sota-systems-engineering.md`.
 It does not replace measured implementation work. An optimization claim is not
 accepted until a reviewer can replay the workload, identify the bottleneck, and
 see that authority, receipts, and macOS compatibility were preserved.
+Use `docs/engineering/optimization-evidence-runbook.md` for the compact packet
+shape that PR authors and reviewers should fill out.
 
 ## Current Toolchain Discipline
 
@@ -180,6 +182,24 @@ Required infrastructure for serious performance work:
   budget, syscall budget, queue bounds, cancellation, fallback, and rollback
 - source note: current compiler/runtime/backend versions and links when the
   performance claim depends on toolchain or accelerator behavior
+
+Expected repository locations as this infrastructure grows:
+
+- `docs/engineering/optimization-evidence-runbook.md`: human replay packet and
+  reviewer questions.
+- `scripts/check-optimization-docs.py`: lightweight doctrine/source-matrix
+  health gate.
+- `benchmarks/manifest.json`: future benchmark registry for workload, fixture,
+  warmup, sample count, timeout, and target budget.
+- `scripts/run-optimization-benchmarks.py`: future replay runner for benchmark
+  manifests and budget validation.
+- `contracts/schema/performance-trace.schema.json`: future admission, queue,
+  execution, journal, receipt, syscall, copy, allocation, p95/p99, and provider
+  telemetry schema.
+- `contracts/schema/accelerator-telemetry.schema.json`: future GPU/TPU/LPU/NPU,
+  Apple Silicon, media-engine, enclave, and custom-silicon telemetry schema.
+- `scripts/host-probes/`: future optional probes for macOS Apple Silicon, Linux
+  CUDA, provider TPU, provider LPU, and other accelerator hosts.
 
 Agents should create a small reusable skill, script, fixture, or checklist when
 the same profiling or review task appears in more than one PR. Keep the artifact

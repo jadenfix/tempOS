@@ -38,6 +38,9 @@
 Complete this section for performance, language-boundary, unsafe/FFI, scheduler,
 runtime, accelerator, or close-to-metal changes. For docs/process-only PRs, state
 exactly `N/A` as the only content under this heading.
+Use `docs/engineering/optimization-evidence-runbook.md` and
+`docs/optimization-agent-playbook.md` as the canonical packet and review
+workflow.
 
 - [ ] Hot path and cold path are named.
 - [ ] Bottleneck class is identified (contract, algorithm, layout, copy/encoding,
@@ -50,6 +53,9 @@ exactly `N/A` as the only content under this heading.
       story are preserved.
 - [ ] Source links and dates are included for claims about current language,
       compiler, accelerator, or OS behavior.
+- [ ] `python3 scripts/check-optimization-docs.py` passes when this PR changes
+      optimization doctrine, source-matrix rows, agent instructions, or review
+      packet structure.
 
 ## Tests
 

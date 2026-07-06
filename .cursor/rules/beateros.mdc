@@ -7,6 +7,10 @@ alwaysApply: true
 
 Read `AGENTS.md` first. It maps the repo, links to `final.md`, and points to the
 systems-engineering doctrine in `docs/sota-systems-engineering.md`.
+Use `docs/optimization-agent-playbook.md`,
+`docs/engineering/optimization-evidence-runbook.md`, and
+`docs/source-matrix.md` for performance-sensitive work, replay packets, and
+current language/backend source snapshots.
 
 Key rules:
 
@@ -27,6 +31,9 @@ Key rules:
   receipts, journals, memory, payments, and tool/model calls must fail closed.
 - Keep macOS and Apple Silicon working. Linux-only APIs require an abstraction or
   a documented macOS path.
+- Treat GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, and future ASIC
+  paths as scheduled OS resources behind beaterOS admission, memory, queue,
+  telemetry, receipt, and fallback contracts.
 
 Useful commands:
 
@@ -35,4 +42,5 @@ cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 git diff --check
+python3 scripts/check-optimization-docs.py
 ```

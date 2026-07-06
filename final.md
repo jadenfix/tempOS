@@ -3323,6 +3323,7 @@ Compromise on:
 ## 27. Source Matrix
 
 This source list should be expanded continuously. The initial weighting is primary papers, official specs, official company docs, and mature OS/security references over speculation.
+Temporal compiler, runtime, accelerator, and backend version snapshots are maintained in `docs/source-matrix.md`; this section keeps strategic sources, not per-PR current-version claims.
 
 ### 27.1 Agent OS And Agent Runtime Papers
 
@@ -3411,7 +3412,7 @@ This source list should be expanded continuously. The initial weighting is prima
 - Intel TDX: https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html
 - AMD SEV-SNP: https://www.amd.com/en/developer/sev.html
 
-### 27.7 Authorization, Identity, Policy, And Durable Execution
+### 27.6 Authorization, Identity, Policy, And Durable Execution
 
 - Macaroons (NDSS 2014): https://research.google/pubs/macaroons-cookies-with-contextual-caveats-for-decentralized-authorization-in-the-cloud/
 - Biscuit: https://www.biscuitsec.org/
@@ -3423,7 +3424,7 @@ This source list should be expanded continuously. The initial weighting is prima
 - Restate: https://restate.dev/
 - DBOS: https://www.dbos.dev/
 
-### 27.6 Crypto, Payments, And Quantum
+### 27.7 Crypto, Payments, And Quantum
 
 - NIST PQC standards announcement: https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standards
 - NIST Post-Quantum Cryptography project: https://csrc.nist.gov/projects/post-quantum-cryptography
