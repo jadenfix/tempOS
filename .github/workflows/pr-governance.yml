@@ -73,7 +73,8 @@ jobs:
 
             if (author === null && reviewer === null && mergedBy === null) {
               problems.push(
-                "Missing agent-routing trailer. Add the block from AGENTS.md §4:\n" +
+                "Missing agent-routing trailer. Add the block from AGENTS.md " +
+                "(Multi-Agent Contribution & Review Contract → Agent routing trailer):\n" +
                 "  Author-Agent: <agent-id>\n" +
                 "  Reviewer-Agent: <agent-id or \"pending\">\n" +
                 "  Merged-By: <agent-id / \"human:@handle\" / \"pending\">"
@@ -101,7 +102,8 @@ jobs:
             if (!/review routing/i.test(body)) {
               core.warning(
                 "No 'Review routing' section found. Confirm an independent agent " +
-                "will review and a non-author will merge (AGENTS.md §3.5–§3.6)."
+                "will review and a non-author will merge (see AGENTS.md → " +
+                "Multi-Agent Contribution & Review Contract)."
               );
             }
 
@@ -113,7 +115,8 @@ jobs:
                 `  Author-Agent:   ${author || "(unset)"}\n` +
                 `  Reviewer-Agent: ${reviewer || "(unset)"}\n` +
                 `  Merged-By:      ${mergedBy || "(unset)"}\n` +
-                "Reminder: identity is attested, not verified (AGENTS.md §7)."
+                "Reminder: identity is attested, not verified (see the honesty " +
+                "boundary in AGENTS.md → Multi-Agent Contribution & Review Contract)."
               );
             }
 

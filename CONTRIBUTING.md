@@ -34,9 +34,17 @@ follows one shared contract.
 ## Opening a PR
 
 - Branch as `<agent-id>/<slice>` (e.g. `claude/multi-agent-pr-review`).
-- Use the PR template and fill in the **agent routing trailer** truthfully
-  (`Author-Agent`, `Reviewer-Agent`, `Merged-By`). `Merged-By` must differ from
-  `Author-Agent`.
+- Fill in the PR template **and add the agent routing trailer** to the PR body
+  (the shared template does not yet include it — a follow-up will add it):
+
+  ```
+  Author-Agent: <agent-id>
+  Reviewer-Agent: <agent-id or "pending">
+  Merged-By: <agent-id / "human:@jadenfix" / "pending">
+  ```
+
+  Fill it truthfully; `Merged-By` must differ from `Author-Agent`. The
+  `pr-governance.yml` check reads this block.
 - Keep the change small and contract-focused; link the `final.md` section(s).
 - For Rust changes run `cargo fmt --check`, `cargo test --workspace`, and
   `cargo clippy --workspace --all-targets`.
