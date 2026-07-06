@@ -1,0 +1,4 @@
+interface:
+  display_name: "beaterOS PR Slice"
+  short_description: "Ship scoped beaterOS issue fixes through green PRs."
+  default_prompt: "Use this skill to turn a beaterOS issue into a scoped, verified pull request."
