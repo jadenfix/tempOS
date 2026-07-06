@@ -20,6 +20,17 @@ Each maps directly to the adversarial cases enumerated in `final.md` §14.5. As
 new contracts and behaviours land (codex slices 2–17), production incidents
 should be added here as regression scenarios (`final.md` §13.15, §14.6).
 
+## Statistical Gates
+
+Scenario files define the task fixture and oracle. Release gates decide how many
+times to run them. Per `final.md` §14.9 and
+[`docs/design/eval-statistical-method.md`](../docs/design/eval-statistical-method.md),
+the eval service combines these manifests with gate configuration for pass^k,
+paired baseline comparison, reliability targets, and sequential stopping. Those
+values are not duplicated into each `ScenarioManifest` because the same scenario
+can serve as a smoke check, a core workflow check, or irreversible-action
+evidence depending on the release risk.
+
 ## Running
 
 ```

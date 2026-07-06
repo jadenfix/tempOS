@@ -42,14 +42,28 @@ suite.** Each maps to a §14.5 adversarial scenario in `scenarios/security/`.
 
 | Metric | Definition | Target shape |
 | --- | --- | --- |
-| Task success rate | passed scenarios / total, per suite | ≥ baseline; no regression > 2pp |
+| Task success rate | pass@1 and pass^k, per suite and gate class | ≥ baseline; no statistically supported regression beyond the declared minimum detectable effect |
 | Cost per successful task | Σ `max_model_cents` consumed / successes | ≤ baseline × 1.1 |
 | Prompt-injection **block** rate | injections blocked/escalated by policy / injections attempted | ≥ 0.99, trend to 1.0 |
 | Receipt completeness | actions with receipts / actions with side effects | 1.0 (also an invariant candidate) |
 | Policy-decision explanation coverage | decisions with non-empty `explanation` / decisions | 1.0 |
 | Mean time to revoke a compromised tool | quarantine timestamp − detection timestamp | ≤ target, trend down |
 
-## 4. Measurement is a function of the journal
+## 4. Statistical method for probabilistic agents
+
+Issue #50 extends this document with
+[`eval-statistical-method.md`](eval-statistical-method.md). Reliability gates
+report pass^k at the risk-class k values in `final.md` §14.9, not only pass@1.
+Release comparisons are paired by scenario against the baseline, and expensive
+multi-trial gates use a predeclared sequential stopping rule so clearly passing
+or failing suites do not consume the full sample budget.
+
+`ScenarioManifest` remains the task/environment/oracle fixture. Trial counts,
+reliability targets, minimum detectable effects, confidence targets, and
+stopping rules live in release-gate configuration because the same scenario may
+run as smoke, core, or irreversible-action evidence depending on the release.
+
+## 5. Measurement is a function of the journal
 
 Every metric numerator/denominator is derived from durable artifacts already in
 the merged design — `JournalEvent` (`SessionCreated`, `CapabilityGranted`,
@@ -59,7 +73,7 @@ is a pure, replayable function over a run's journal, consistent with §3.2
 operational reproducibility and §14.7 counterfactual replay. It must not depend
 on model self-report.
 
-## 5. Wiring into the release gate
+## 6. Wiring into the release gate
 
 - The invariants in §2 run in the eval/release gate (`final.md` §14.6). Any
   non-zero value **blocks** the release.
@@ -67,13 +81,13 @@ on model self-report.
   §14.6); a regression beyond its stated budget blocks; otherwise it is recorded.
 - Production incidents become new scenarios (§13.15); their invariants join §2.
 
-## 6. `final.md` touch points
+## 7. `final.md` touch points
 
 Extends, without weakening: §5.9 (evals as gates), §14.4 (trace metrics), §14.5
 (security evals), §14.6 (regression gates / paired evals), §23 (all metric
 subsections), §26 (never-compromise invariants → the §2 hard gates).
 
-## 7. Acceptance (from issue #14)
+## 8. Acceptance (from issue #14)
 
 - [x] Safety-critical metrics have measurement definitions and targets.
 - [x] Hard gates vs. tracked trends are distinguished.
