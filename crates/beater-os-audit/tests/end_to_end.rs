@@ -78,7 +78,10 @@ fn manifest(action_id: &str, session_id: &str, tool: &str, grants: &[&str]) -> A
             resource_kind: ResourceKind::FilePath,
             resource_id: "/ws/demo/file.txt".to_string(),
         },
-        resolved_target: None,
+        resolved_target: Some(CapabilitySelector {
+            resource_kind: ResourceKind::FilePath,
+            resource_id: "/ws/demo/file.txt".to_string(),
+        }),
         inputs_digest: "digest:inputs".to_string(),
         inputs_summary: "read /ws/demo/file.txt".to_string(),
         expected_outputs: Vec::new(),
@@ -210,6 +213,7 @@ fn trace_render_and_bundle_are_coherent() -> Result<(), BeaterOsError> {
     let rendered = render_trace(&snapshot);
     assert!(rendered.contains("session=S1"));
     assert!(rendered.contains("action=A1"));
+    assert!(rendered.contains("resolved=FilePath:/ws/demo/file.txt"));
     assert!(rendered.contains("decision=D1"));
     assert!(rendered.contains("receipt=R1"));
 

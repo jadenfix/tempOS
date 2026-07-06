@@ -62,16 +62,19 @@ $ beaterosctl grant issue --session demo --resource-kind file_path \
     --resource-id '*' --actions read,write --path-prefix /workspace/repo
 issued grant <grant-id>
 
-# An in-scope write is admitted by an explicit, active capability grant.
+# A raw proposal with a path-prefix grant must include a resolved target supplied
+# by a trusted mediator. `action execute` derives this itself before admission.
 $ beaterosctl action propose --session demo --tool fs.write --kind write \
     --target-kind file_path --target /workspace/repo/src/lib.rs \
+    --resolved-target /workspace/repo/src/lib.rs \
     --grants <grant-id> --action-id a1
 action a1
   decision:    Allowed
 
-# An out-of-scope write is refused by policy — not by the model.
+# An out-of-scope canonical path is refused by policy — not by the model.
 $ beaterosctl action propose --session demo --tool fs.write --kind write \
-    --target-kind file_path --target /etc/hosts --grants <grant-id> --action-id a2
+    --target-kind file_path --target /etc/hosts --resolved-target /etc/hosts \
+    --grants <grant-id> --action-id a2
 action a2
   decision:    NeedsNarrowedGrant
 
