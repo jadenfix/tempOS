@@ -1278,7 +1278,7 @@ mod tests {
     fn explicit_environment_allowlist_is_passed_without_inheritance() {
         let parent = std::env::var("CARGO_PKG_NAME").expect("cargo sets CARGO_PKG_NAME");
         let dir = TempDir::new("allow-env");
-        let mut environment = BTreeMap::new();
+        let mut environment = safe_path_environment();
         environment.insert("BEATER_ALLOWED".to_string(), "ok".to_string());
         let outcome = execute(&SandboxRequest {
             command: "/bin/sh".to_string(),
