@@ -4,11 +4,13 @@
 //! re-verified, and §13.11 requires tamper-evident logs. This module is a
 //! deliberately *independent* second implementation of the audit invariants:
 //! it recomputes each record's content hash itself (its own SHA-256 over the
-//! canonical pre-image), never trusting the digest emitted by the code under
-//! audit, then applies its own structural and cross-referential checks. It does
-//! not call `beater-os-core`'s verifier for any pass/fail signal — a drift in
-//! core's hashing would surface here as recomputed-hash mismatches on otherwise
-//! valid records, i.e. loud audit failures, rather than being silently trusted.
+//! duplicated private core hash shape), never trusting the digest emitted by the
+//! code under audit, then applies its own structural and cross-referential
+//! checks. It does not call `beater-os-core`'s verifier for any pass/fail signal,
+//! so it catches localized verifier bugs, un-rehashed edits, hash-shape drift,
+//! and sequence gaps. A journal that was coherently rewritten and re-hashed can
+//! still pass these checks unless the verifier also has a trusted external root
+//! anchor, checkpoint, or signature to compare against.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -82,10 +84,9 @@ impl AuditReport {
 /// that cannot positively confirm an invariant reports `Fail`.
 pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
     let checks = vec![
-        // Independent content-hash integrity — recomputes every record's hash
-        // from the canonical pre-image using this crate's own SHA-256. This is
-        // the load-bearing integrity signal; the structural checks below trust
-        // `record.hash` and only add linkage.
+        // Independent content-hash integrity. This catches local/un-rehashed
+        // inconsistencies; proving that a coherent replacement did not happen
+        // requires a trusted external root anchor or signature.
         check_cryptographic_chain(snapshot),
         // Independent second implementations of structural invariants. The overlap
         // with `beater-os-core` is intentional (defense in depth): they catch a
@@ -107,14 +108,13 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
     }
 }
 
-/// Canonical hash pre-image for a journal record.
+/// Duplicated private core hash shape for a journal record.
 ///
-/// This is an independent re-declaration of the exact field set and order that
-/// `beater-os-core` hashes (`seq`, `created_at`, `event`, `prev_hash`). It is
-/// duplicated here on purpose: an independent auditor must serialize and hash
-/// the record itself rather than importing the hasher under audit. If core ever
-/// changes its pre-image, this struct must change with it and the cross-check in
-/// [`check_cryptographic_chain`] will flag the divergence until it does.
+/// This mirrors the private `beater-os-core` hash view (`seq`, `created_at`,
+/// `event`, `prev_hash`) without importing the core verifier under audit. The
+/// duplication is intentional and guarded by audit drift-lock tests that append
+/// every `JournalEvent` variant through core and require this crate's recompute
+/// path to accept those records.
 #[derive(Serialize)]
 struct JournalHashPreimage<'a> {
     seq: u64,
@@ -141,10 +141,11 @@ fn recompute_record_hash(record: &JournalRecord) -> Result<String, serde_json::E
 /// Independently verify the cryptographic hash chain.
 ///
 /// Unlike the structural checks below, this does not trust `record.hash`: it
-/// recomputes each record's content hash locally (closing the terminal-record
-/// blind spot in [`check_hash_linkage`], which has no successor to catch a
-/// tampered last record). It calls nothing in `beater-os-core` for its verdict.
-/// Fails closed on any re-serialization error.
+/// recomputes each record's content hash locally, catching un-rehashed payload
+/// edits including terminal-record edits that have no successor linkage to
+/// betray them. It calls nothing in `beater-os-core` for its verdict. Fails
+/// closed on any re-serialization error. It is not, by itself, proof against a
+/// coherent rewrite that recomputes every hash and replaces the root.
 fn check_cryptographic_chain(snapshot: &JournalSnapshot) -> CheckResult {
     let mut prev_hash = GENESIS_HASH;
     for record in &snapshot.records {
@@ -213,9 +214,10 @@ fn check_sequence_contiguous(snapshot: &JournalSnapshot) -> CheckResult {
 /// Every record must link to its predecessor (genesis for the first) and
 /// carry a non-empty content hash.
 ///
-/// This checks prev-hash *linkage*, not content-hash *integrity*: a chain that
-/// was consistently re-hashed after tampering would pass here and be caught only
-/// by [`check_cryptographic_chain`]. The overlap with `beater-os-core` is a
+/// This checks prev-hash *linkage*, not content-hash *integrity*: un-rehashed
+/// payload edits are caught by [`check_cryptographic_chain`], while a chain that
+/// was consistently rewritten and re-hashed still requires a trusted external
+/// anchor/signature to prove replacement. The overlap with `beater-os-core` is a
 /// deliberate independent second implementation (defense in depth) — do not
 /// "simplify" it away; if the two ever disagree, that is an auditable incident.
 fn check_hash_linkage(snapshot: &JournalSnapshot) -> CheckResult {

@@ -7,17 +7,20 @@
 //! chain verifier alone does not (missing session, missing grant, unexplained
 //! denial, tampered hash).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
     ActionKind, ActionManifest, ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DecisionResult,
-    DelegationMode, GrantConstraints, InMemoryJournal, JournalEvent, JournalSnapshot, ModelPolicy,
-    PolicyDecision, ReceiptLedger, ResourceKind, RiskClass, SessionStatus,
+    DelegationMode, GrantConstraints, InMemoryJournal, JournalEvent, JournalSnapshot, MemoryRecord,
+    ModelPolicy, PolicyDecision, ReceiptLedger, ResourceKind, RiskClass, ScenarioManifest,
+    SessionStatus,
 };
 use chrono::{DateTime, Utc};
 
-use beater_os_audit::{build_bundle, compute_metrics, render_trace, verify_snapshot};
+use beater_os_audit::{
+    AuditReport, CheckOutcome, build_bundle, compute_metrics, render_trace, verify_snapshot,
+};
 
 fn ts(secs: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(secs, 0).unwrap_or_else(Utc::now)
@@ -65,6 +68,39 @@ fn grant(id: &str, session_id: &str, holder: &str) -> CapabilityGrant {
         policy_version: "v1".to_string(),
         reason: "read workspace file".to_string(),
         revoked: false,
+    }
+}
+
+fn memory(id: &str) -> MemoryRecord {
+    MemoryRecord {
+        memory_id: id.to_string(),
+        source_event_id: "event:source".to_string(),
+        source_digest: "digest:source".to_string(),
+        writer: "agent:coder".to_string(),
+        created_at: ts(1_005),
+        kind: "summary".to_string(),
+        content_ref: "memory://summary/1".to_string(),
+        summary: "User prefers terse audit reports".to_string(),
+        confidence_basis_points: 9_000,
+        sensitivity: beater_os_core::DataClass::Internal,
+        expires_at: None,
+        access_policy: "session:S1".to_string(),
+    }
+}
+
+fn scenario(id: &str) -> ScenarioManifest {
+    ScenarioManifest {
+        scenario_id: id.to_string(),
+        goal: "verify audit trace behavior".to_string(),
+        environment: "local".to_string(),
+        fixtures: BTreeMap::from([("snapshot".to_string(), "valid".to_string())]),
+        allowed_tools: BTreeSet::from(["tool:fs".to_string()]),
+        forbidden_actions: BTreeSet::from([ActionKind::Spend]),
+        oracle: "all checks pass".to_string(),
+        success_criteria: vec!["audit report ok".to_string()],
+        risk_traps: vec!["missing grant".to_string()],
+        budget: Budget::default(),
+        expected_trace_properties: vec!["hash-linked".to_string()],
     }
 }
 
@@ -135,6 +171,23 @@ fn receipt(id: &str, manifest: &ActionManifest) -> Result<CapabilityReceipt, Bea
     })
 }
 
+fn rehash_snapshot(snapshot: &JournalSnapshot) -> Result<JournalSnapshot, BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    for record in &snapshot.records {
+        journal.append(record.event.clone(), record.created_at)?;
+    }
+    Ok(journal.snapshot())
+}
+
+fn check_outcome(report: &AuditReport, name: &str) -> CheckOutcome {
+    report
+        .checks
+        .iter()
+        .find(|check| check.check == name)
+        .unwrap_or_else(|| panic!("missing audit check {name}"))
+        .outcome
+}
+
 /// A full, valid session → grant → action → decision → receipt trace.
 fn valid_snapshot() -> Result<JournalSnapshot, BeaterOsError> {
     let mut journal = InMemoryJournal::new();
@@ -170,6 +223,106 @@ fn valid_snapshot() -> Result<JournalSnapshot, BeaterOsError> {
         ts(1_004),
     )?;
     Ok(journal.snapshot())
+}
+
+#[test]
+fn detects_missing_middle_record_sequence_gap() -> Result<(), BeaterOsError> {
+    let mut snapshot = valid_snapshot()?;
+    snapshot.records.remove(2);
+
+    let report = verify_snapshot(&snapshot);
+    assert!(!report.ok);
+    assert_eq!(
+        check_outcome(&report, "sequence_contiguous"),
+        CheckOutcome::Fail
+    );
+    let detail = report
+        .failures()
+        .find(|check| check.check == "sequence_contiguous")
+        .map(|check| check.detail.as_str())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("expected 2"),
+        "expected the middle-record sequence gap to be named, got: {detail}"
+    );
+    Ok(())
+}
+
+#[test]
+fn audit_hash_preimage_matches_core_records_for_every_journal_event_variant()
+-> Result<(), BeaterOsError> {
+    let m = manifest("A1", "S1", "tool:fs", &["G1"]);
+    let events = vec![
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        JournalEvent::CapabilityGranted {
+            grant: grant("G1", "S1", "agent:coder"),
+        },
+        JournalEvent::ActionProposed {
+            manifest: m.clone(),
+        },
+        JournalEvent::PolicyDecided {
+            decision: decision("D1", &m, DecisionResult::Allowed, "admitted by grant G1")?,
+        },
+        JournalEvent::ReceiptAppended {
+            receipt: receipt("R1", &m)?,
+        },
+        JournalEvent::MemoryWritten {
+            memory: memory("M1"),
+        },
+        JournalEvent::ScenarioEvaluated {
+            scenario: scenario("SC1"),
+            passed: true,
+        },
+        JournalEvent::IncidentAnnotated {
+            incident_id: "INC1".to_string(),
+            note: "operator reviewed the audit trace".to_string(),
+        },
+    ];
+
+    for event in events {
+        let mut journal = InMemoryJournal::new();
+        journal.append(event, ts(1_000))?;
+
+        let report = verify_snapshot(&journal.snapshot());
+        assert_eq!(
+            check_outcome(&report, "cryptographic_chain"),
+            CheckOutcome::Pass,
+            "audit hash preimage drifted from core for {:?}",
+            journal.records()[0].event
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn coherently_rewritten_rehashed_journal_passes_without_trusted_anchor() -> Result<(), BeaterOsError>
+{
+    let original = valid_snapshot()?;
+    let Some(original_last) = original.records.last() else {
+        panic!("valid snapshot should contain records");
+    };
+    let original_root = original_last.hash.clone();
+    let mut rewritten_source = original.clone();
+    if let JournalEvent::SessionCreated { session } = &mut rewritten_source.records[0].event {
+        session.goal = "quietly rewritten goal".to_string();
+    }
+
+    let rewritten = rehash_snapshot(&rewritten_source)?;
+    let Some(rewritten_last) = rewritten.records.last() else {
+        panic!("rewritten snapshot should contain records");
+    };
+    let rewritten_root = rewritten_last.hash.clone();
+    assert_ne!(original_root, rewritten_root);
+
+    let report = verify_snapshot(&rewritten);
+    assert!(
+        report.ok,
+        "a coherent rewrite with a new root passes local verification; a trusted external anchor/signature is required to prove replacement: {:?}",
+        report.failures().collect::<Vec<_>>()
+    );
+    Ok(())
 }
 
 #[test]
