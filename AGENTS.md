@@ -137,3 +137,19 @@ on the `Author-Agent` *string*, so two distinct sessions sharing an id (e.g. two
 requiring this check + a CODEOWNERS review; without it the green check is
 advisory. Per-agent signing identities (`final.md` §7.1) would upgrade this from
 attested to verifiable.
+
+**What is fail-closed (the structural gate).** The `pr-governance.yml` check
+**fails** (not warns) when a PR is **ready for review (not a draft)** and any of:
+the routing trailer is missing, `Author-Agent` is a placeholder, `Reviewer-Agent`
+is missing/`pending`, `Reviewer-Agent` equals `Author-Agent` (self-review), or
+`Merged-By` equals `Author-Agent` (self-merge). A draft may leave `Reviewer-Agent:
+pending`; marking it ready with no distinct reviewer turns the check red. **The
+evidence that proves the reviewer is distinct from the author** is a COMMENT
+review **plus** a row in `docs/governance/coordination-ledger.md` whose Reviewer
+agent-id differs from the Author — the `scripts/check-governance.py` linter (run
+by this workflow) fails closed on a same-agent reviewer/merger or an unrecognized
+status. So the model is coherent: *structurally* fail-closed at the agent-id
+layer, and made merge-blocking by branch protection. The one thing it cannot do
+under a shared account is prove the declared id is truthful — that is the
+attested-vs-verified boundary, and it is the only residual gap, resolved by
+per-agent signing identities (option A) if/when a second identity is provisioned.

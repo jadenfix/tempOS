@@ -85,17 +85,45 @@ jobs:
               problems.push("Author-Agent must be filled in (not a placeholder).");
             }
 
-            // Self-merge guard: only fails when Merged-By is concrete AND equals Author.
+            const sameAgent = (a, b) =>
+              a && b && a.toLowerCase() === b.toLowerCase();
+
+            // Self-merge guard: fails when Merged-By is concrete AND equals Author.
             if (
-              author && mergedBy &&
               !isPlaceholder(author) && !isPlaceholder(mergedBy) &&
-              author.toLowerCase() === mergedBy.toLowerCase()
+              sameAgent(author, mergedBy)
             ) {
               problems.push(
                 `Self-merge declared: Merged-By ("${mergedBy}") equals Author-Agent ` +
                 `("${author}"). Per AGENTS.md, the author must never merge their own PR — ` +
                 `hand off to a different agent or the human owner.`
               );
+            }
+
+            // FAIL CLOSED once the PR is ready for review (not a draft): a ready
+            // PR must declare a concrete Reviewer-Agent distinct from the author.
+            // While the PR is a draft, a "pending" reviewer is allowed (review
+            // happens after ready). This is the pre-merge gate: under branch
+            // protection requiring this check, a ready PR cannot merge without a
+            // declared non-author reviewer. The residual limit (that the declared
+            // id's truthfulness can't be verified under one shared account) is the
+            // documented honesty boundary — this closes the *structural* hole.
+            if (pr.draft === false) {
+              if (isPlaceholder(reviewer)) {
+                problems.push(
+                  "Ready PR (not a draft) must declare a concrete Reviewer-Agent " +
+                  "(not \"pending\"). The evidence that proves review is a COMMENT " +
+                  "review + a coordination-ledger row by a DIFFERENT agent-id than " +
+                  "Author-Agent. Mark back to draft until an independent agent has " +
+                  "reviewed."
+                );
+              } else if (sameAgent(reviewer, author)) {
+                problems.push(
+                  `Self-review declared: Reviewer-Agent ("${reviewer}") equals ` +
+                  `Author-Agent ("${author}"). Review must be performed by a ` +
+                  `different agent.`
+                );
+              }
             }
 
             // Nudge (not a failure) if review routing checklist is absent.

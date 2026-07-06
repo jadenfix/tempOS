@@ -30,6 +30,14 @@ follows one shared contract.
 - **Policy outside the actor.** The rules are also enforced by CI
   (`.github/workflows/pr-governance.yml`) and the ledger linter
   (`scripts/check-governance.py`), not by good intentions alone.
+- **Fail-closed pre-merge gate.** Once a PR is **ready (not a draft)**, the
+  governance check *fails* (not warns) unless it declares a concrete
+  `Reviewer-Agent` distinct from `Author-Agent` and a non-self `Merged-By`. A
+  draft may leave the reviewer `pending`. Recording the merge later in the ledger
+  is audit evidence, not the gate — the gate is this red/green check made
+  merge-blocking by **branch protection** on `main`. (Residual limit: the check
+  can't prove a declared agent-id is truthful under one shared GitHub account —
+  the documented honesty boundary.)
 
 ## Opening a PR
 
