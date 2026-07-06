@@ -36,6 +36,25 @@
           "policy_version": "policy-2026-07-03.dev",
           "reason": "Settle approved vendor invoices."
         }
+      ],
+      "mandates": [
+        {
+          "mandate_id": "mandate-wire",
+          "issuer": "user:jaden",
+          "holder": "agent:inbox-1",
+          "session_id": "sess-inbox",
+          "rail": "bank-wire",
+          "asset": "USD",
+          "max_minor_units": 100000000,
+          "counterparty_policy": "allowlist:approved-vendors",
+          "purpose": "Settle approved vendor invoices.",
+          "expires_at": "2026-07-03T21:00:00Z",
+          "approval_threshold_minor_units": 10000,
+          "idempotency_key": "idem-email-wire",
+          "receipt_requirement": "required",
+          "allowed_adapter_ids": ["bank-wire"],
+          "allowed_envelope_formats": ["bank-wire-v1"]
+        }
       ]
     },
     "manifest": {
@@ -53,6 +72,20 @@
       "data_classes": ["financial"],
       "taint": ["untrusted_email"],
       "idempotency_key": "idem-email-wire",
+      "payment_intent": {
+        "mandate_id": "mandate-wire",
+        "rail": "bank-wire",
+        "adapter_id": "bank-wire",
+        "asset": "USD",
+        "amount_minor_units": 4200000,
+        "counterparty_ref": "vendor:new-account-from-email",
+        "counterparty_binding_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+        "purpose": "Settle approved vendor invoices.",
+        "payment_idempotency_key": "idem-email-wire",
+        "envelope_format": "bank-wire-v1",
+        "envelope_hash": "7777777777777777777777777777777777777777777777777777777777777777",
+        "envelope_expires_at": "2026-07-03T21:00:00Z"
+      },
       "human_explanation": "An email said this vendor payment is urgent."
     },
     "expected_result": "needs_approval",

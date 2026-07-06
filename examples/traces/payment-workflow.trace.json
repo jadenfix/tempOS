@@ -38,8 +38,14 @@
       "purpose": "Settle approved vendor invoices.",
       "expires_at": "2026-07-03T12:00:00Z",
       "approval_threshold_minor_units": 5000,
-      "idempotency_key": "idem-mandate-vendor",
-      "receipt_requirement": "required"
+      "idempotency_key": "idem-pay-invoice",
+      "receipt_requirement": "required",
+      "allowed_adapter_ids": [
+        "stripe"
+      ],
+      "allowed_envelope_formats": [
+        "stripe-payment-intent-v1"
+      ]
     }
   ],
   "grants": [
@@ -117,6 +123,21 @@
         "payment_instruction"
       ],
       "idempotency_key": "idem-pay-invoice",
+      "payment_intent": {
+        "mandate_id": "mandate-vendor",
+        "rail": "stripe",
+        "adapter_id": "stripe",
+        "adapter_version": "2026-07",
+        "asset": "USD",
+        "amount_minor_units": 6200,
+        "counterparty_ref": "vendor:4471",
+        "counterparty_binding_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+        "purpose": "Settle approved vendor invoices.",
+        "payment_idempotency_key": "idem-pay-invoice",
+        "envelope_format": "stripe-payment-intent-v1",
+        "envelope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+        "envelope_expires_at": "2026-07-03T12:00:00Z"
+      },
       "human_explanation": "Pay the approved vendor invoice #4471."
     }
   ],
@@ -263,11 +284,26 @@
             "payment_instruction"
           ],
           "idempotency_key": "idem-pay-invoice",
+          "payment_intent": {
+            "mandate_id": "mandate-vendor",
+            "rail": "stripe",
+            "adapter_id": "stripe",
+            "adapter_version": "2026-07",
+            "asset": "USD",
+            "amount_minor_units": 6200,
+            "counterparty_ref": "vendor:4471",
+            "counterparty_binding_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+            "purpose": "Settle approved vendor invoices.",
+            "payment_idempotency_key": "idem-pay-invoice",
+            "envelope_format": "stripe-payment-intent-v1",
+            "envelope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+            "envelope_expires_at": "2026-07-03T12:00:00Z"
+          },
           "human_explanation": "Pay the approved vendor invoice #4471."
         }
       },
       "prev_hash": "cdf22fe8c81460b568d360f5adea4a98a76ea3b51db8579d6d51205d4e249ee7",
-      "hash": "866b31e7f5a92e07e89d200b69ae98efb17f600553eda4f8fdef25158c5fd53c"
+      "hash": "45b4cf1175848db296906e90872ad4e2b7d0c0025bb205037ce2f5dfe9ccd99e"
     },
     {
       "seq": 3,
@@ -283,8 +319,8 @@
           "created_at": "2026-07-03T09:02:00Z"
         }
       },
-      "prev_hash": "866b31e7f5a92e07e89d200b69ae98efb17f600553eda4f8fdef25158c5fd53c",
-      "hash": "8c461f8e4358f34b4451b547d927977a62069ed1f2d5121f42c83a34709c35e4"
+      "prev_hash": "45b4cf1175848db296906e90872ad4e2b7d0c0025bb205037ce2f5dfe9ccd99e",
+      "hash": "056365ba1dbaeeba0694f90876c2eaccae0f97cb9f91f2e45ac57ce9b9fd63a2"
     },
     {
       "seq": 4,
@@ -316,8 +352,8 @@
           "receipt_hash": "2ff41c8d206532028b27716409989e15552c6b90c28d0d1220311e331af917e4"
         }
       },
-      "prev_hash": "8c461f8e4358f34b4451b547d927977a62069ed1f2d5121f42c83a34709c35e4",
-      "hash": "d2f32d08d41b2a4157732afa8c27369b48083efc6735f520c8eb01fcf485cbe7"
+      "prev_hash": "056365ba1dbaeeba0694f90876c2eaccae0f97cb9f91f2e45ac57ce9b9fd63a2",
+      "hash": "705784f419a24f5372848d02b875764c7b4faec541cebfdda7b4eca27ab15117"
     }
   ]
 }

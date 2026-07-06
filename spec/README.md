@@ -61,11 +61,11 @@ CI runs this on every push and PR (`.github/workflows/contracts-conformance.yml`
 | --- | --- | --- | --- |
 | AgentSession | 12.1 | One goal-directed run | No action without a grant; status transitions journaled; pause/resume keeps causality |
 | CapabilityGrant | 12.2 | Explicit authority | Bound to holder + session; cannot be broadened; expired/revoked fail closed; never inferred from prompt text |
-| ActionManifest | 12.3 | Predeclared side effect | Risk raised by policy, never lowered by agent; unknown side effects need denial/review; external effects need receipts |
+| ActionManifest | 12.3 | Predeclared side effect | Risk raised by policy, never lowered by agent; unknown side effects need denial/review; payment actions bind a normalized `payment_intent`; external effects need receipts |
 | PolicyDecision | 12.4 | Deterministic admission | Denied cannot execute; review-required cannot execute pre-approval; journaled before execution |
 | CapabilityReceipt | 12.5 | What happened | Append-only; hash-chained (`prev_receipt_hash` → `receipt_hash`); redaction via refs preserves the chain |
 | MemoryRecord | 12.6 | Knowledge + provenance | Has a source; has an access policy; invalidatable; rebuildable from the journal |
-| PaymentMandate | 12.7 | Bounded economic authority | No payment without a mandate; no silent expansion; every attempt produces a receipt |
+| PaymentMandate | 12.7 | Bounded economic authority | No payment without a mandate; no silent expansion; rail adapter/envelope allowlists constrain concrete payment envelopes; every attempt produces a receipt |
 | ScenarioManifest | 12.8 | Testable task | Versioned; comparable across model/policy versions; incidents become scenarios |
 
 ## Wire-format notes (schema vs. `final.md` prose)

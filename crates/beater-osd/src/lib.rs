@@ -256,7 +256,12 @@ impl Store {
             let proposal_record = if let Some(proposal) = existing_proposal {
                 proposal.record.clone()
             } else {
-                let record = journal.append(JournalEvent::ActionProposed { manifest }, now)?;
+                let record = journal.append(
+                    JournalEvent::ActionProposed {
+                        manifest: Box::new(manifest),
+                    },
+                    now,
+                )?;
                 records_to_write.push(record.clone());
                 record
             };
@@ -408,7 +413,9 @@ impl Store {
                     session = Some(created.clone());
                 }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
-                JournalEvent::ActionProposed { manifest } => manifests.push(manifest.clone()),
+                JournalEvent::ActionProposed { manifest } => {
+                    manifests.push(manifest.as_ref().clone())
+                }
                 JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
                 JournalEvent::PolicyDecided { .. }
                 | JournalEvent::MemoryWritten { .. }
@@ -569,7 +576,7 @@ fn admission_state_from_journal(
                     manifest.action_id.clone(),
                     ProposedAction {
                         record: record.clone(),
-                        manifest: manifest.clone(),
+                        manifest: manifest.as_ref().clone(),
                     },
                 );
             }

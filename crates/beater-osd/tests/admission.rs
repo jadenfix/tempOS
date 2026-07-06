@@ -134,6 +134,7 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
         data_classes: BTreeSet::new(),
         taint: BTreeSet::new(),
         idempotency_key: Some(format!("idem-{action_id}")),
+        payment_intent: None,
         compensation_plan: None,
         human_explanation: "test action".to_string(),
     }
@@ -372,7 +373,7 @@ fn raw_grants_and_proposals_are_refused_by_public_append_event() {
     let raw_proposal = store.append_event(
         session_id,
         JournalEvent::ActionProposed {
-            manifest: manifest(session_id, "act-raw"),
+            manifest: Box::new(manifest(session_id, "act-raw")),
         },
         Utc::now(),
     );
@@ -426,7 +427,7 @@ fn proposal_only_recovery_completes_matching_action() {
     let proposal_record = journal
         .append(
             JournalEvent::ActionProposed {
-                manifest: manifest.clone(),
+                manifest: Box::new(manifest.clone()),
             },
             Utc::now(),
         )
@@ -467,7 +468,9 @@ fn proposal_only_recovery_refuses_changed_manifest_without_append() {
     let mut journal = store.load_journal(session_id).unwrap();
     let proposal_record = journal
         .append(
-            JournalEvent::ActionProposed { manifest: original },
+            JournalEvent::ActionProposed {
+                manifest: Box::new(original),
+            },
             Utc::now(),
         )
         .unwrap();

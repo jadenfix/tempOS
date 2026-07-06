@@ -33,6 +33,7 @@
             "session_id": { "type": "string" },
             "policy_version": { "type": "string" },
             "grants": { "type": "array", "items": { "$ref": "capability-grant.schema.json" } },
+            "mandates": { "type": "array", "items": { "$ref": "payment-mandate.schema.json" } },
             "approvals": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/approval_evidence" } },
             "simulations": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/simulation_evidence" } }
           }

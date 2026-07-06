@@ -222,8 +222,10 @@ def build_payment_bundle() -> dict:
         "purpose": "Settle approved vendor invoices.",
         "expires_at": "2026-07-03T12:00:00Z",
         "approval_threshold_minor_units": 5000,
-        "idempotency_key": "idem-mandate-vendor",
+        "idempotency_key": "idem-pay-invoice",
         "receipt_requirement": "required",
+        "allowed_adapter_ids": ["stripe"],
+        "allowed_envelope_formats": ["stripe-payment-intent-v1"],
     }
 
     grant = {
@@ -257,6 +259,21 @@ def build_payment_bundle() -> dict:
         "data_classes": ["financial"],
         "taint": ["payment_instruction"],
         "idempotency_key": "idem-pay-invoice",
+        "payment_intent": {
+            "mandate_id": "mandate-vendor",
+            "rail": "stripe",
+            "adapter_id": "stripe",
+            "adapter_version": "2026-07",
+            "asset": "USD",
+            "amount_minor_units": 6200,
+            "counterparty_ref": "vendor:4471",
+            "counterparty_binding_hash": "4" * 64,
+            "purpose": "Settle approved vendor invoices.",
+            "payment_idempotency_key": "idem-pay-invoice",
+            "envelope_format": "stripe-payment-intent-v1",
+            "envelope_hash": "5" * 64,
+            "envelope_expires_at": "2026-07-03T12:00:00Z",
+        },
         "human_explanation": "Pay the approved vendor invoice #4471.",
     }
 

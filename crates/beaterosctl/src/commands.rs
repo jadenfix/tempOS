@@ -281,6 +281,7 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         data_classes,
         taint,
         idempotency_key: args.get("idempotency-key").map(str::to_string),
+        payment_intent: None,
         compensation_plan: args.get("compensation-plan").map(str::to_string),
         human_explanation: args
             .get_or("explanation", "proposed via beaterosctl")
@@ -291,7 +292,7 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     store.append_event(
         &session_id,
         JournalEvent::ActionProposed {
-            manifest: manifest.clone(),
+            manifest: Box::new(manifest.clone()),
         },
         now,
     )?;
@@ -458,6 +459,7 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         data_classes,
         taint,
         idempotency_key: args.get("idempotency-key").map(str::to_string),
+        payment_intent: None,
         compensation_plan: args.get("compensation-plan").map(str::to_string),
         human_explanation: args
             .get_or("explanation", "executed via beaterosctl sandbox lane")
@@ -468,7 +470,7 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     store.append_event(
         &session_id,
         JournalEvent::ActionProposed {
-            manifest: manifest.clone(),
+            manifest: Box::new(manifest.clone()),
         },
         now,
     )?;

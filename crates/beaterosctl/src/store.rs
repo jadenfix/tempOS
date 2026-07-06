@@ -255,7 +255,9 @@ impl Store {
                     session = Some(created.clone());
                 }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
-                JournalEvent::ActionProposed { manifest } => manifests.push(manifest.clone()),
+                JournalEvent::ActionProposed { manifest } => {
+                    manifests.push(manifest.as_ref().clone())
+                }
                 JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
                 JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
                 JournalEvent::MemoryWritten { .. }

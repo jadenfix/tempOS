@@ -316,6 +316,87 @@ def _dangerous_untrusted(manifest: dict) -> bool:
     return tainted and manifest["action_kind"] in DANGEROUS_UNTRUSTED_ACTIONS
 
 
+def _is_hex_64(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _is_payment_action(manifest: dict) -> bool:
+    return "payment" in manifest.get("expected_side_effects", []) or manifest["action_kind"] == "spend"
+
+
+def _payment_authorized_by_mandate(manifest: dict, ctx: dict, now: datetime) -> str | None:
+    amount = (manifest.get("requested_budget") or {}).get("max_payment_minor_units")
+    if amount is None:
+        return "payment action must declare its amount in requested_budget.max_payment_minor_units"
+
+    intent = manifest.get("payment_intent")
+    if intent is None:
+        return "payment actions require a payment_intent"
+
+    target = manifest.get("target") or {}
+    if target.get("resource_kind") != "payment_rail":
+        return "payment intent target must be a payment_rail"
+    if target.get("resource_id") != intent.get("rail"):
+        return "payment intent rail must match the manifest payment_rail target"
+    if intent.get("amount_minor_units") == 0:
+        return "payment intent amount must be non-zero"
+    if intent.get("amount_minor_units") != amount:
+        return "payment intent amount must match requested_budget.max_payment_minor_units"
+    if manifest.get("idempotency_key") != intent.get("payment_idempotency_key"):
+        return "payment intent idempotency key must match the manifest idempotency key"
+
+    for field in (
+        "mandate_id",
+        "rail",
+        "adapter_id",
+        "asset",
+        "counterparty_ref",
+        "purpose",
+        "payment_idempotency_key",
+        "envelope_format",
+    ):
+        if not intent.get(field):
+            return "payment intent fields must be non-empty"
+
+    if not _is_hex_64(intent.get("counterparty_binding_hash")) or not _is_hex_64(intent.get("envelope_hash")):
+        return "payment intent hashes must be lowercase 32-byte hex"
+    if intent.get("envelope_expires_at") and _ts(intent["envelope_expires_at"]) <= now:
+        return "payment intent envelope is expired"
+
+    matching = [
+        m for m in ctx.get("mandates", [])
+        if m.get("mandate_id") == intent["mandate_id"]
+        and m.get("session_id") == ctx["session_id"]
+        and m.get("holder") == ctx["actor_id"]
+    ]
+    if not matching:
+        return "payment requires an active PaymentMandate covering the amount for this session and holder"
+    if len(matching) > 1:
+        return "payment intent mandate_id must select exactly one mandate"
+
+    mandate = matching[0]
+    if _ts(mandate["expires_at"]) <= now:
+        return "payment mandate is expired"
+    if intent["rail"] != mandate.get("rail"):
+        return "payment intent rail does not match mandate rail"
+    if intent["asset"] != mandate.get("asset"):
+        return "payment intent asset does not match mandate asset"
+    if intent["amount_minor_units"] > mandate.get("max_minor_units", -1):
+        return "payment intent amount exceeds mandate ceiling"
+    if intent["purpose"] != mandate.get("purpose"):
+        return "payment intent purpose does not match mandate purpose"
+    if intent["payment_idempotency_key"] != mandate.get("idempotency_key"):
+        return "payment intent idempotency key does not match mandate"
+    allowed_adapters = mandate.get("allowed_adapter_ids") or []
+    if allowed_adapters and intent["adapter_id"] not in allowed_adapters:
+        return "payment intent adapter is not allowed by mandate"
+    allowed_formats = mandate.get("allowed_envelope_formats") or []
+    if allowed_formats and intent["envelope_format"] not in allowed_formats:
+        return "payment intent envelope format is not allowed by mandate"
+
+    return None
+
+
 def admit(manifest: dict, ctx: dict) -> dict:
     """Return {'result', 'matched_rules', 'explanation'} for a manifest.
 
@@ -343,6 +424,12 @@ def admit(manifest: dict, ctx: dict) -> dict:
 
     if "payment" in manifest.get("expected_side_effects", []) and manifest["action_kind"] != "spend":
         return deny("payment side effects must use the spend action kind")
+
+    if _is_payment_action(manifest):
+        reason = _payment_authorized_by_mandate(manifest, ctx, now)
+        if reason:
+            return deny(reason)
+        matched.append("payment_authorized_by_mandate")
 
     matching = [g for g in ctx.get("grants", []) if g["grant_id"] in required]
     if len(matching) != len(required):

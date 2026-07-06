@@ -21,7 +21,7 @@ pub enum JournalEvent {
         grant: CapabilityGrant,
     },
     ActionProposed {
-        manifest: ActionManifest,
+        manifest: Box<ActionManifest>,
     },
     PolicyDecided {
         decision: PolicyDecision,
@@ -192,7 +192,7 @@ fn verify_event_causality(
     match &record.event {
         JournalEvent::ActionProposed { manifest } => {
             if proposed_actions
-                .insert(manifest.action_id.clone(), manifest.clone())
+                .insert(manifest.action_id.clone(), manifest.as_ref().clone())
                 .is_some()
             {
                 return causality_error(

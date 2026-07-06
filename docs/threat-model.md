@@ -102,7 +102,7 @@ What an attacker wants, and the contract/code that owns it.
 | A2 | **Journal integrity** (causal truth) | The record used for audit, replay, incident response, billing disputes. If forgeable, accountability collapses. | `InMemoryJournal::verify_chain`, `hash_json` (journal.rs, hash.rs) |
 | A3 | **Receipt chain** (side-effect truth) | Proves what actually happened to external systems. | `ReceiptLedger::verify_chain`, `CapabilityReceipt` (receipt.rs) |
 | A4 | **Secrets** (API keys, tokens, cookies) | Direct pivot to external systems; must never enter prompts/logs. | Secret broker (**PLANNED**, backlog); `DataClass::Secret`, `TaintLabel::Secret` |
-| A5 | **Payment authority** | Money is an irreversible side effect. | `PaymentMandate` (defined; enforcement **PLANNED** slice 14) |
+| A5 | **Payment authority** | Money is an irreversible side effect. | `PaymentMandate` + `PaymentIntent` admission checks (policy.rs); typed receipt settlement **PLANNED** |
 | A6 | **User / customer / financial data** | Privacy, compliance, exfiltration target. | `DataClass::{Personal,Customer,Financial}`, `ModelPolicy.max_data_class` |
 | A7 | **Model routes** (which model sees which data) | Wrong route leaks sensitive data to a non-compliant provider. | `ModelPolicy`, model router (**PLANNED** slice 13) |
 | A8 | **Memory** (long-term knowledge) | Poisoned memory silently steers future runs. | `MemoryRecord` (defined); memory service (**PLANNED** slice 11) |
