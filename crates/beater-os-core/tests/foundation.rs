@@ -599,6 +599,40 @@ fn policy_denies_payment_when_mandate_is_bound_to_another_session() {
 }
 
 #[test]
+fn policy_denies_payment_when_mandate_is_bound_to_another_holder() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.holder = "agent:other".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_denies_payment_when_mandate_is_expired() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.expires_at = now - Duration::minutes(1);
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+}
+
+#[test]
+fn policy_denies_payment_when_mandate_rail_does_not_match_target() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.rail = "bank-wire:ach".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("rail does not match mandate"));
+}
+
+#[test]
 fn policy_admits_payment_backed_by_mandate_then_gates_on_simulation() {
     // A covered payment passes the mandate gate (rule recorded) and proceeds to
     // the pre-existing high-risk-external-effect simulation gate.

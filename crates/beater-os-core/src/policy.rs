@@ -331,10 +331,10 @@ fn is_payment_action(manifest: &ActionManifest) -> bool {
 
 /// Enforce `final.md` §12.7 "no payment without a mandate" (issue #73). Grants
 /// authorize the act of spending; a `PaymentMandate` authorizes the money. A
-/// payment is admitted only if a mandate, bound to this session and holder and
-/// still active, covers the declared amount. The amount must be declared — a
-/// payment that does not state how much it moves cannot be bounded, so it fails
-/// closed ("no silent mandate expansion").
+/// payment is admitted only if a mandate, bound to this session, holder, and
+/// payment rail, and still active, covers the declared amount. The amount must
+/// be declared — a payment that does not state how much it moves cannot be
+/// bounded, so it fails closed ("no silent mandate expansion").
 ///
 /// Payment intent is chain-neutral. Aether, Stripe, x402, cards, and fake rails
 /// all project into the same normalized fields, while each adapter owns envelope
