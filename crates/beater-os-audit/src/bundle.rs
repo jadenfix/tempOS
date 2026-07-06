@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::AUDIT_FORMAT_VERSION;
 use crate::events::event_kind;
 use crate::metrics::{AuditMetrics, compute_metrics};
-use crate::verify::{AuditReport, GENESIS_HASH, verify_snapshot};
+use crate::verify::{AuditReport, snapshot_root_hash, verify_snapshot};
 
 /// A per-record digest: enough to prove membership and linkage, no payload.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -49,11 +49,7 @@ pub fn build_bundle(snapshot: &JournalSnapshot) -> AuditBundle {
         })
         .collect();
 
-    let root_hash = snapshot
-        .records
-        .last()
-        .map(|record| record.hash.clone())
-        .unwrap_or_else(|| GENESIS_HASH.to_string());
+    let root_hash = snapshot_root_hash(snapshot);
 
     AuditBundle {
         format_version: AUDIT_FORMAT_VERSION.to_string(),
@@ -75,6 +71,8 @@ pub fn bundle_to_json(bundle: &AuditBundle) -> Result<String, serde_json::Error>
 mod tests {
     use super::*;
     use beater_os_core::JournalSnapshot;
+
+    use crate::GENESIS_HASH;
 
     #[test]
     fn empty_bundle_is_well_formed() {

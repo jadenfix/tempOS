@@ -62,12 +62,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-os-scenario"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "beater-os-session"
 version = "0.1.0"
 dependencies = [
  "beater-os-core",
  "chrono",
  "thiserror",
+]
+
+[[package]]
+name = "beater-os-tool-gateway"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "beater-os-sandbox",
+ "beater-os-tool-registry",
+ "beater-osd",
+ "chrono",
+ "sha2",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -87,6 +112,7 @@ version = "0.1.0"
 dependencies = [
  "beater-os-core",
  "chrono",
+ "serde",
  "serde_json",
  "thiserror",
  "uuid",
@@ -98,6 +124,9 @@ version = "0.1.0"
 dependencies = [
  "beater-os-core",
  "beater-os-sandbox",
+ "beater-os-tool-gateway",
+ "beater-os-tool-registry",
+ "beater-osd",
  "chrono",
  "serde",
  "serde_json",
@@ -122,9 +151,9 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "cc"
-version = "1.2.65"
+version = "1.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
+checksum = "f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996"
 dependencies = [
  "find-msvc-tools",
  "shlex",

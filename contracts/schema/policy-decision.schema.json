@@ -5,10 +5,11 @@
   "description": "Deterministic admission result, journaled before execution. final.md §7.5, §12.4.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["decision_id", "action_id", "policy_version", "result", "explanation", "created_at"],
+  "required": ["decision_id", "action_id", "manifest_hash", "policy_version", "result", "explanation", "created_at"],
   "properties": {
     "decision_id": { "type": "string", "minLength": 1 },
     "action_id": { "type": "string" },
+    "manifest_hash": { "$ref": "common.schema.json#/$defs/hash_value" },
     "policy_version": { "type": "string" },
     "result": { "$ref": "common.schema.json#/$defs/decision_result" },
     "matched_rules": { "type": "array", "items": { "type": "string" } },

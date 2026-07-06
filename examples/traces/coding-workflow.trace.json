@@ -192,6 +192,7 @@
     {
       "decision_id": "dec-read",
       "action_id": "act-read-parser",
+      "manifest_hash": "5381493df35b09c3c33e40814bc9569bf3c94edb070b6da921927f492cf63776",
       "policy_version": "policy-2026-07-03.dev",
       "result": "allowed",
       "explanation": "action admitted by explicit active capability grant",
@@ -200,6 +201,7 @@
     {
       "decision_id": "dec-escape",
       "action_id": "act-write-escape",
+      "manifest_hash": "c2413bd37cca06b2d17bbcdd1b52be8a8c748afe62318e18f928095e0ba9e35b",
       "policy_version": "policy-2026-07-03.dev",
       "result": "needs_narrowed_grant",
       "explanation": "available grants do not allow this action, target, risk, data class, or time window",
@@ -208,6 +210,7 @@
     {
       "decision_id": "dec-fix",
       "action_id": "act-write-fix",
+      "manifest_hash": "5744df57e24647169f5905ee1f8c64676dd19afe79cb9992acfd7bbacefd8ff9",
       "policy_version": "policy-2026-07-03.dev",
       "result": "allowed",
       "explanation": "action admitted by explicit active capability grant",
@@ -216,6 +219,7 @@
     {
       "decision_id": "dec-test",
       "action_id": "act-run-tests",
+      "manifest_hash": "379e170de9bde146e7aca1daa85bcd9b66d99baefa580991373b344c25df3627",
       "policy_version": "policy-2026-07-03.dev",
       "result": "allowed",
       "explanation": "action admitted by explicit active capability grant",
@@ -431,6 +435,7 @@
         "decision": {
           "decision_id": "dec-read",
           "action_id": "act-read-parser",
+          "manifest_hash": "5381493df35b09c3c33e40814bc9569bf3c94edb070b6da921927f492cf63776",
           "policy_version": "policy-2026-07-03.dev",
           "result": "allowed",
           "explanation": "action admitted by explicit active capability grant",
@@ -438,7 +443,7 @@
         }
       },
       "prev_hash": "381384593f2cad789d45eabc8ea61eb3af18e5c49d05d280cf7154962de50e6d",
-      "hash": "d99ab74bd18fc8358dc74d470eb7a8acae5516c331a7b0f35a52bf8b3b548971"
+      "hash": "838e229aecae227b3e58e3ddef618adcfeecbeb43dee0fcb2a3898a413b21e92"
     },
     {
       "seq": 5,
@@ -465,8 +470,8 @@
           "receipt_hash": "629c3fdfaddc4c258af3982a868a1884153fc9f44aa42d796e8c255d6f02c074"
         }
       },
-      "prev_hash": "d99ab74bd18fc8358dc74d470eb7a8acae5516c331a7b0f35a52bf8b3b548971",
-      "hash": "5a708f9fc3e500cea1200cee5e5ed81b914efbe49754ed7dec5538c0b4954bfe"
+      "prev_hash": "838e229aecae227b3e58e3ddef618adcfeecbeb43dee0fcb2a3898a413b21e92",
+      "hash": "f1270ae0df084f10c8ed82346148f904ec69f6dc002578e228098d87affc7389"
     },
     {
       "seq": 6,
@@ -501,8 +506,8 @@
           "human_explanation": "Blocked example: path escapes the grant's /ws/beateros prefix."
         }
       },
-      "prev_hash": "5a708f9fc3e500cea1200cee5e5ed81b914efbe49754ed7dec5538c0b4954bfe",
-      "hash": "bd6a8161af41bb0d47d860359769c794347c751948a5bf36c10793e52153281b"
+      "prev_hash": "f1270ae0df084f10c8ed82346148f904ec69f6dc002578e228098d87affc7389",
+      "hash": "d00ca561b22a8c64d8d784d214dec58ba9173ded8fbb6164a8ee119ca1f0f626"
     },
     {
       "seq": 7,
@@ -512,14 +517,15 @@
         "decision": {
           "decision_id": "dec-escape",
           "action_id": "act-write-escape",
+          "manifest_hash": "c2413bd37cca06b2d17bbcdd1b52be8a8c748afe62318e18f928095e0ba9e35b",
           "policy_version": "policy-2026-07-03.dev",
           "result": "needs_narrowed_grant",
           "explanation": "available grants do not allow this action, target, risk, data class, or time window",
           "created_at": "2026-07-03T18:02:00Z"
         }
       },
-      "prev_hash": "bd6a8161af41bb0d47d860359769c794347c751948a5bf36c10793e52153281b",
-      "hash": "36db4379ec088b7f3aab7a2cf334ba9aefe8b7856d12f1c2cf43410572942995"
+      "prev_hash": "d00ca561b22a8c64d8d784d214dec58ba9173ded8fbb6164a8ee119ca1f0f626",
+      "hash": "f822977f1a27d100f0b5f2f7135dcdb19583477a786cb08b5e38f1c728bf6c4e"
     },
     {
       "seq": 8,
@@ -554,8 +560,8 @@
           "human_explanation": "Write the fix inside the granted workspace path."
         }
       },
-      "prev_hash": "36db4379ec088b7f3aab7a2cf334ba9aefe8b7856d12f1c2cf43410572942995",
-      "hash": "4658cefa8d850c56ca6ca40c1c8531a876c72467578043a58e113322f46f4341"
+      "prev_hash": "f822977f1a27d100f0b5f2f7135dcdb19583477a786cb08b5e38f1c728bf6c4e",
+      "hash": "fe1870d8dc63008bf27819272df177e5c9b1f121bcbcf160d5cecfd6475b7b30"
     },
     {
       "seq": 9,
@@ -565,14 +571,15 @@
         "decision": {
           "decision_id": "dec-fix",
           "action_id": "act-write-fix",
+          "manifest_hash": "5744df57e24647169f5905ee1f8c64676dd19afe79cb9992acfd7bbacefd8ff9",
           "policy_version": "policy-2026-07-03.dev",
           "result": "allowed",
           "explanation": "action admitted by explicit active capability grant",
           "created_at": "2026-07-03T18:03:00Z"
         }
       },
-      "prev_hash": "4658cefa8d850c56ca6ca40c1c8531a876c72467578043a58e113322f46f4341",
-      "hash": "d50b036b5d1237f7a390aa0d16df362eb5d2c70eeef663ba98f0a09df12a08bd"
+      "prev_hash": "fe1870d8dc63008bf27819272df177e5c9b1f121bcbcf160d5cecfd6475b7b30",
+      "hash": "813aeb6f026901c1fc89242abfdd0d239447ebbc828f549cc07b3ab7241d8043"
     },
     {
       "seq": 10,
@@ -601,8 +608,8 @@
           "receipt_hash": "2285865caac836928144596efa7ec5931d649f2f07984c8ddee48256aa61dbcf"
         }
       },
-      "prev_hash": "d50b036b5d1237f7a390aa0d16df362eb5d2c70eeef663ba98f0a09df12a08bd",
-      "hash": "90a4e399e41b617ad872565ea1241baf7e5b820d53c2d66365411c2861e75016"
+      "prev_hash": "813aeb6f026901c1fc89242abfdd0d239447ebbc828f549cc07b3ab7241d8043",
+      "hash": "94d16a51b91281398cd64339042cc9bbe58268f417e38cec2f4de7a3d0dd704c"
     },
     {
       "seq": 11,
@@ -633,8 +640,8 @@
           "human_explanation": "Execute the test runner to confirm the fix."
         }
       },
-      "prev_hash": "90a4e399e41b617ad872565ea1241baf7e5b820d53c2d66365411c2861e75016",
-      "hash": "7cb97ea92d8d5ec8d324b27f035fd38a68be8505d9aede756c319247c8913052"
+      "prev_hash": "94d16a51b91281398cd64339042cc9bbe58268f417e38cec2f4de7a3d0dd704c",
+      "hash": "d70cc14e4859550d5adc27e867dac8aafa1c16bce26f81a5eecd5ddaca41ed35"
     },
     {
       "seq": 12,
@@ -644,14 +651,15 @@
         "decision": {
           "decision_id": "dec-test",
           "action_id": "act-run-tests",
+          "manifest_hash": "379e170de9bde146e7aca1daa85bcd9b66d99baefa580991373b344c25df3627",
           "policy_version": "policy-2026-07-03.dev",
           "result": "allowed",
           "explanation": "action admitted by explicit active capability grant",
           "created_at": "2026-07-03T18:04:00Z"
         }
       },
-      "prev_hash": "7cb97ea92d8d5ec8d324b27f035fd38a68be8505d9aede756c319247c8913052",
-      "hash": "4ce3b171bf34eb0227190bc4f53fb7bff543ab97286ffad32ab5985acd746088"
+      "prev_hash": "d70cc14e4859550d5adc27e867dac8aafa1c16bce26f81a5eecd5ddaca41ed35",
+      "hash": "44b248d16db41212bbbc8f60ba4f65afdd8765c95c5a910f7624cce41befc147"
     },
     {
       "seq": 13,
@@ -678,8 +686,8 @@
           "receipt_hash": "efd93ca4f0de5edbe76f70f68a0b5167213238b0ab9495ca6d29f6492294cdb6"
         }
       },
-      "prev_hash": "4ce3b171bf34eb0227190bc4f53fb7bff543ab97286ffad32ab5985acd746088",
-      "hash": "c81d0d985f2039532dd8d2f176e6eba1c349b07ff74c389821397dd1e2fae284"
+      "prev_hash": "44b248d16db41212bbbc8f60ba4f65afdd8765c95c5a910f7624cce41befc147",
+      "hash": "fb1b4769f0b9b070f92770afcb3556c520b6dec5d360087123b8182c8304ee3d"
     }
   ]
 }

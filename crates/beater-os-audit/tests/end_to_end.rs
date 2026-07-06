@@ -8,6 +8,10 @@
 //! denial, tampered hash).
 
 use std::collections::BTreeSet;
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 
 use beater_os_core::{
     ActionKind, ActionManifest, ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant,
@@ -17,7 +21,10 @@ use beater_os_core::{
 };
 use chrono::{DateTime, Utc};
 
-use beater_os_audit::{build_bundle, compute_metrics, render_trace, verify_snapshot};
+use beater_os_audit::{
+    CheckOutcome, build_bundle, compute_metrics, render_trace, snapshot_root_hash,
+    verify_expected_root, verify_snapshot,
+};
 
 fn ts(secs: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(secs, 0).unwrap_or_else(Utc::now)
@@ -78,7 +85,10 @@ fn manifest(action_id: &str, session_id: &str, tool: &str, grants: &[&str]) -> A
             resource_kind: ResourceKind::FilePath,
             resource_id: "/ws/demo/file.txt".to_string(),
         },
-        resolved_target: None,
+        resolved_target: Some(CapabilitySelector {
+            resource_kind: ResourceKind::FilePath,
+            resource_id: "/ws/demo/file.txt".to_string(),
+        }),
         inputs_digest: "digest:inputs".to_string(),
         inputs_summary: "read /ws/demo/file.txt".to_string(),
         expected_outputs: Vec::new(),
@@ -89,6 +99,7 @@ fn manifest(action_id: &str, session_id: &str, tool: &str, grants: &[&str]) -> A
         data_classes: BTreeSet::new(),
         taint: BTreeSet::new(),
         idempotency_key: None,
+        payment_intent: None,
         compensation_plan: None,
         human_explanation: "read a workspace file".to_string(),
     }
@@ -153,7 +164,7 @@ fn valid_snapshot() -> Result<JournalSnapshot, BeaterOsError> {
     let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: m.clone(),
+            manifest: Box::new(m.clone()),
         },
         ts(1_002),
     )?;
@@ -172,6 +183,29 @@ fn valid_snapshot() -> Result<JournalSnapshot, BeaterOsError> {
     Ok(journal.snapshot())
 }
 
+struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    fn snapshot(snapshot: &JournalSnapshot, tag: &str) -> Result<Self, Box<dyn Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "beateros-audit-{tag}-{}-{}.json",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let json = serde_json::to_vec(snapshot)?;
+        fs::write(&path, json)?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 #[test]
 fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
     let snapshot = valid_snapshot()?;
@@ -182,7 +216,7 @@ fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
         report.failures().collect::<Vec<_>>()
     );
     assert_eq!(report.records, 5);
-    assert_eq!(report.checks.len(), 8);
+    assert_eq!(report.checks.len(), 10);
     assert_eq!(report.failures().count(), 0);
     Ok(())
 }
@@ -209,17 +243,90 @@ fn trace_render_and_bundle_are_coherent() -> Result<(), BeaterOsError> {
     let rendered = render_trace(&snapshot);
     assert!(rendered.contains("session=S1"));
     assert!(rendered.contains("action=A1"));
+    assert!(rendered.contains("resolved=FilePath:/ws/demo/file.txt"));
     assert!(rendered.contains("decision=D1"));
     assert!(rendered.contains("receipt=R1"));
 
     let bundle = build_bundle(&snapshot);
     assert_eq!(bundle.records, 5);
+    assert_eq!(bundle.root_hash, snapshot_root_hash(&snapshot));
     assert!(bundle.report.ok);
     assert_eq!(bundle.record_digests.len(), 5);
     // The bundle carries hashes and kinds but not raw event payloads.
     let json = beater_os_audit::bundle_to_json(&bundle)?;
     assert!(json.contains("session_created"));
     assert!(!json.contains("read /ws/demo/file.txt")); // inputs_summary is not exported
+    Ok(())
+}
+
+#[test]
+fn expected_root_anchor_accepts_matching_root() -> Result<(), BeaterOsError> {
+    let snapshot = valid_snapshot()?;
+    let root = snapshot_root_hash(&snapshot);
+    let check = verify_expected_root(&snapshot, &root);
+    assert_eq!(check.outcome, CheckOutcome::Pass);
+    assert!(check.detail.contains(&root));
+    Ok(())
+}
+
+#[test]
+fn expected_root_anchor_detects_truncation() -> Result<(), BeaterOsError> {
+    let full = valid_snapshot()?;
+    let full_root = snapshot_root_hash(&full);
+    let mut truncated = full.clone();
+    truncated.records.pop();
+
+    let check = verify_expected_root(&truncated, &full_root);
+    assert_eq!(check.outcome, CheckOutcome::Fail);
+    assert!(check.detail.contains("mismatch"));
+    assert!(check.detail.contains(&full_root));
+    Ok(())
+}
+
+#[test]
+fn cli_verify_expected_root_succeeds_for_matching_anchor() -> Result<(), Box<dyn Error>> {
+    let snapshot = valid_snapshot()?;
+    let root = snapshot_root_hash(&snapshot);
+    let file = TempFile::snapshot(&snapshot, "match")?;
+    let path = file.path.display().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_beateros-audit"))
+        .args(["verify", "--expected-root", &root, &path])
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "expected success, stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("expected_root"));
+    assert!(stdout.contains("OK: 5 record(s) passed all audit checks"));
+    Ok(())
+}
+
+#[test]
+fn cli_verify_expected_root_fails_for_mismatched_anchor() -> Result<(), Box<dyn Error>> {
+    let snapshot = valid_snapshot()?;
+    let file = TempFile::snapshot(&snapshot, "mismatch")?;
+    let path = file.path.display().to_string();
+    let wrong_root = "f".repeat(64);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_beateros-audit"))
+        .args(["verify", "--expected-root", &wrong_root, &path])
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "expected failure, stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("expected_root"));
+    assert!(stdout.contains("snapshot root mismatch"));
+    assert!(stdout.contains("FAIL: 1 check(s) failed"));
     Ok(())
 }
 
@@ -236,7 +343,7 @@ fn detects_grant_used_before_it_was_issued() -> Result<(), BeaterOsError> {
     )?;
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: manifest("A1", "S1", "tool:fs", &["G-missing"]),
+            manifest: Box::new(manifest("A1", "S1", "tool:fs", &["G-missing"])),
         },
         ts(1_001),
     )?;
@@ -287,7 +394,7 @@ fn detects_unexplained_denial() -> Result<(), BeaterOsError> {
     let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: m.clone(),
+            manifest: Box::new(m.clone()),
         },
         ts(1_002),
     )?;
@@ -371,9 +478,16 @@ fn detects_use_of_revoked_grant() -> Result<(), BeaterOsError> {
     let mut g = grant("G1", "S1", "agent:coder");
     g.revoked = true;
     journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_001))?;
+    let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: manifest("A1", "S1", "tool:fs", &["G1"]),
+            manifest: Box::new(m.clone()),
+        },
+        ts(1_002),
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: decision("D1", &m, DecisionResult::Allowed, "incorrectly admitted")?,
         },
         ts(1_002),
     )?;
@@ -398,9 +512,16 @@ fn detects_use_of_expired_grant() -> Result<(), BeaterOsError> {
     let mut g = grant("G1", "S1", "agent:coder");
     g.expires_at = ts(1_001); // expires before the action at ts(1_002) uses it
     journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_000))?;
+    let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: manifest("A1", "S1", "tool:fs", &["G1"]),
+            manifest: Box::new(m.clone()),
+        },
+        ts(1_002),
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: decision("D1", &m, DecisionResult::Allowed, "incorrectly admitted")?,
         },
         ts(1_002),
     )?;

@@ -19,6 +19,8 @@
     "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
     "approval_threshold_minor_units": { "$ref": "common.schema.json#/$defs/uint" },
     "idempotency_key": { "type": "string" },
-    "receipt_requirement": { "type": "string" }
+    "receipt_requirement": { "type": "string" },
+    "allowed_adapter_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "allowed_envelope_formats": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
   }
 }

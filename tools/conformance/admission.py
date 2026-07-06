@@ -18,6 +18,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from canonical import sha256_hex
+
 # Enum orderings mirror the `#[derive(Ord)]` declaration order in contracts.rs.
 RISK_ORDER = ["low", "medium", "high", "critical"]
 DATA_CLASS_ORDER = [
@@ -154,6 +156,38 @@ def grant_is_active_at(grant: dict, now: datetime) -> bool:
     return not grant.get("revoked", False) and _ts(grant["expires_at"]) > now
 
 
+def grant_chain_effectively_active(
+    grant: dict, ctx: dict, grants_by_id: dict[str, dict], now: datetime
+) -> bool:
+    """Return whether a grant and all delegation ancestors are live.
+
+    This mirrors Rust `grant_chain_effectively_active`: missing, revoked,
+    expired, registry-revoked, or cyclic delegation chains are not live
+    authority and therefore hard-deny before any narrowing/approval path.
+    """
+    current = grant
+    visited: set[str] = set()
+    revoked_handles = set(ctx.get("revoked_handles", []))
+    while True:
+        grant_id = current["grant_id"]
+        if grant_id in visited:
+            return False
+        visited.add(grant_id)
+
+        if not grant_is_active_at(current, now):
+            return False
+        if current.get("revocation_handle") in revoked_handles:
+            return False
+
+        parent_id = current.get("parent_grant_id")
+        if parent_id is None:
+            return True
+        parent = grants_by_id.get(parent_id)
+        if parent is None:
+            return False
+        current = parent
+
+
 def grant_allows_manifest(grant: dict, manifest: dict, now: datetime, actor_id: str) -> bool:
     if not grant_is_active_at(grant, now):
         return False
@@ -222,13 +256,12 @@ def has_external_side_effect(manifest: dict) -> bool:
 
 
 def _approval_from_reviewer(grant, manifest, ctx, now, reviewer_id) -> bool:
-    # NOTE: binds on action_id, not the manifest body hash. The Rust core's HEAD
-    # additionally binds evidence to a manifest_hash; adopting that here depends on
-    # the canonical-hashing convergence tracked in tools/conformance/README.md.
+    manifest_hash = sha256_hex(manifest)
     for ap in ctx.get("approvals", []):
         if (
             _ts(ap["approved_at"]) <= now
             and ap["action_id"] == manifest["action_id"]
+            and ap["manifest_hash"] == manifest_hash
             and ap["grant_id"] == grant["grant_id"]
             and ap["policy_version"] == ctx["policy_version"]
             and ap["reviewer_id"] == reviewer_id
@@ -257,13 +290,13 @@ def _explicit_action_evidence_exists(grant, manifest, ctx, now) -> bool:
 
     Reviewer-agnostic: used only for the `mode == none` untrusted case, where the
     grant configures no authorized reviewers but an untrusted dangerous action
-    still needs explicit human sign-off bound to this exact action+grant+policy.
-    Evidence binds on action_id (not manifest body hash) pending the cross-language
-    canonical-hashing convergence tracked in tools/conformance/README.md.
+    still needs explicit human sign-off bound to this exact manifest+grant+policy.
     """
+    manifest_hash = sha256_hex(manifest)
     return any(
         _ts(ap["approved_at"]) <= now
         and ap["action_id"] == manifest["action_id"]
+        and ap["manifest_hash"] == manifest_hash
         and ap["grant_id"] == grant["grant_id"]
         and ap["policy_version"] == ctx["policy_version"]
         for ap in ctx.get("approvals", [])
@@ -301,10 +334,12 @@ def _untrusted_dangerous_approved(grant, manifest, ctx, now) -> bool:
 
 
 def _has_passed_simulation(manifest, ctx, now) -> bool:
+    manifest_hash = sha256_hex(manifest)
     for sim in ctx.get("simulations", []):
         if (
             _ts(sim["passed_at"]) <= now
             and sim["action_id"] == manifest["action_id"]
+            and sim["manifest_hash"] == manifest_hash
             and sim["policy_version"] == ctx["policy_version"]
         ):
             return True
@@ -314,6 +349,110 @@ def _has_passed_simulation(manifest, ctx, now) -> bool:
 def _dangerous_untrusted(manifest: dict) -> bool:
     tainted = any(t in UNTRUSTED_TAINT for t in manifest.get("taint", []))
     return tainted and manifest["action_kind"] in DANGEROUS_UNTRUSTED_ACTIONS
+
+
+def _is_hex_64(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _is_payment_action(manifest: dict) -> bool:
+    return "payment" in manifest.get("expected_side_effects", []) or manifest["action_kind"] == "spend"
+
+
+def _counterparty_policy_allows(policy: str, counterparty_ref: str, binding_hash: str) -> bool:
+    if policy == "any":
+        return True
+    if ":" not in policy:
+        return False
+    kind, value = policy.split(":", 1)
+    if kind == "exact":
+        return counterparty_ref == value
+    if kind == "prefix":
+        return counterparty_ref.startswith(value)
+    if kind == "hash":
+        return binding_hash == value
+    if kind == "allowlist":
+        return counterparty_ref in {item.strip() for item in value.split(",") if item.strip()}
+    return False
+
+
+def _payment_authorized_by_mandate(manifest: dict, ctx: dict, now: datetime) -> str | None:
+    amount = (manifest.get("requested_budget") or {}).get("max_payment_minor_units")
+    if amount is None:
+        return "payment action must declare its amount in requested_budget.max_payment_minor_units"
+
+    intent = manifest.get("payment_intent")
+    if intent is None:
+        return "payment actions require a payment_intent"
+
+    target = manifest.get("target") or {}
+    if target.get("resource_kind") != "payment_rail":
+        return "payment intent target must be a payment_rail"
+    if target.get("resource_id") != intent.get("rail"):
+        return "payment intent rail must match the manifest payment_rail target"
+    if intent.get("amount_minor_units") == 0:
+        return "payment intent amount must be non-zero"
+    if intent.get("amount_minor_units") != amount:
+        return "payment intent amount must match requested_budget.max_payment_minor_units"
+    if manifest.get("idempotency_key") != intent.get("payment_idempotency_key"):
+        return "payment intent idempotency key must match the manifest idempotency key"
+
+    for field in (
+        "mandate_id",
+        "rail",
+        "adapter_id",
+        "asset",
+        "counterparty_ref",
+        "purpose",
+        "payment_idempotency_key",
+        "envelope_format",
+    ):
+        if not intent.get(field):
+            return "payment intent fields must be non-empty"
+
+    if not _is_hex_64(intent.get("counterparty_binding_hash")) or not _is_hex_64(intent.get("envelope_hash")):
+        return "payment intent hashes must be lowercase 32-byte hex"
+    if intent.get("envelope_expires_at") and _ts(intent["envelope_expires_at"]) <= now:
+        return "payment intent envelope is expired"
+
+    matching = [
+        m for m in ctx.get("mandates", [])
+        if m.get("mandate_id") == intent["mandate_id"]
+        and m.get("session_id") == ctx["session_id"]
+        and m.get("holder") == ctx["actor_id"]
+    ]
+    if not matching:
+        return "payment requires an active PaymentMandate covering the amount for this session and holder"
+    if len(matching) > 1:
+        return "payment intent mandate_id must select exactly one mandate"
+
+    mandate = matching[0]
+    if _ts(mandate["expires_at"]) <= now:
+        return "payment mandate is expired"
+    if intent["rail"] != mandate.get("rail"):
+        return "payment intent rail does not match mandate rail"
+    if intent["asset"] != mandate.get("asset"):
+        return "payment intent asset does not match mandate asset"
+    if intent["amount_minor_units"] > mandate.get("max_minor_units", -1):
+        return "payment intent amount exceeds mandate ceiling"
+    if intent["purpose"] != mandate.get("purpose"):
+        return "payment intent purpose does not match mandate purpose"
+    if not _counterparty_policy_allows(
+        mandate.get("counterparty_policy", ""),
+        intent["counterparty_ref"],
+        intent["counterparty_binding_hash"],
+    ):
+        return "payment intent counterparty is not allowed by mandate"
+    if intent["payment_idempotency_key"] != mandate.get("idempotency_key"):
+        return "payment intent idempotency key does not match mandate"
+    allowed_adapters = mandate.get("allowed_adapter_ids") or []
+    if allowed_adapters and intent["adapter_id"] not in allowed_adapters:
+        return "payment intent adapter is not allowed by mandate"
+    allowed_formats = mandate.get("allowed_envelope_formats") or []
+    if allowed_formats and intent["envelope_format"] not in allowed_formats:
+        return "payment intent envelope format is not allowed by mandate"
+
+    return None
 
 
 def admit(manifest: dict, ctx: dict) -> dict:
@@ -344,10 +483,21 @@ def admit(manifest: dict, ctx: dict) -> dict:
     if "payment" in manifest.get("expected_side_effects", []) and manifest["action_kind"] != "spend":
         return deny("payment side effects must use the spend action kind")
 
+    if _is_payment_action(manifest):
+        reason = _payment_authorized_by_mandate(manifest, ctx, now)
+        if reason:
+            return deny(reason)
+        matched.append("payment_authorized_by_mandate")
+
     matching = [g for g in ctx.get("grants", []) if g["grant_id"] in required]
     if len(matching) != len(required):
         return deny("one or more required grants are missing from the admission context")
     matched.append("required_grants_available")
+
+    grants_by_id = {g["grant_id"]: g for g in ctx.get("grants", [])}
+    if not all(grant_chain_effectively_active(g, ctx, grants_by_id, now) for g in matching):
+        return deny("a required grant or one of its delegation ancestors is revoked, expired, or missing")
+    matched.append("grant_delegation_chain_active")
 
     actor_id = ctx["actor_id"]
     if not all(grant_allows_manifest(g, manifest, now, actor_id) for g in matching):

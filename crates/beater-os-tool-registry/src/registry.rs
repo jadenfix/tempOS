@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use beater_os_core::{BeaterOsResult, HashValue, RiskClass, ToolManifest, hash_json};
+use beater_os_core::{
+    BeaterOsResult, CapabilityScope, HashValue, RiskClass, SideEffectClass, ToolManifest, hash_json,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -44,10 +46,18 @@ pub enum ToolTrust {
 pub struct ToolSignature {
     pub publisher: String,
     pub key_id: String,
-    /// The content digest this signature attests to.
+    /// The security digest this signature attests to.
+    ///
+    /// This digest binds the tool schema/artifact digest together with the
+    /// manifest fields that affect authority: publisher, version, transport,
+    /// required capabilities, side effects, risk class, and sandbox floor.
     pub content_digest: HashValue,
     /// Opaque signature material, verified out of band by a crypto layer.
     pub signature: String,
+    /// Whether the crypto layer verified `signature` bytes against `key_id`.
+    /// Defaults false so deserialized partial records fail closed.
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// A tool version registered in the registry: the core `ToolManifest` plus the
@@ -190,11 +200,11 @@ impl ResolveRequest {
 /// quarantined/revoked, is never resolvable, and a pinned tool resolves only at
 /// its pinned version and digest.
 ///
-/// Performance note (per `docs/sota-systems-engineering.md`): all lookups are
-/// `O(log n)` over `BTreeMap`s and allocation-free on the resolve hot path
-/// (resolve borrows; it clones nothing). There is no IO, no lock, and no
-/// syscall on the critical path; a runtime front-end owns concurrency and
-/// persistence.
+/// Performance note (per `docs/sota-systems-engineering.md`): lookups are
+/// `O(log n)` over `BTreeMap`s and there is no IO, lock, or syscall on the
+/// resolve hot path; a runtime front-end owns concurrency and persistence.
+/// When signatures are required, resolve also recomputes the signed security
+/// preimage so deserialized or policy-shifted registries still fail closed.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ToolRegistry {
     policy: RegistryPolicy,
@@ -241,7 +251,11 @@ impl ToolRegistry {
 
         self.check_static_policy(&tool)?;
 
-        let publisher = tool.manifest.publisher.clone();
+        let publisher = tool
+            .signature
+            .as_ref()
+            .map(|signature| signature.publisher.clone())
+            .unwrap_or_else(|| tool.manifest.publisher.clone());
         let content_digest = tool.content_digest.clone();
         self.tools
             .entry(tool_id.clone())
@@ -321,6 +335,15 @@ impl ToolRegistry {
         });
         self.workspace_allowlists
             .insert(workspace_id.to_string(), set);
+    }
+
+    /// Return whether a workspace has an explicit allowlist configured.
+    ///
+    /// `resolve` intentionally preserves an unrestricted global registry view
+    /// for non-runtime callers. Runtime boundaries that execute tools should
+    /// use this to require explicit workspace scoping before resolving.
+    pub fn has_workspace_allowlist(&self, workspace_id: &str) -> bool {
+        self.workspace_allowlists.contains_key(workspace_id)
     }
 
     /// Look up a registered tool without applying resolution policy.
@@ -471,12 +494,35 @@ impl ToolRegistry {
                     publisher: signature.publisher.clone(),
                 });
             }
-            if signature.content_digest != tool.content_digest {
+            if !signature.verified {
+                return Err(RegistryError::UnverifiedSignature {
+                    tool_id: tool_id.clone(),
+                    version: version.clone(),
+                    key_id: signature.key_id.clone(),
+                });
+            }
+            if signature.publisher != tool.manifest.publisher {
+                return Err(RegistryError::SignaturePublisherMismatch {
+                    tool_id: tool_id.clone(),
+                    version: version.clone(),
+                    signature_publisher: signature.publisher.clone(),
+                    manifest_publisher: tool.manifest.publisher.clone(),
+                });
+            }
+            let expected_signed_digest =
+                tool_signature_digest(&tool.manifest, &tool.content_digest).map_err(|err| {
+                    RegistryError::SignaturePreimageDigestFailed {
+                        tool_id: tool_id.clone(),
+                        version: version.clone(),
+                        reason: err.to_string(),
+                    }
+                })?;
+            if signature.content_digest != expected_signed_digest {
                 return Err(RegistryError::SignatureDigestMismatch {
                     tool_id: tool_id.clone(),
                     version: version.clone(),
                     signed: signature.content_digest.clone(),
-                    actual: tool.content_digest.clone(),
+                    actual: expected_signed_digest,
                 });
             }
         }
@@ -507,4 +553,41 @@ impl ToolRegistry {
 /// string cannot fail.)
 pub fn content_digest(schema: &str) -> BeaterOsResult<HashValue> {
     hash_json(&schema)
+}
+
+#[derive(Serialize)]
+struct ToolSignaturePreimage<'a> {
+    schema_version: &'static str,
+    content_digest: &'a HashValue,
+    tool_id: &'a str,
+    publisher: &'a str,
+    version: &'a str,
+    transport: &'a str,
+    required_capabilities: &'a Vec<CapabilityScope>,
+    side_effects: &'a BTreeSet<SideEffectClass>,
+    risk_class: RiskClass,
+    sandbox_required: bool,
+}
+
+/// Digest that a tool signature must cover.
+///
+/// This is intentionally stronger than [`content_digest`]: the raw
+/// schema/artifact digest remains the pinning value, while the signature digest
+/// also binds all manifest fields that change authority or sandbox policy.
+pub fn tool_signature_digest(
+    manifest: &ToolManifest,
+    content_digest: &HashValue,
+) -> BeaterOsResult<HashValue> {
+    hash_json(&ToolSignaturePreimage {
+        schema_version: "beateros-tool-signature-v1",
+        content_digest,
+        tool_id: &manifest.tool_id,
+        publisher: &manifest.publisher,
+        version: &manifest.version,
+        transport: &manifest.transport,
+        required_capabilities: &manifest.required_capabilities,
+        side_effects: &manifest.side_effects,
+        risk_class: manifest.risk_class,
+        sandbox_required: manifest.sandbox_required,
+    })
 }

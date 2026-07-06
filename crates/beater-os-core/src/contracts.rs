@@ -390,7 +390,10 @@ impl CapabilityGrant {
         if self.denied_actions.contains(&manifest.action_kind) {
             return false;
         }
-        if !self.scope.allows(&manifest.target, &manifest.action_kind) {
+        if !self
+            .scope
+            .allows(scope_selector(manifest), &manifest.action_kind)
+        {
             return false;
         }
         if let Some(max_risk) = self.constraints.max_risk
@@ -461,6 +464,10 @@ impl CapabilityGrant {
             .iter()
             .any(|allowed| host_matches_allowed(&host, allowed))
     }
+}
+
+fn scope_selector(manifest: &ActionManifest) -> &CapabilitySelector {
+    &manifest.target
 }
 
 fn path_is_inside_prefix(path: &str, prefix: &str) -> bool {
@@ -540,6 +547,8 @@ pub struct ActionManifest {
     #[serde(default)]
     pub idempotency_key: Option<String>,
     #[serde(default)]
+    pub payment_intent: Option<PaymentIntent>,
+    #[serde(default)]
     pub compensation_plan: Option<String>,
     pub human_explanation: String,
 }
@@ -557,6 +566,25 @@ impl ActionManifest {
     pub fn digest(&self) -> BeaterOsResult<HashValue> {
         hash_json(self)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentIntent {
+    pub mandate_id: String,
+    pub rail: String,
+    pub adapter_id: String,
+    #[serde(default)]
+    pub adapter_version: Option<String>,
+    pub asset: String,
+    pub amount_minor_units: u64,
+    pub counterparty_ref: String,
+    pub counterparty_binding_hash: HashValue,
+    pub purpose: String,
+    pub payment_idempotency_key: String,
+    pub envelope_format: String,
+    pub envelope_hash: HashValue,
+    #[serde(default)]
+    pub envelope_expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -608,6 +636,10 @@ pub struct PaymentMandate {
     pub approval_threshold_minor_units: u64,
     pub idempotency_key: String,
     pub receipt_requirement: String,
+    #[serde(default)]
+    pub allowed_adapter_ids: BTreeSet<String>,
+    #[serde(default)]
+    pub allowed_envelope_formats: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

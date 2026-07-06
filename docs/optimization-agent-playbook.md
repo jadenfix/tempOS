@@ -20,8 +20,8 @@ making language or compiler claims.
 
 Rules:
 
-- Use the repo-pinned toolchain for builds unless the PR is explicitly about a
-  toolchain change.
+- Use the repo-pinned Rust toolchain in `rust-toolchain.toml` for baseline
+  builds unless the PR is explicitly about a toolchain change.
 - If a newer compiler is claimed to be faster, safer, or required, include the
   release source, local benchmark delta, compatibility result, and rollback
   plan.
@@ -29,6 +29,8 @@ Rules:
   target, sanitizer, or backend requires it and the fallback is documented.
 - Record CPU architecture, OS version, compiler version, target triple,
   feature flags, and relevant environment variables with every benchmark.
+- Record `rustc -vV` and `cargo -vV` for Rust benchmark packets so LLVM backend,
+  host triple, and commit provenance are replayable.
 - Treat compiler optimizations as part of the evidence chain. A result without
   command line, profile mode, and input fixture is not evidence.
 

@@ -6,7 +6,7 @@
   "rail": "fake-usd-testrail",
   "asset": "USD",
   "max_minor_units": 5000,
-  "counterparty_policy": "allowlist:vendors",
+  "counterparty_policy": "prefix:vendor:",
   "purpose": "Renew CI minutes for the beaterOS pipeline",
   "expires_at": "2026-07-10T00:00:00Z",
   "approval_threshold_minor_units": 2000,

@@ -15,7 +15,8 @@ use std::io::Read as _;
 use std::process::ExitCode;
 
 use beater_os_audit::{
-    build_bundle, bundle_to_json, compute_metrics, render_trace, verify_snapshot,
+    CheckOutcome, CheckResult, build_bundle, bundle_to_json, compute_metrics, render_trace,
+    verify_expected_root, verify_snapshot,
 };
 use beater_os_core::JournalSnapshot;
 
@@ -24,6 +25,7 @@ beateros-audit — independent audit for a beaterOS journal snapshot
 
 USAGE:
     beateros-audit <COMMAND> <SNAPSHOT>
+    beateros-audit verify [--expected-root <HASH>] <SNAPSHOT>
 
 COMMANDS:
     verify    Run every independent audit check (exit 1 if any fails)
@@ -33,6 +35,12 @@ COMMANDS:
 
 SNAPSHOT:
     Path to a JSON journal snapshot, or - to read from stdin.
+
+OPTIONS:
+    --expected-root <HASH>
+        For verify only: require the snapshot root hash to match an externally
+        trusted anchor. This detects truncation or coherent re-hashing relative
+        to that anchor.
 ";
 
 fn main() -> ExitCode {
@@ -47,13 +55,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<ExitCode, String> {
-    let (command, source) = match args {
-        [command, source] => (command.as_str(), source.as_str()),
-        _ => {
-            eprint!("{USAGE}");
-            return Err("expected exactly two arguments: <command> <snapshot>".to_string());
-        }
-    };
+    let (command, expected_root, source) = parse_args(args)?;
 
     // Validate the command before touching input, so an unknown command reports
     // itself rather than a downstream file/parse error.
@@ -72,14 +74,25 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             for check in &report.checks {
                 println!("[{:?}] {} — {}", check.outcome, check.check, check.detail);
             }
+            let root_check =
+                expected_root.map(|expected| verify_expected_root(&snapshot, expected));
+            if let Some(check) = &root_check {
+                println!("[{:?}] {} — {}", check.outcome, check.check, check.detail);
+            }
             if report.records == 0 {
                 println!("note: journal is empty — this attests nothing about a real run");
             }
-            if report.ok {
+            if report.ok && root_check.as_ref().is_none_or(check_passed) {
                 println!("OK: {} record(s) passed all audit checks", report.records);
                 Ok(ExitCode::SUCCESS)
             } else {
-                println!("FAIL: {} check(s) failed", report.failures().count());
+                let failures = report.failures().count()
+                    + root_check
+                        .as_ref()
+                        .filter(|check| !check_passed(check))
+                        .map(|_| 1)
+                        .unwrap_or(0);
+                println!("FAIL: {failures} check(s) failed");
                 Ok(ExitCode::FAILURE)
             }
         }
@@ -106,6 +119,36 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             Err(format!("unknown command: {other}"))
         }
     }
+}
+
+fn parse_args(args: &[String]) -> Result<(&str, Option<&str>, &str), String> {
+    match args {
+        [command, source] => Ok((command.as_str(), None, source.as_str())),
+        [command, flag, expected_root, source]
+            if command == "verify" && flag == "--expected-root" =>
+        {
+            Ok((
+                command.as_str(),
+                Some(expected_root.as_str()),
+                source.as_str(),
+            ))
+        }
+        [command, flag, ..] if flag == "--expected-root" && command != "verify" => {
+            eprint!("{USAGE}");
+            Err("--expected-root is only valid with verify".to_string())
+        }
+        _ => {
+            eprint!("{USAGE}");
+            Err(
+                "expected <command> <snapshot> or verify --expected-root <hash> <snapshot>"
+                    .to_string(),
+            )
+        }
+    }
+}
+
+fn check_passed(check: &CheckResult) -> bool {
+    check.outcome == CheckOutcome::Pass
 }
 
 /// Maximum accepted snapshot size. The audit tool fully materializes the

@@ -25,6 +25,12 @@ impl TempHome {
     fn as_str(&self) -> String {
         self.path.display().to_string()
     }
+
+    fn child_dir(&self, name: &str) -> String {
+        let path = self.path.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::canonicalize(path).unwrap().display().to_string()
+    }
 }
 
 impl Drop for TempHome {
@@ -56,6 +62,12 @@ fn ok(home: &str, args: &[&str]) -> String {
 fn full_coding_workflow_end_to_end() {
     let home = TempHome::new();
     let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let main_rs = PathBuf::from(&repo)
+        .join("src")
+        .join("main.rs")
+        .display()
+        .to_string();
     let session = "sess-mvp";
 
     // 1. Create a session from a goal.
@@ -90,7 +102,7 @@ fn full_coding_workflow_end_to_end() {
             "--actions",
             "read,write",
             "--path-prefix",
-            "/workspace/repo",
+            &repo,
             "--reason",
             "coding task",
         ],
@@ -117,10 +129,10 @@ fn full_coding_workflow_end_to_end() {
             "--target-kind",
             "file_path",
             "--target",
-            "/workspace/repo/src/main.rs",
+            &main_rs,
             // Kernel-derived resolved target supplied by the mediation point.
             "--resolved-target",
-            "/workspace/repo/src/main.rs",
+            &main_rs,
             "--grants",
             &grant_id,
             "--action-id",
@@ -234,6 +246,8 @@ fn full_coding_workflow_end_to_end() {
 fn receipt_is_refused_without_admitted_action() {
     let home = TempHome::new();
     let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let repo_x = PathBuf::from(&repo).join("x").display().to_string();
     let session = "sess-refuse";
 
     ok(
@@ -265,7 +279,7 @@ fn receipt_is_refused_without_admitted_action() {
             "--actions",
             "read",
             "--path-prefix",
-            "/repo",
+            &repo,
         ],
     );
     let grant_id = grant_out
@@ -290,7 +304,7 @@ fn receipt_is_refused_without_admitted_action() {
             "--target-kind",
             "file_path",
             "--target",
-            "/repo/x",
+            &repo_x,
             "--grants",
             &grant_id,
             "--action-id",
@@ -319,6 +333,150 @@ fn receipt_is_refused_without_admitted_action() {
 }
 
 #[test]
+fn unregistered_tool_is_denied_by_cli_admission() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-tool-registry";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a1",
+            "--workspace",
+            "w1",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "/repo/x",
+            "--actions",
+            "write",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "unknown-tool",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/x",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-unknown-tool",
+            "--side-effects",
+            "local_write",
+        ],
+    );
+
+    assert!(denied.contains("Denied"), "{denied}");
+    assert!(denied.contains("not registered"), "{denied}");
+}
+
+#[test]
+fn registered_deployment_tool_cannot_be_laundered_as_execute_by_cli() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-tool-launder";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a1",
+            "--workspace",
+            "w1",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "tool",
+            "--resource-id",
+            "deployer",
+            "--actions",
+            "execute",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "deployer",
+            "--kind",
+            "execute",
+            "--target-kind",
+            "tool",
+            "--target",
+            "deployer",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-deploy-as-exec",
+            "--side-effects",
+            "deployment",
+            "--idempotency-key",
+            "deploy-idem",
+        ],
+    );
+
+    assert!(denied.contains("Denied"), "{denied}");
+    assert!(denied.contains("deploy action kind"), "{denied}");
+}
+
+#[test]
 fn unknown_session_fails_closed() {
     let home = TempHome::new();
     let h = home.as_str();
@@ -331,11 +489,316 @@ fn unknown_session_fails_closed() {
 }
 
 #[test]
+fn session_lifecycle_gates_new_authority_and_admission() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let repo_x = PathBuf::from(&repo).join("x").display().to_string();
+    let session = "sess-life";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a1",
+            "--workspace",
+            "w1",
+            "--goal",
+            "g",
+        ],
+    );
+    let paused = ok(&h, &["session", "pause", "--session", session]);
+    assert!(paused.contains("Paused"), "{paused}");
+
+    let grant_err = cli(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "write",
+        ],
+    )
+    .expect_err("paused session must not receive new grants");
+    assert!(
+        matches!(grant_err, CliError::Runtime(_)),
+        "unexpected grant error: {grant_err}"
+    );
+
+    let resumed = ok(&h, &["session", "resume", "--session", session]);
+    assert!(resumed.contains("Running"), "{resumed}");
+    let grant = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "write",
+            "--path-prefix",
+            &repo,
+        ],
+    );
+    let grant_id = grant
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .expect("grant id");
+
+    let canceled = ok(&h, &["session", "cancel", "--session", session]);
+    assert!(canceled.contains("Canceled"), "{canceled}");
+    let admission_err = cli(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            &repo_x,
+            "--resolved-target",
+            &repo_x,
+            "--grants",
+            grant_id,
+            "--action-id",
+            "act-after-cancel",
+        ],
+    )
+    .expect_err("canceled session must not admit actions");
+    assert!(
+        matches!(admission_err, CliError::Runtime(_)),
+        "unexpected admission error: {admission_err}"
+    );
+}
+
+#[test]
 fn help_is_available() {
     let home = TempHome::new();
     let out = ok(&home.as_str(), &["help"]);
     assert!(out.contains("beaterosctl"));
     assert!(out.contains("session create"));
+    assert!(out.contains("--revocation-handle <h>"));
+    assert!(out.contains("--revoked-handle <h>"));
+}
+
+#[test]
+fn action_propose_honors_revoked_handle_registry() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-revoked-handle";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "/repo/a",
+            "--actions",
+            "write",
+            "--revocation-handle",
+            "revoke:repo-a",
+        ],
+    );
+    assert!(
+        grant_out.contains("revokes: revoke:repo-a"),
+        "grant output should expose the revocation handle:\n{grant_out}"
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let allowed = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/a",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-before-revoke",
+        ],
+    );
+    assert!(allowed.contains("Allowed"), "{allowed}");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/a",
+            "--grants",
+            &grant_id,
+            "--revoked-handle",
+            "revoke:repo-a",
+            "--action-id",
+            "act-after-revoke",
+        ],
+    );
+    assert!(
+        denied.contains("Denied"),
+        "revoked handle must fail closed at admission:\n{denied}"
+    );
+    assert!(
+        denied.contains("revoked, expired, or missing"),
+        "denial should name the revoked authority boundary:\n{denied}"
+    );
+}
+
+#[test]
+fn action_execute_honors_revoked_handle_before_sandbox_execution() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let out_file = PathBuf::from(&repo).join("out.txt");
+    let session = "sess-execute-revoked-handle";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "execute,write",
+            "--path-prefix",
+            &repo,
+            "--revocation-handle",
+            "revoke:exec",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "shell",
+            "--command",
+            "sh",
+            "--arg",
+            "-c",
+            "--arg",
+            "printf hi > out.txt",
+            "--cwd",
+            &repo,
+            "--grants",
+            &grant_id,
+            "--side-effects",
+            "local_write",
+            "--revoked-handle",
+            "revoke:exec",
+            "--action-id",
+            "act-exec-after-revoke",
+        ],
+    );
+
+    assert!(
+        denied.contains("Denied"),
+        "revoked execute grant must fail closed at admission:\n{denied}"
+    );
+    assert!(
+        denied.contains("execution:   skipped"),
+        "revoked action must not execute:\n{denied}"
+    );
+    assert!(
+        !out_file.exists(),
+        "sandbox command must not run after revoked-handle denial"
+    );
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
 }
 
 /// Set up a session with a write grant and one admitted write action `act-ok`.
@@ -343,6 +806,8 @@ fn help_is_available() {
 fn setup_admitted_write(session: &str) -> TempHome {
     let home = TempHome::new();
     let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let repo_a = PathBuf::from(&repo).join("a").display().to_string();
     ok(
         &h,
         &[
@@ -372,7 +837,7 @@ fn setup_admitted_write(session: &str) -> TempHome {
             "--actions",
             "read,write",
             "--path-prefix",
-            "/repo",
+            &repo,
         ],
     );
     let grant_id = grant_out
@@ -395,13 +860,13 @@ fn setup_admitted_write(session: &str) -> TempHome {
             "--target-kind",
             "file_path",
             "--target",
-            "/repo/a",
+            &repo_a,
             // `resolved_target` is kernel-derived (final.md §7.4): a mediation
             // point supplies the canonical, symlink-resolved path. The CLI no
             // longer infers it from the agent's claimed target, so a path-prefix
             // grant only admits when a resolved target is provided here.
             "--resolved-target",
-            "/repo/a",
+            &repo_a,
             "--grants",
             &grant_id,
             "--action-id",
@@ -635,6 +1100,8 @@ fn path_traversal_session_id_is_rejected() {
 fn path_prefix_grant_without_resolved_target_fails_closed() {
     let home = TempHome::new();
     let h = home.as_str();
+    let ws = home.child_dir("ws");
+    let ws_file = PathBuf::from(&ws).join("x.txt").display().to_string();
     let session = "sess-noresolve";
     ok(
         &h,
@@ -665,7 +1132,7 @@ fn path_prefix_grant_without_resolved_target_fails_closed() {
             "--actions",
             "read,write",
             "--path-prefix",
-            "/ws",
+            &ws,
         ],
     );
     let grant_id = grant_out
@@ -689,7 +1156,7 @@ fn path_prefix_grant_without_resolved_target_fails_closed() {
             "--target-kind",
             "file_path",
             "--target",
-            "/ws/x.txt",
+            &ws_file,
             "--grants",
             &grant_id,
             "--action-id",
@@ -701,5 +1168,50 @@ fn path_prefix_grant_without_resolved_target_fails_closed() {
     assert!(
         out.contains("NeedsNarrowedGrant"),
         "path-prefix grant must fail closed without a resolved target:\n{out}"
+    );
+}
+
+#[test]
+fn path_prefix_grant_requires_existing_canonical_prefix() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let missing = home.path.join("missing-prefix").display().to_string();
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            "sess-missing-prefix",
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+
+    let err = cli(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            "sess-missing-prefix",
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "read",
+            "--path-prefix",
+            &missing,
+        ],
+    )
+    .expect_err("missing path-prefix authority must fail closed");
+    assert!(
+        matches!(err, CliError::Runtime(_) | CliError::Io(_)),
+        "unexpected error: {err}"
     );
 }

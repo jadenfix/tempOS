@@ -55,12 +55,36 @@ pub enum RegistryError {
         publisher: String,
     },
 
+    #[error(
+        "signature publisher {signature_publisher} for {tool_id}@{version} does not match manifest publisher {manifest_publisher}"
+    )]
+    SignaturePublisherMismatch {
+        tool_id: String,
+        version: String,
+        signature_publisher: String,
+        manifest_publisher: String,
+    },
+
     #[error("signature for {tool_id}@{version} covers digest {signed}, not the tool's {actual}")]
     SignatureDigestMismatch {
         tool_id: String,
         version: String,
         signed: String,
         actual: String,
+    },
+
+    #[error("signature for {tool_id}@{version} has not been verified with key {key_id}")]
+    UnverifiedSignature {
+        tool_id: String,
+        version: String,
+        key_id: String,
+    },
+
+    #[error("could not compute signed preimage digest for {tool_id}@{version}: {reason}")]
+    SignaturePreimageDigestFailed {
+        tool_id: String,
+        version: String,
+        reason: String,
     },
 
     #[error("tool {tool_id}@{version} is not marked test-passing but the registry requires it")]

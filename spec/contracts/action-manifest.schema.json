@@ -57,6 +57,54 @@
       "uniqueItems": true
     },
     "idempotency_key": { "type": ["string", "null"] },
+    "payment_intent": {
+      "description": "Normalized payment intent for spend/payment actions. Rail adapters verify concrete envelopes; policy admits this chain-neutral projection.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mandate_id",
+            "rail",
+            "adapter_id",
+            "asset",
+            "amount_minor_units",
+            "counterparty_ref",
+            "counterparty_binding_hash",
+            "purpose",
+            "payment_idempotency_key",
+            "envelope_format",
+            "envelope_hash"
+          ],
+          "properties": {
+            "mandate_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+            "rail": { "$ref": "common.schema.json#/$defs/Identifier" },
+            "adapter_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+            "adapter_version": {
+              "oneOf": [
+                { "$ref": "common.schema.json#/$defs/Identifier" },
+                { "type": "null" }
+              ]
+            },
+            "asset": { "type": "string", "minLength": 1 },
+            "amount_minor_units": { "type": "integer", "minimum": 1 },
+            "counterparty_ref": { "type": "string", "minLength": 1 },
+            "counterparty_binding_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+            "purpose": { "type": "string", "minLength": 1 },
+            "payment_idempotency_key": { "$ref": "common.schema.json#/$defs/Identifier" },
+            "envelope_format": { "$ref": "common.schema.json#/$defs/Identifier" },
+            "envelope_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+            "envelope_expires_at": {
+              "oneOf": [
+                { "$ref": "common.schema.json#/$defs/Timestamp" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
     "compensation_plan": { "type": ["string", "null"] },
     "human_explanation": { "type": "string", "minLength": 1 }
   }

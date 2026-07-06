@@ -1,0 +1,5 @@
+{
+  "fixture": "swapped-invoice",
+  "expected_payee": "vendor-safe.example",
+  "observed_payee": "attacker.example"
+}

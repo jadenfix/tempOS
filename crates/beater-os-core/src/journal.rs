@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    ActionManifest, AgentSession, CapabilityGrant, DecisionResult, MemoryRecord, PolicyDecision,
-    ScenarioManifest,
+    ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult, MemoryRecord,
+    PaymentMandate, PolicyDecision, ScenarioManifest, SessionStatus, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
@@ -17,14 +17,35 @@ pub enum JournalEvent {
     SessionCreated {
         session: AgentSession,
     },
+    SessionStatusChanged {
+        transition_id: String,
+        session_id: String,
+        from: SessionStatus,
+        to: SessionStatus,
+    },
     CapabilityGranted {
         grant: CapabilityGrant,
     },
+    CapabilityRevoked {
+        grant_id: String,
+        revocation_handle: String,
+        revoked_by: String,
+        reason: String,
+    },
+    PaymentMandateIssued {
+        mandate: PaymentMandate,
+    },
     ActionProposed {
-        manifest: ActionManifest,
+        manifest: Box<ActionManifest>,
     },
     PolicyDecided {
         decision: PolicyDecision,
+    },
+    ApprovalRecorded {
+        approval: ApprovalEvidence,
+    },
+    SimulationRecorded {
+        simulation: SimulationEvidence,
     },
     ReceiptAppended {
         receipt: CapabilityReceipt,
@@ -103,6 +124,10 @@ impl InMemoryJournal {
         created_at: DateTime<Utc>,
     ) -> BeaterOsResult<JournalRecord> {
         let seq = self.records.len() as u64;
+        if let JournalEvent::MemoryWritten { memory } = &event {
+            let known_event_ids = self.records.iter().filter_map(primary_event_id);
+            validate_memory_source(memory, seq, known_event_ids)?;
+        }
         let prev_hash = self
             .records
             .last()
@@ -139,10 +164,7 @@ impl InMemoryJournal {
 
     pub fn verify_chain(&self) -> BeaterOsResult<JournalVerificationReport> {
         let mut prev_hash = GENESIS_HASH.to_string();
-        let mut proposed_actions: BTreeMap<String, ActionManifest> = BTreeMap::new();
-        let mut allowed_decisions: BTreeMap<String, HashValue> = BTreeMap::new();
-        let mut latest_decision_by_action: BTreeMap<String, DecisionResult> = BTreeMap::new();
-        let mut receipt_chain = Vec::new();
+        let mut causality = CausalityState::default();
         for (idx, record) in self.records.iter().enumerate() {
             let expected_seq = idx as u64;
             if record.seq != expected_seq {
@@ -166,13 +188,7 @@ impl InMemoryJournal {
                     found: record.hash.clone(),
                 });
             }
-            verify_event_causality(
-                record,
-                &mut proposed_actions,
-                &mut allowed_decisions,
-                &mut latest_decision_by_action,
-                &mut receipt_chain,
-            )?;
+            verify_event_causality(record, &mut causality)?;
             prev_hash = record.hash.clone();
         }
         Ok(JournalVerificationReport {
@@ -182,17 +198,153 @@ impl InMemoryJournal {
     }
 }
 
+#[derive(Default)]
+struct CausalityState {
+    session_statuses: BTreeMap<String, SessionStatus>,
+    proposed_actions: BTreeMap<String, ActionManifest>,
+    issued_grants: BTreeMap<String, CapabilityGrant>,
+    allowed_decisions: BTreeMap<String, HashValue>,
+    latest_decision_by_action: BTreeMap<String, DecisionResult>,
+    review_ids: BTreeMap<String, ()>,
+    simulation_ids: BTreeMap<String, ()>,
+    receipt_chain: Vec<CapabilityReceipt>,
+    prior_event_ids: BTreeSet<String>,
+    transition_ids: BTreeSet<String>,
+    issued_revocation_handles: BTreeSet<String>,
+    revoked_handles: BTreeSet<String>,
+}
+
 fn verify_event_causality(
     record: &JournalRecord,
-    proposed_actions: &mut BTreeMap<String, ActionManifest>,
-    allowed_decisions: &mut BTreeMap<String, HashValue>,
-    latest_decision_by_action: &mut BTreeMap<String, DecisionResult>,
-    receipt_chain: &mut Vec<CapabilityReceipt>,
+    state: &mut CausalityState,
 ) -> BeaterOsResult<()> {
     match &record.event {
+        JournalEvent::SessionCreated { session } => {
+            if state
+                .session_statuses
+                .insert(session.session_id.clone(), session.status.clone())
+                .is_some()
+            {
+                return causality_error(
+                    record.seq,
+                    format!("session {} was created more than once", session.session_id),
+                );
+            }
+        }
+        JournalEvent::SessionStatusChanged {
+            transition_id,
+            session_id,
+            from,
+            to,
+        } => {
+            if transition_id.trim().is_empty() {
+                return causality_error(record.seq, "session transition id is empty".to_string());
+            }
+            if !state.transition_ids.insert(transition_id.clone()) {
+                return causality_error(
+                    record.seq,
+                    format!("session transition {transition_id} was recorded more than once"),
+                );
+            }
+            let Some(current) = state.session_statuses.get(session_id) else {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "session transition {transition_id} references unknown session {session_id}"
+                    ),
+                );
+            };
+            if current != from {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "session transition {transition_id} from {from:?} does not match current status {current:?}"
+                    ),
+                );
+            }
+            if !valid_session_transition(from, to) {
+                return causality_error(
+                    record.seq,
+                    format!("illegal session transition {transition_id}: {from:?} -> {to:?}"),
+                );
+            }
+            state
+                .session_statuses
+                .insert(session_id.clone(), to.clone());
+        }
+        JournalEvent::CapabilityGranted { grant } => {
+            if grant.revocation_handle == grant.grant_id {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "grant {} revocation handle must not equal the grant event id",
+                        grant.grant_id
+                    ),
+                );
+            }
+            if state.prior_event_ids.contains(&grant.revocation_handle) {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "grant {} revocation handle {} collides with a prior journal event id",
+                        grant.grant_id, grant.revocation_handle
+                    ),
+                );
+            }
+            if !state
+                .issued_revocation_handles
+                .insert(grant.revocation_handle.clone())
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "grant {} revocation handle {} was already issued",
+                        grant.grant_id, grant.revocation_handle
+                    ),
+                );
+            }
+            state
+                .issued_grants
+                .insert(grant.grant_id.clone(), grant.clone());
+        }
+        JournalEvent::CapabilityRevoked {
+            grant_id,
+            revocation_handle,
+            revoked_by,
+            reason,
+        } => {
+            if revoked_by.trim().is_empty() {
+                return causality_error(record.seq, "revocation actor is empty".to_string());
+            }
+            if reason.trim().is_empty() {
+                return causality_error(record.seq, "revocation reason is empty".to_string());
+            }
+            let Some(grant) = state.issued_grants.get(grant_id) else {
+                return causality_error(
+                    record.seq,
+                    format!("revocation references grant {grant_id} before it was issued"),
+                );
+            };
+            if grant.revocation_handle != *revocation_handle {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "revocation for grant {grant_id} uses handle {revocation_handle}, expected {}",
+                        grant.revocation_handle
+                    ),
+                );
+            }
+            if !state.revoked_handles.insert(revocation_handle.clone()) {
+                return causality_error(
+                    record.seq,
+                    format!("revocation handle {revocation_handle} was recorded more than once"),
+                );
+            }
+        }
         JournalEvent::ActionProposed { manifest } => {
-            if proposed_actions
-                .insert(manifest.action_id.clone(), manifest.clone())
+            if state
+                .proposed_actions
+                .insert(manifest.action_id.clone(), manifest.as_ref().clone())
                 .is_some()
             {
                 return causality_error(
@@ -202,7 +354,7 @@ fn verify_event_causality(
             }
         }
         JournalEvent::PolicyDecided { decision } => {
-            let Some(manifest) = proposed_actions.get(&decision.action_id) else {
+            let Some(manifest) = state.proposed_actions.get(&decision.action_id) else {
                 return causality_error(
                     record.seq,
                     format!(
@@ -221,16 +373,151 @@ fn verify_event_causality(
                     ),
                 );
             }
-            latest_decision_by_action.insert(decision.action_id.clone(), decision.result.clone());
+            state
+                .latest_decision_by_action
+                .insert(decision.action_id.clone(), decision.result.clone());
             if decision.result == DecisionResult::Allowed {
-                allowed_decisions
+                for required in &manifest.required_grants {
+                    let Some(grant) = state.issued_grants.get(required) else {
+                        continue;
+                    };
+                    if grant.revoked || state.revoked_handles.contains(&grant.revocation_handle) {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "allowed decision {} references revoked grant {}",
+                                decision.decision_id, required
+                            ),
+                        );
+                    }
+                    if grant.expires_at <= record.created_at {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "allowed decision {} references expired grant {}",
+                                decision.decision_id, required
+                            ),
+                        );
+                    }
+                }
+                state
+                    .allowed_decisions
                     .insert(decision.action_id.clone(), decision.manifest_hash.clone());
             } else {
-                allowed_decisions.remove(&decision.action_id);
+                state.allowed_decisions.remove(&decision.action_id);
+            }
+        }
+        JournalEvent::ApprovalRecorded { approval } => {
+            if state
+                .review_ids
+                .insert(approval.review_id.clone(), ())
+                .is_some()
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "approval {} was recorded more than once",
+                        approval.review_id
+                    ),
+                );
+            }
+            let Some(manifest) = state.proposed_actions.get(&approval.action_id) else {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "approval {} references action {} before it was proposed",
+                        approval.review_id, approval.action_id
+                    ),
+                );
+            };
+            if manifest.digest()? != approval.manifest_hash {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "approval {} manifest hash does not match action {}",
+                        approval.review_id, approval.action_id
+                    ),
+                );
+            }
+            if !state.issued_grants.contains_key(&approval.grant_id) {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "approval {} references grant {} before it was issued",
+                        approval.review_id, approval.grant_id
+                    ),
+                );
+            }
+            if state.latest_decision_by_action.get(&approval.action_id)
+                != Some(&DecisionResult::NeedsApproval)
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "approval {} references action {} without a latest NeedsApproval decision",
+                        approval.review_id, approval.action_id
+                    ),
+                );
+            }
+            if approval.approved_at > record.created_at {
+                return causality_error(
+                    record.seq,
+                    format!("approval {} is future-dated", approval.review_id),
+                );
+            }
+        }
+        JournalEvent::SimulationRecorded { simulation } => {
+            if state
+                .simulation_ids
+                .insert(simulation.simulation_id.clone(), ())
+                .is_some()
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "simulation {} was recorded more than once",
+                        simulation.simulation_id
+                    ),
+                );
+            }
+            let Some(manifest) = state.proposed_actions.get(&simulation.action_id) else {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "simulation {} references action {} before it was proposed",
+                        simulation.simulation_id, simulation.action_id
+                    ),
+                );
+            };
+            if manifest.digest()? != simulation.manifest_hash {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "simulation {} manifest hash does not match action {}",
+                        simulation.simulation_id, simulation.action_id
+                    ),
+                );
+            }
+            if state.latest_decision_by_action.get(&simulation.action_id)
+                != Some(&DecisionResult::NeedsSimulation)
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "simulation {} references action {} without a latest NeedsSimulation decision",
+                        simulation.simulation_id, simulation.action_id
+                    ),
+                );
+            }
+            if simulation.passed_at > record.created_at {
+                return causality_error(
+                    record.seq,
+                    format!("simulation {} is future-dated", simulation.simulation_id),
+                );
             }
         }
         JournalEvent::ReceiptAppended { receipt } => {
-            let Some(manifest) = proposed_actions.get(&receipt.action_id) else {
+            let Some(manifest) = state.proposed_actions.get(&receipt.action_id) else {
                 return causality_error(
                     record.seq,
                     format!(
@@ -239,8 +526,10 @@ fn verify_event_causality(
                     ),
                 );
             };
-            let Some(allowed_manifest_hash) = allowed_decisions.get(&receipt.action_id) else {
-                let latest = latest_decision_by_action
+            let Some(allowed_manifest_hash) = state.allowed_decisions.get(&receipt.action_id)
+            else {
+                let latest = state
+                    .latest_decision_by_action
                     .get(&receipt.action_id)
                     .map(|result| format!("{result:?}"))
                     .unwrap_or_else(|| "missing".to_string());
@@ -305,14 +594,86 @@ fn verify_event_causality(
                     ),
                 );
             }
-            receipt_chain.push(receipt.clone());
-            ReceiptLedger::from_receipts(receipt_chain.clone()).verify_chain()?;
+            state.receipt_chain.push(receipt.clone());
+            ReceiptLedger::from_receipts(state.receipt_chain.clone()).verify_chain()?;
         }
-        JournalEvent::SessionCreated { .. }
-        | JournalEvent::CapabilityGranted { .. }
-        | JournalEvent::MemoryWritten { .. }
+        JournalEvent::MemoryWritten { memory } => {
+            validate_memory_source(
+                memory,
+                record.seq,
+                state.prior_event_ids.iter().map(String::as_str),
+            )?;
+        }
+        JournalEvent::PaymentMandateIssued { .. }
         | JournalEvent::ScenarioEvaluated { .. }
         | JournalEvent::IncidentAnnotated { .. } => {}
+    }
+    if let Some(event_id) = primary_event_id(record)
+        && !state.prior_event_ids.insert(event_id.to_string())
+    {
+        return causality_error(
+            record.seq,
+            format!("journal event id {event_id} was recorded more than once"),
+        );
+    }
+    Ok(())
+}
+
+fn primary_event_id(record: &JournalRecord) -> Option<&str> {
+    match &record.event {
+        JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
+        JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
+        JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::CapabilityRevoked {
+            revocation_handle, ..
+        } => Some(revocation_handle.as_str()),
+        JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
+        JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
+        JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
+        JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
+        JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
+        // Memory ids are mutable projection keys: `beater-os-memory` explicitly
+        // supports last-writer-wins rewrites for the same memory_id. They are
+        // therefore not unambiguous journal event ids for provenance.
+        JournalEvent::MemoryWritten { .. } => None,
+        JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
+        JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
+    }
+}
+
+fn valid_session_transition(from: &SessionStatus, to: &SessionStatus) -> bool {
+    matches!(
+        (from, to),
+        (SessionStatus::Running, SessionStatus::Paused)
+            | (SessionStatus::Paused, SessionStatus::Running)
+            | (SessionStatus::Running, SessionStatus::Canceled)
+            | (SessionStatus::Paused, SessionStatus::Canceled)
+    )
+}
+
+fn validate_memory_source<'a>(
+    memory: &MemoryRecord,
+    seq: u64,
+    known_event_ids: impl Iterator<Item = &'a str>,
+) -> BeaterOsResult<()> {
+    if memory.source_event_id.trim().is_empty() {
+        return causality_error(
+            seq,
+            format!("memory {} has an empty source_event_id", memory.memory_id),
+        );
+    }
+    if !known_event_ids
+        .into_iter()
+        .any(|id| id == memory.source_event_id)
+    {
+        return causality_error(
+            seq,
+            format!(
+                "memory {} references unknown source event {}",
+                memory.memory_id, memory.source_event_id
+            ),
+        );
     }
     Ok(())
 }

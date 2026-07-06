@@ -27,10 +27,40 @@
         },
         {
           "additionalProperties": false,
+          "required": ["kind", "transition_id", "session_id", "from", "to"],
+          "properties": {
+            "kind": { "const": "session_status_changed" },
+            "transition_id": { "type": "string", "minLength": 1 },
+            "session_id": { "type": "string", "minLength": 1 },
+            "from": { "$ref": "common.schema.json#/$defs/session_status" },
+            "to": { "$ref": "common.schema.json#/$defs/session_status" }
+          }
+        },
+        {
+          "additionalProperties": false,
           "required": ["kind", "grant"],
           "properties": {
             "kind": { "const": "capability_granted" },
             "grant": { "$ref": "capability-grant.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "grant_id", "revocation_handle", "revoked_by", "reason"],
+          "properties": {
+            "kind": { "const": "capability_revoked" },
+            "grant_id": { "type": "string", "minLength": 1 },
+            "revocation_handle": { "type": "string", "minLength": 1 },
+            "revoked_by": { "type": "string", "minLength": 1 },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "mandate"],
+          "properties": {
+            "kind": { "const": "payment_mandate_issued" },
+            "mandate": { "$ref": "payment-mandate.schema.json" }
           }
         },
         {
@@ -47,6 +77,22 @@
           "properties": {
             "kind": { "const": "policy_decided" },
             "decision": { "$ref": "policy-decision.schema.json" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "approval"],
+          "properties": {
+            "kind": { "const": "approval_recorded" },
+            "approval": { "$ref": "common.schema.json#/$defs/approval_evidence" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "simulation"],
+          "properties": {
+            "kind": { "const": "simulation_recorded" },
+            "simulation": { "$ref": "common.schema.json#/$defs/simulation_evidence" }
           }
         },
         {

@@ -1,27 +1,35 @@
 use std::collections::BTreeSet;
+use std::path::{Component, Path};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, AgentSession, Budget, CapabilityGrant,
-    CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
-    GrantConstraints, JournalEvent, PolicyEngine, ResourceKind, RiskClass, SessionStatus,
-    SideEffectClass, hash_json,
+    ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
+    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, GrantConstraints, ResourceKind,
+    RiskClass, SessionStatus, SideEffectClass, ToolManifest, hash_json,
 };
-use beater_os_sandbox::{
-    SandboxLimits, SandboxRequest, command_digest, execute as sandbox_execute,
+use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
+use beater_os_tool_gateway::{
+    GatewayError, LocalToolInvocation, execute_local_tool, local_shell_tool_digest_with_environment,
 };
+use beater_os_tool_registry::{
+    RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
+};
+use beater_osd::{DAEMON_POLICY_VERSION, SessionTransition, Store};
 use chrono::{DateTime, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::args::{self, ParsedArgs};
 use crate::error::{CliError, CliResult};
-use crate::store::Store;
 
 /// The policy version this CLI stamps onto grants and admission contexts.
 /// Kept as a single constant so grants, approvals, and decisions stay
 /// consistent, mirroring the invariants the core policy engine checks.
-pub const POLICY_VERSION: &str = "beateros-policy-v0";
+pub const POLICY_VERSION: &str = DAEMON_POLICY_VERSION;
 
 const DEFAULT_GRANT_TTL_SECS: u64 = 3600;
+
+fn revoked_handles(args: &ParsedArgs) -> BTreeSet<String> {
+    args.csv("revoked-handle").into_iter().collect()
+}
 
 /// Dispatch a parsed command against the store.
 pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
@@ -31,7 +39,11 @@ pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         ("session", "create") => session_create(store, args),
         ("session", "list") => session_list(store, args),
         ("session", "show") => session_show(store, args),
+        ("session", "pause") => session_transition(store, args, SessionTransition::Pause),
+        ("session", "resume") => session_transition(store, args, SessionTransition::Resume),
+        ("session", "cancel") => session_transition(store, args, SessionTransition::Cancel),
         ("grant", "issue") => grant_issue(store, args),
+        ("grant", "revoke") => grant_revoke(store, args),
         ("action", "propose") => action_propose(store, args),
         ("action", "execute") => action_execute(store, args),
         ("receipt", "record") => receipt_record(store, args),
@@ -47,10 +59,19 @@ fn session_create(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let now = Utc::now();
     let agent_id = args.require("agent")?.to_string();
     let created_by = args.get_or("created-by", &agent_id).to_string();
+    let session_id = args
+        .get_or("session", &Uuid::new_v4().to_string())
+        .to_string();
+    let initial_capability_ids: BTreeSet<String> = {
+        let provided = args.csv("initial-capability-id");
+        if provided.is_empty() {
+            BTreeSet::from([default_root_grant_id(&session_id)])
+        } else {
+            provided.into_iter().collect()
+        }
+    };
     let session = AgentSession {
-        session_id: args
-            .get_or("session", &Uuid::new_v4().to_string())
-            .to_string(),
+        session_id,
         created_at: now,
         created_by,
         agent_id,
@@ -58,12 +79,12 @@ fn session_create(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         goal: args.require("goal")?.to_string(),
         constraints: args.csv("constraint"),
         policy_profile: args.get_or("policy-profile", "default").to_string(),
-        initial_capability_ids: BTreeSet::new(),
+        initial_capability_ids,
         budget: Budget::default(),
         model_policy: Default::default(),
         memory_scope: args.get("memory-scope").map(str::to_string),
         journal_root: store.root().display().to_string(),
-        status: SessionStatus::Created,
+        status: SessionStatus::Running,
     };
     store.create_session(&session)?;
     Ok(format!(
@@ -110,13 +131,32 @@ fn session_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     ))
 }
 
+fn session_transition(
+    store: &Store,
+    args: &ParsedArgs,
+    transition: SessionTransition,
+) -> CliResult<String> {
+    let session_id = require_session(store, args)?;
+    let record = store.transition_session(&session_id, transition, Utc::now())?;
+    let projection = store.project(&session_id)?;
+    Ok(format!(
+        "session {} {:?}\n  status: {:?}\n  journal seq: {}",
+        session_id, transition, projection.session.status, record.seq
+    ))
+}
+
 fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let now = Utc::now();
     let session_id = require_session(store, args)?;
     let projection = store.project(&session_id)?;
 
     let resource_kind: ResourceKind = args::require_enum(args, "resource-kind")?;
-    let resource_id = args.require("resource-id")?.to_string();
+    let raw_resource_id = args.require("resource-id")?;
+    let resource_id = if resource_kind == ResourceKind::FilePath && raw_resource_id != "*" {
+        canonicalize_file_authority_or_lexical("resource-id", raw_resource_id)?
+    } else {
+        raw_resource_id.to_string()
+    };
 
     let mut actions = BTreeSet::new();
     for token in args.csv("actions") {
@@ -137,7 +177,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             Some(args::parse_enum::<DataClass>("max-data-class", max_data)?);
     }
     for prefix in args.csv("path-prefix") {
-        constraints.path_prefixes.insert(prefix);
+        constraints
+            .path_prefixes
+            .insert(canonicalize_existing_file_authority(
+                "path-prefix",
+                &prefix,
+            )?);
     }
     for host in args.csv("network-allow") {
         constraints.network_allowlist.insert(host);
@@ -151,10 +196,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         )
         .ok_or_else(|| CliError::invalid("expires-in-secs", ttl.to_string()))?;
 
+    let grant_id = args
+        .get("grant-id")
+        .map(str::to_string)
+        .unwrap_or_else(|| default_root_grant_id(&session_id));
     let grant = CapabilityGrant {
-        grant_id: args
-            .get_or("grant-id", &Uuid::new_v4().to_string())
-            .to_string(),
+        grant_id,
         issuer: projection.session.created_by.clone(),
         holder: projection.session.agent_id.clone(),
         session_id: session_id.clone(),
@@ -171,33 +218,52 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         expires_at,
         delegation: beater_os_core::DelegationMode::None,
         approval: Default::default(),
-        revocation_handle: Uuid::new_v4().to_string(),
+        revocation_handle: args
+            .get_or("revocation-handle", &Uuid::new_v4().to_string())
+            .to_string(),
         policy_version: POLICY_VERSION.to_string(),
         reason: args.get_or("reason", "issued via beaterosctl").to_string(),
         revoked: false,
     };
 
-    store.append_event(
-        &session_id,
-        JournalEvent::CapabilityGranted {
-            grant: grant.clone(),
-        },
-        now,
-    )?;
+    store.issue_grant(&session_id, grant.clone(), now)?;
 
     Ok(format!(
-        "issued grant {}\n  holder:  {}\n  scope:   {:?} {} -> {:?}\n  expires: {}",
+        "issued grant {}\n  holder:  {}\n  scope:   {:?} {} -> {:?}\n  revokes: {}\n  expires: {}",
         grant.grant_id,
         grant.holder,
         grant.scope.selector.resource_kind,
         grant.scope.selector.resource_id,
         grant.scope.actions,
+        grant.revocation_handle,
         grant.expires_at
     ))
 }
 
+fn grant_revoke(store: &Store, args: &ParsedArgs) -> CliResult<String> {
+    let session_id = require_session(store, args)?;
+    let projection = store.project(&session_id)?;
+    let grant_id = args.require("grant-id")?.to_string();
+    let grant = projection
+        .grants
+        .iter()
+        .find(|grant| grant.grant_id == grant_id)
+        .ok_or_else(|| {
+            CliError::Refused(format!(
+                "grant {grant_id} has not been issued in session {session_id}"
+            ))
+        })?
+        .clone();
+    let revoked_by = args.get_or("revoked-by", &projection.session.created_by);
+    let reason = args.require("reason")?;
+    let record = store.revoke_grant(&session_id, &grant_id, revoked_by, reason, Utc::now())?;
+    Ok(format!(
+        "revoked grant {}\n  handle:      {}\n  revoked_by:  {}\n  reason:      {}\n  journal seq: {}",
+        grant.grant_id, grant.revocation_handle, revoked_by, reason, record.seq
+    ))
+}
+
 fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
-    let now = Utc::now();
     let session_id = require_session(store, args)?;
     let projection = store.project(&session_id)?;
 
@@ -220,16 +286,22 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     };
     // `resolved_target` is a KERNEL-DERIVED field (final.md §7.4): the canonical,
     // symlink-resolved target must be computed by a mediation point (the sandbox
-    // / gateway lane), never inferred from the agent's own claimed path. The CLI
-    // is the agent surface, so it leaves `resolved_target` unset unless a real
-    // mediation point supplies one via `--resolved-target`. Consequently a
-    // path-prefix grant fails closed here (core's `path_constraints_allow`
-    // requires a resolved target) until the sandbox lane (slice 5) sets it —
-    // rather than admitting against the agent's unverified, un-canonicalized path.
+    // / gateway lane), never inferred from the agent's own claimed path. Raw
+    // non-execute proposals may include it as evidence, but core still requires
+    // the requested path to remain inside path-prefix grants so it cannot launder
+    // authority through a caller-claimed resolved path. Mediated Execute actions
+    // use `resolved_target` as authority because the sandbox lane derives it
+    // before admission.
     let resolved_target = args.get("resolved-target").map(|value| CapabilitySelector {
         resource_kind: target.resource_kind.clone(),
         resource_id: value.to_string(),
     });
+    if action_kind == ActionKind::Execute && resolved_target.is_some() {
+        return Err(CliError::Refused(
+            "raw execute proposals cannot supply --resolved-target; use action execute so the sandbox mediates the resolved target"
+                .to_string(),
+        ));
+    }
 
     let inputs_summary = args.get_or("summary", "").to_string();
     let inputs_digest = hash_json(&inputs_summary)?;
@@ -281,43 +353,16 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         data_classes,
         taint,
         idempotency_key: args.get("idempotency-key").map(str::to_string),
+        payment_intent: None,
         compensation_plan: args.get("compensation-plan").map(str::to_string),
         human_explanation: args
             .get_or("explanation", "proposed via beaterosctl")
             .to_string(),
     };
 
-    // Journal the proposal before admission so the decision has a cause.
-    store.append_event(
-        &session_id,
-        JournalEvent::ActionProposed {
-            manifest: manifest.clone(),
-        },
-        now,
-    )?;
-
-    let ctx = AdmissionContext {
-        now,
-        actor_id: projection.session.agent_id.clone(),
-        session_id: session_id.clone(),
-        policy_version: POLICY_VERSION.to_string(),
-        grants: projection.active_grants(now),
-        approvals: Vec::new(),
-        simulations: Vec::new(),
-        mandates: Vec::new(),
-        revoked_handles: std::collections::BTreeSet::new(),
-    };
-    // `admit` is fallible because it digests the manifest; propagate any
-    // hashing error rather than pretending a decision was reached.
-    let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
-
-    store.append_event(
-        &session_id,
-        JournalEvent::PolicyDecided {
-            decision: decision.clone(),
-        },
-        now,
-    )?;
+    let decision = store
+        .admit_action_with_revoked_handles(&session_id, manifest.clone(), revoked_handles(args))?
+        .decision;
 
     let mut out = vec![
         format!("action {}", manifest.action_id),
@@ -342,25 +387,16 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
 /// Default wall-clock timeout for a sandboxed execution, in seconds.
 const DEFAULT_EXECUTE_TIMEOUT_SECS: u64 = 30;
 
-/// Run a scoped shell action through the sandbox execution lane.
+/// Run a scoped shell action through the registered tool gateway.
 ///
-/// This is the mediation point that turns an admitted `Execute` action into a
-/// real, confined OS process and emits a filesystem-diff receipt (final.md §8,
-/// §10.6, §13.8). The flow, all fail-closed:
+/// The CLI parses operator intent and constructs a local tool invocation. The
+/// gateway owns registry resolution, confinement, manifest derivation,
+/// admission, sandbox execution, and receipt append (final.md §8, §10.6, §13.8).
 ///
-/// 1. The sandbox canonicalizes `--cwd` and confines it to the *named grants'*
-///    filesystem authority, yielding the kernel-derived `resolved_target`
-///    (§7.4). A symlink escape or missing confinement aborts before anything is
-///    journaled or executed.
-/// 2. Build the `ActionManifest` (`action_kind = Execute`) and run
-///    [`PolicyEngine::admit`] — no admission logic lives in the CLI.
-/// 3. Journal `ActionProposed` + `PolicyDecided`.
-/// 4. **Only if `Allowed`**, execute in the sandbox, build a `CapabilityReceipt`
-///    (input digest = command+args, output digest = captured stdout, side-effect
-///    summary = the filesystem diff), journal `ReceiptAppended`, and persist it.
-/// 5. Otherwise, do not execute; print the decision.
+/// The current CLI builds an invocation-scoped in-memory registry entry so the
+/// runtime path already exercises registry resolution and workspace allowlists.
+/// A daemon-owned persistent registry is the next authority-boundary slice.
 fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
-    let now = Utc::now();
     let session_id = require_session(store, args)?;
     let projection = store.project(&session_id)?;
 
@@ -377,6 +413,22 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let command = args.require("command")?.to_string();
     let command_args: Vec<String> = args.all("arg");
     let cwd = args.require("cwd")?.to_string();
+    let mut environment = safe_path_environment();
+    for raw in args.all("env") {
+        let (name, value) = parse_env_assignment(&raw)?;
+        if name == "PATH" {
+            return Err(CliError::Refused(
+                "PATH is reserved for the sandbox's safe system search path".to_string(),
+            ));
+        }
+        if environment.contains_key(&name) {
+            return Err(CliError::Refused(format!(
+                "duplicate environment variable {name:?}"
+            )));
+        }
+        environment.insert(name, value);
+    }
+    validate_environment(&environment, &SandboxLimits::default())?;
 
     let required_grants: BTreeSet<String> = args.csv("grants").into_iter().collect();
     if required_grants.is_empty() {
@@ -384,42 +436,6 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             "action execute requires at least one --grants value".to_string(),
         ));
     }
-
-    // The confinement boundary is derived from the named grants' *authority*,
-    // never from an agent-supplied flag: the union of each grant's path prefixes
-    // plus any concrete file-path resource it is scoped to. An agent cannot widen
-    // its own sandbox.
-    let active_grants = projection.active_grants(now);
-    let confinement_prefixes = confinement_prefixes(&active_grants, &required_grants);
-    if confinement_prefixes.is_empty() {
-        return Err(CliError::Refused(
-            "named grants define no filesystem confinement prefix; refusing to execute unconfined"
-                .to_string(),
-        ));
-    }
-
-    // (1) Mediation point computes the kernel-derived resolved_target. Canonicalize
-    // --cwd (following every symlink) and confine it to the granted prefixes.
-    // FAIL CLOSED on escape: nothing is journaled or executed.
-    let resolved = beater_os_sandbox::resolve_confined(&cwd, &confinement_prefixes)?;
-    let resolved_str = resolved.display().to_string();
-
-    // (2) Build the manifest. `target` is the requested cwd; `resolved_target` is
-    // the canonical path (kernel-derived, §7.4). inputs_digest binds command+args.
-    let target = CapabilitySelector {
-        resource_kind: ResourceKind::FilePath,
-        resource_id: cwd.clone(),
-    };
-    let resolved_target = Some(CapabilitySelector {
-        resource_kind: ResourceKind::FilePath,
-        resource_id: resolved_str.clone(),
-    });
-    let inputs_digest = command_digest(&command, &command_args);
-    let inputs_summary = if command_args.is_empty() {
-        command.clone()
-    } else {
-        format!("{command} {}", command_args.join(" "))
-    };
 
     let risk_class: RiskClass = match args.get("risk") {
         Some(value) => args::parse_enum("risk", value)?,
@@ -441,78 +457,6 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         taint.insert(args::parse_enum("taint", &token)?);
     }
 
-    let manifest = ActionManifest {
-        action_id: action_id.clone(),
-        session_id: session_id.clone(),
-        tool_id: tool_id.clone(),
-        action_kind: ActionKind::Execute,
-        target,
-        resolved_target,
-        inputs_digest: inputs_digest.clone(),
-        inputs_summary,
-        expected_outputs: Vec::new(),
-        expected_side_effects: expected_side_effects.clone(),
-        required_grants,
-        requested_budget: Budget::default(),
-        risk_class,
-        data_classes,
-        taint,
-        idempotency_key: args.get("idempotency-key").map(str::to_string),
-        compensation_plan: args.get("compensation-plan").map(str::to_string),
-        human_explanation: args
-            .get_or("explanation", "executed via beaterosctl sandbox lane")
-            .to_string(),
-    };
-
-    // (3) Journal the proposal before admission so the decision has a cause.
-    store.append_event(
-        &session_id,
-        JournalEvent::ActionProposed {
-            manifest: manifest.clone(),
-        },
-        now,
-    )?;
-
-    let ctx = AdmissionContext {
-        now,
-        actor_id: projection.session.agent_id.clone(),
-        session_id: session_id.clone(),
-        policy_version: POLICY_VERSION.to_string(),
-        grants: active_grants,
-        approvals: Vec::new(),
-        simulations: Vec::new(),
-        mandates: Vec::new(),
-        revoked_handles: std::collections::BTreeSet::new(),
-    };
-    let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
-    store.append_event(
-        &session_id,
-        JournalEvent::PolicyDecided {
-            decision: decision.clone(),
-        },
-        now,
-    )?;
-
-    let mut out = vec![
-        format!("action {}", manifest.action_id),
-        format!("  decision:    {:?}", decision.result),
-        format!("  explanation: {}", decision.explanation),
-        format!("  resolved:    {resolved_str}"),
-    ];
-
-    // (5) Not Allowed => do NOT execute. No receipt, no side effect.
-    if decision.result != DecisionResult::Allowed {
-        if let Some(review) = &decision.required_review {
-            out.push(format!("  needs review:     {review}"));
-        }
-        if let Some(sim) = &decision.required_simulation {
-            out.push(format!("  needs simulation: {sim}"));
-        }
-        out.push("  execution:   skipped (action not admitted)".to_string());
-        return Ok(out.join("\n"));
-    }
-
-    // (4) Allowed => run the confined lane and certify the observed side effects.
     let timeout_secs = args::get_u64_or(args, "timeout-secs", DEFAULT_EXECUTE_TIMEOUT_SECS)?;
     let defaults = SandboxLimits::default();
     let max_output_bytes = match args.get("max-output-bytes") {
@@ -526,107 +470,96 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         max_output_bytes,
         ..defaults
     };
+    validate_environment(&environment, &limits)?;
 
-    let outcome = sandbox_execute(&SandboxRequest {
-        command: command.clone(),
-        args: command_args,
-        working_dir: cwd,
-        path_prefixes: confinement_prefixes,
-        limits,
+    let tool_version = args.get_or("tool-version", "local").to_string();
+    let computed_digest =
+        local_shell_tool_digest_with_environment(&cwd, &command, &command_args, &environment)?;
+    let expected_tool_digest = args
+        .get("tool-digest")
+        .map(str::to_string)
+        .unwrap_or_else(|| computed_digest.clone());
+    let registry = local_shell_registry(
+        &tool_id,
+        &tool_version,
+        &expected_tool_digest,
+        &projection.session.workspace_id,
+        &expected_side_effects,
+        risk_class,
+    )?;
+
+    let outcome = execute_local_tool(
+        store,
+        &registry,
+        LocalToolInvocation {
+            session_id: session_id.clone(),
+            tool_id,
+            version: tool_version,
+            expected_tool_digest: Some(expected_tool_digest),
+            command,
+            args: command_args,
+            cwd,
+            environment,
+            required_grants,
+            revoked_handles: revoked_handles(args),
+            action_id: action_id.clone(),
+            risk_class,
+            expected_side_effects,
+            data_classes,
+            taint,
+            idempotency_key: args.get("idempotency-key").map(str::to_string),
+            compensation_plan: args.get("compensation-plan").map(str::to_string),
+            receipt_id: args.get("receipt-id").map(str::to_string),
+            human_explanation: args
+                .get_or("explanation", "executed via beaterOS tool gateway")
+                .to_string(),
+            limits,
+        },
+    )
+    .map_err(|err| match err {
+        GatewayError::Sandbox(source) => CliError::Sandbox(source),
+        other => CliError::Gateway(other),
     })?;
 
-    // OBSERVED effects are the source of truth (final.md §12.3): a non-empty
-    // filesystem diff is a LocalWrite. The agent's DECLARED (expected) effects
-    // are a prediction, recorded separately and clearly distinguished — never
-    // certified as if they happened.
-    let observed_effects: BTreeSet<SideEffectClass> = if outcome.diff.is_empty() {
-        BTreeSet::new()
-    } else {
-        BTreeSet::from([SideEffectClass::LocalWrite])
-    };
-    let observed_not_declared: Vec<SideEffectClass> = observed_effects
-        .difference(&expected_side_effects)
-        .cloned()
-        .collect();
-    let declared_not_observed: Vec<SideEffectClass> = expected_side_effects
-        .difference(&observed_effects)
-        .cloned()
-        .collect();
+    let decision = outcome.decision;
+    let manifest = outcome.manifest;
+    let resolved = manifest
+        .resolved_target
+        .as_ref()
+        .map(|target| target.resource_id.as_str())
+        .unwrap_or(manifest.target.resource_id.as_str());
+    let mut out = vec![
+        format!("action {}", manifest.action_id),
+        format!("  decision:    {:?}", decision.result),
+        format!("  explanation: {}", decision.explanation),
+        format!("  resolved:    {resolved}"),
+    ];
 
-    let mut side_effect_summary = format!(
-        "sandbox status={} exit={:?} timed_out={} | OBSERVED(source-of-truth) {} effects={:?} | DECLARED expected_effects={:?}",
-        outcome.status_str(),
-        outcome.exit_code,
-        outcome.status == beater_os_sandbox::SandboxStatus::Timeout,
-        outcome.diff.summary(),
-        observed_effects,
-        expected_side_effects,
-    );
-    // A divergence between observed and declared effects is a §12.3 incident.
-    // Record it in the receipt (a hard incident-event is a follow-up); never
-    // silently drop an observed effect or silently promote a declared one.
-    if !observed_not_declared.is_empty() || !declared_not_observed.is_empty() {
-        side_effect_summary.push_str(&format!(
-            " | DIVERGENCE(§12.3) observed_not_declared={observed_not_declared:?} declared_not_observed={declared_not_observed:?}"
-        ));
+    if decision.result != DecisionResult::Allowed {
+        if let Some(review) = &decision.required_review {
+            out.push(format!("  needs review:     {review}"));
+        }
+        if let Some(sim) = &decision.required_simulation {
+            out.push(format!("  needs simulation: {sim}"));
+        }
+        out.push("  execution:   skipped (action not admitted)".to_string());
+        return Ok(out.join("\n"));
     }
 
-    // The receipt's typed effects CERTIFY only what was both OBSERVED and
-    // predeclared: core's causality verifier requires receipt effects ⊆ the
-    // manifest's declared effects. Observed-but-undeclared effects are carried
-    // as the divergence note above (the fs-diff is the authoritative observed
-    // record); declared-but-unobserved effects are correctly not certified.
-    let side_effects: Vec<SideEffectClass> = observed_effects
-        .iter()
-        .filter(|effect| expected_side_effects.contains(effect))
-        .cloned()
-        .collect();
-    let artifact_refs: Vec<String> = outcome
-        .diff
-        .created
-        .iter()
-        .chain(outcome.diff.modified.iter())
-        .cloned()
-        .collect();
+    let execution = outcome
+        .execution
+        .ok_or_else(|| CliError::Refused("allowed gateway action did not execute".to_string()))?;
+    let receipt = outcome.receipt.ok_or_else(|| {
+        CliError::Refused("allowed gateway action did not emit a receipt".to_string())
+    })?;
 
-    let receipt = store.stage_receipt(
-        &session_id,
-        CapabilityReceiptInput {
-            receipt_id: args.get("receipt-id").map(str::to_string),
-            action_id: action_id.clone(),
-            tool_id,
-            target: manifest
-                .resolved_target
-                .clone()
-                .unwrap_or_else(|| manifest.target.clone()),
-            started_at: now,
-            finished_at: Utc::now(),
-            status: outcome.status_str().to_string(),
-            input_digest: inputs_digest,
-            output_digest: outcome.stdout_digest(),
-            side_effect_summary,
-            side_effects,
-            external_ids: Vec::new(),
-            artifact_refs,
-        },
-    )?;
-
-    store.append_event(
-        &session_id,
-        JournalEvent::ReceiptAppended {
-            receipt: receipt.clone(),
-        },
-        now,
-    )?;
-    store.persist_receipt(&session_id, &receipt)?;
-
-    out.push(format!("  execution:   {}", outcome.status_str()));
-    out.push(format!("  exit_code:   {:?}", outcome.exit_code));
+    out.push(format!("  execution:   {}", execution.status_str()));
+    out.push(format!("  exit_code:   {:?}", execution.exit_code));
     out.push(format!(
         "  fs-diff:     created={:?} modified={:?} deleted={:?}",
-        outcome.diff.created, outcome.diff.modified, outcome.diff.deleted
+        execution.diff.created, execution.diff.modified, execution.diff.deleted
     ));
-    if outcome.stdout_truncated || outcome.stderr_truncated {
+    if execution.stdout_truncated || execution.stderr_truncated {
         out.push("  note:        output truncated at cap".to_string());
     }
     out.push(format!(
@@ -636,30 +569,90 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     Ok(out.join("\n"))
 }
 
-/// Derive the sandbox confinement prefixes from the *named grants' authority*.
+fn local_shell_registry(
+    tool_id: &str,
+    version: &str,
+    digest: &str,
+    workspace_id: &str,
+    side_effects: &BTreeSet<SideEffectClass>,
+    risk_class: RiskClass,
+) -> CliResult<ToolRegistry> {
+    let mut registry = ToolRegistry::new(RegistryPolicy {
+        require_signature: false,
+        ..Default::default()
+    });
+    registry.register(RegisteredTool {
+        manifest: ToolManifest {
+            tool_id: tool_id.to_string(),
+            publisher: "beaterosctl.local".to_string(),
+            version: version.to_string(),
+            transport: "local_shell".to_string(),
+            required_capabilities: Vec::new(),
+            side_effects: side_effects.clone(),
+            risk_class,
+            sandbox_required: true,
+        },
+        content_digest: digest.to_string(),
+        signature: None,
+        test_status: TestStatus::Passing,
+        trust: ToolTrust::Trusted,
+        registered_at: Utc::now(),
+        notes: "invocation-scoped local shell registry entry".to_string(),
+    })?;
+    registry.pin(tool_id, version)?;
+    registry.set_workspace_allowlist(workspace_id, [tool_id.to_string()]);
+    Ok(registry)
+}
+
+/// Canonicalize file-path authority before it is written into a grant.
 ///
-/// For each active grant the action names, we take its explicit `path_prefixes`
-/// and, if the grant is scoped to a concrete file-path resource (not the `*`
-/// wildcard), that resource id too. This binds the sandbox boundary to granted
-/// capability, so the agent can never widen its own confinement via a flag.
-fn confinement_prefixes(
-    active_grants: &[CapabilityGrant],
-    required_grants: &BTreeSet<String>,
-) -> Vec<String> {
-    let mut prefixes = BTreeSet::new();
-    for grant in active_grants
-        .iter()
-        .filter(|grant| required_grants.contains(&grant.grant_id))
+/// The sandbox resolves working directories and prefixes with `realpath`.
+/// Storing grant authority in the same namespace avoids false denials on macOS
+/// aliases such as `/var` -> `/private/var`, while still failing closed for
+/// relative paths and `..` components. Existing paths are stored in the
+/// canonical realpath namespace used by the sandbox; missing absolute paths are
+/// retained as lexical authority for compatibility with existing proposal flows.
+fn canonicalize_file_authority_or_lexical(field: &str, value: &str) -> CliResult<String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
     {
-        for prefix in &grant.constraints.path_prefixes {
-            prefixes.insert(prefix.clone());
-        }
-        let selector = &grant.scope.selector;
-        if selector.resource_kind == ResourceKind::FilePath && selector.resource_id != "*" {
-            prefixes.insert(selector.resource_id.clone());
-        }
+        return Err(CliError::invalid(field, value));
     }
-    prefixes.into_iter().collect()
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => Ok(canonical.display().to_string()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(value.to_string()),
+        Err(err) => Err(CliError::Io(err)),
+    }
+}
+
+fn canonicalize_existing_file_authority(field: &str, value: &str) -> CliResult<String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(CliError::invalid(field, value));
+    }
+    std::fs::canonicalize(path)
+        .map(|canonical| canonical.display().to_string())
+        .map_err(CliError::Io)
+}
+
+fn parse_env_assignment(raw: &str) -> CliResult<(String, String)> {
+    let (name, value) = raw
+        .split_once('=')
+        .ok_or_else(|| CliError::invalid("env", raw))?;
+    Ok((name.to_string(), value.to_string()))
 }
 
 fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
@@ -723,11 +716,9 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         None => now,
     };
 
-    // Compute the chained receipt without touching disk, journal it (the
-    // journal is the source of truth the trace is projected from), then persist
-    // the derived ledger line. If a crash interleaves, the journal still holds
-    // the receipt and the ledger can be rebuilt from it.
-    let receipt = store.stage_receipt(
+    // The daemon store computes the chained receipt and appends its journal
+    // event under the same runtime writer lock.
+    let receipt = store.append_receipt(
         &session_id,
         CapabilityReceiptInput {
             receipt_id: args.get("receipt-id").map(str::to_string),
@@ -747,16 +738,8 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             external_ids: args.csv("external-id"),
             artifact_refs: args.csv("artifact"),
         },
-    )?;
-
-    store.append_event(
-        &session_id,
-        JournalEvent::ReceiptAppended {
-            receipt: receipt.clone(),
-        },
         now,
     )?;
-    store.persist_receipt(&session_id, &receipt)?;
 
     Ok(format!(
         "recorded receipt {} for action {}\n  status:  {}\n  effects: {:?}\n  hash:    {}",
@@ -804,15 +787,21 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         format!("grants ({}):", projection.grants.len()),
     ];
     for grant in &projection.grants {
-        let state = if grant.is_active_at(now) {
+        let state = if projection
+            .revoked_handles
+            .contains(&grant.revocation_handle)
+        {
+            "revoked"
+        } else if grant.is_active_at(now) {
             "active"
         } else {
             "inactive"
         };
         lines.push(format!(
-            "  - {} [{}] {:?} {} -> {:?}",
+            "  - {} [{}] handle={} {:?} {} -> {:?}",
             grant.grant_id,
             state,
+            grant.revocation_handle,
             grant.scope.selector.resource_kind,
             grant.scope.selector.resource_id,
             grant.scope.actions
@@ -829,6 +818,12 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             manifest.target.resource_kind,
             manifest.target.resource_id
         ));
+        if let Some(resolved_target) = &manifest.resolved_target {
+            lines.push(format!(
+                "      resolved: {:?} {}",
+                resolved_target.resource_kind, resolved_target.resource_id
+            ));
+        }
         if let Some(decision) = projection.latest_decision(&manifest.action_id) {
             lines.push(format!(
                 "      decision: {:?} — {}",
@@ -853,10 +848,14 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
 /// Resolve the `--session` flag, verifying the session exists.
 fn require_session(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let session_id = args.require("session")?.to_string();
-    if !store.session_exists(&session_id) {
+    if !store.session_exists(&session_id)? {
         return Err(CliError::SessionNotFound(session_id));
     }
     Ok(session_id)
+}
+
+fn default_root_grant_id(session_id: &str) -> String {
+    format!("{session_id}-root-grant")
 }
 
 /// The default declared side effect for an action kind, if any.

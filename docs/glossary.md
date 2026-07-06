@@ -27,9 +27,12 @@ section references point to the authoritative definition.
   the previous receipt. Append-only.
 - **MemoryRecord** — knowledge with provenance: source event, writer, time,
   confidence, sensitivity, expiry, and access policy. Rebuildable and redactable.
-- **PaymentMandate** — bounded economic authority: who may spend, asset, max
-  amount, counterparty policy, purpose, approval threshold, idempotency, receipt
-  requirement.
+- **PaymentMandate** — bounded economic authority: who may spend, rail, asset,
+  max amount, counterparty policy, purpose, approval threshold, idempotency,
+  receipt requirement, and allowed payment adapters/envelope formats.
+- **PaymentIntent** — a chain-neutral projection of a proposed payment carried
+  by an action manifest: mandate id, rail, adapter, asset, amount, counterparty
+  binding, purpose, idempotency key, envelope format, and envelope hash.
 - **ScenarioManifest** — a testable task specification: goal, environment,
   fixtures, allowed tools, forbidden actions, oracle, success criteria, risk
   traps, budget, and expected trace properties.

@@ -33,6 +33,18 @@
     "expires_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
     "approval_threshold_minor_units": { "$ref": "common.schema.json#/$defs/MinorUnits" },
     "idempotency_key": { "$ref": "common.schema.json#/$defs/Identifier" },
-    "receipt_requirement": { "type": "string", "minLength": 1 }
+    "receipt_requirement": { "type": "string", "minLength": 1 },
+    "allowed_adapter_ids": {
+      "description": "Empty means any adapter for the rail is allowed; otherwise payment_intent.adapter_id must be a member.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Identifier" },
+      "uniqueItems": true
+    },
+    "allowed_envelope_formats": {
+      "description": "Empty means any adapter envelope format for the rail is allowed; Aether mandates should include aether-agent-payment-v1.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Identifier" },
+      "uniqueItems": true
+    }
   }
 }

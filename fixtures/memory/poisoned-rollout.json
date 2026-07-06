@@ -1,0 +1,4 @@
+{
+  "fixture": "poisoned-rollout",
+  "description": "Inert memory fixture for deploy-risk scenario replay."
+}

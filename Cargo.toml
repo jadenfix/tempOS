@@ -5,8 +5,10 @@ members = [
     "crates/beater-os-memory",
     "crates/beater-os-sandbox",
     "crates/beater-os-session",
+    "crates/beater-os-tool-gateway",
     "crates/beater-osd",
     "crates/beater-os-tool-registry",
+    "crates/beater-os-scenario",
     "crates/beaterosctl",
 ]
 resolver = "2"

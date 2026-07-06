@@ -132,13 +132,13 @@ def build_bundle() -> dict:
         "human_explanation": "Execute the test runner to confirm the fix.",
     }
 
-    d_read = _decision("dec-read", "act-read-parser", "allowed", T.format(1),
+    d_read = _decision("dec-read", m_read, "allowed", T.format(1),
                        "action admitted by explicit active capability grant")
-    d_escape = _decision("dec-escape", "act-write-escape", "needs_narrowed_grant", T.format(2),
+    d_escape = _decision("dec-escape", m_escape, "needs_narrowed_grant", T.format(2),
                          "available grants do not allow this action, target, risk, data class, or time window")
-    d_fix = _decision("dec-fix", "act-write-fix", "allowed", T.format(3),
+    d_fix = _decision("dec-fix", m_fix, "allowed", T.format(3),
                       "action admitted by explicit active capability grant")
-    d_test = _decision("dec-test", "act-run-tests", "allowed", T.format(4),
+    d_test = _decision("dec-test", m_test, "allowed", T.format(4),
                        "action admitted by explicit active capability grant")
 
     # Receipts (only for allowed, executed actions), hash-linked in order.
@@ -218,12 +218,14 @@ def build_payment_bundle() -> dict:
         "rail": "stripe",
         "asset": "USD",
         "max_minor_units": 100000,
-        "counterparty_policy": "allowlist:approved-vendors",
+        "counterparty_policy": "prefix:vendor:",
         "purpose": "Settle approved vendor invoices.",
         "expires_at": "2026-07-03T12:00:00Z",
         "approval_threshold_minor_units": 5000,
-        "idempotency_key": "idem-mandate-vendor",
+        "idempotency_key": "idem-pay-invoice",
         "receipt_requirement": "required",
+        "allowed_adapter_ids": ["stripe"],
+        "allowed_envelope_formats": ["stripe-payment-intent-v1"],
     }
 
     grant = {
@@ -257,19 +259,35 @@ def build_payment_bundle() -> dict:
         "data_classes": ["financial"],
         "taint": ["payment_instruction"],
         "idempotency_key": "idem-pay-invoice",
+        "payment_intent": {
+            "mandate_id": "mandate-vendor",
+            "rail": "stripe",
+            "adapter_id": "stripe",
+            "adapter_version": "2026-07",
+            "asset": "USD",
+            "amount_minor_units": 6200,
+            "counterparty_ref": "vendor:4471",
+            "counterparty_binding_hash": "4" * 64,
+            "purpose": "Settle approved vendor invoices.",
+            "payment_idempotency_key": "idem-pay-invoice",
+            "envelope_format": "stripe-payment-intent-v1",
+            "envelope_hash": "5" * 64,
+            "envelope_expires_at": "2026-07-03T12:00:00Z",
+        },
         "human_explanation": "Pay the approved vendor invoice #4471.",
     }
 
     approval = {
         "review_id": "review-pay",
         "action_id": "act-pay-invoice",
+        "manifest_hash": sha256_hex(m_pay),
         "grant_id": "grant-vendor-spend",
         "reviewer_id": "user:jaden",
         "approved_at": tp.format(1),
         "policy_version": POLICY_VERSION,
     }
 
-    d_pay = _decision("dec-pay", "act-pay-invoice", "allowed", tp.format(2),
+    d_pay = _decision("dec-pay", m_pay, "allowed", tp.format(2),
                       "action admitted by explicit active capability grant with valid human approval")
 
     receipts = _chain_receipts([
@@ -364,7 +382,7 @@ def build_resilience_bundle() -> dict:
         "human_explanation": "Deploy the approved release to production.",
     }
 
-    d_deploy = _decision("dec-deploy", "act-deploy-r42", "needs_approval", tr.format(1),
+    d_deploy = _decision("dec-deploy", m_deploy, "needs_approval", tr.format(1),
                          "grant policy requires human approval for this risk class")
 
     events = [
@@ -392,10 +410,11 @@ def build_resilience_bundle() -> dict:
     }
 
 
-def _decision(did, aid, result, created_at, explanation):
+def _decision(did, manifest, result, created_at, explanation):
     return {
         "decision_id": did,
-        "action_id": aid,
+        "action_id": manifest["action_id"],
+        "manifest_hash": sha256_hex(manifest),
         "policy_version": POLICY_VERSION,
         "result": result,
         "explanation": explanation,

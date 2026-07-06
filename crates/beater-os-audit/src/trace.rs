@@ -44,6 +44,15 @@ fn summarize_event(event: &JournalEvent) -> String {
             "session={} agent={} by={} goal={:?}",
             session.session_id, session.agent_id, session.created_by, session.goal
         ),
+        JournalEvent::SessionStatusChanged {
+            transition_id,
+            session_id,
+            from,
+            to,
+        } => format!(
+            "transition={} session={} {:?}->{:?}",
+            transition_id, session_id, from, to
+        ),
         JournalEvent::CapabilityGranted { grant } => format!(
             "grant={} holder={} scope={:?}:{} actions={:?} expires={}",
             grant.grant_id,
@@ -53,19 +62,60 @@ fn summarize_event(event: &JournalEvent) -> String {
             grant.scope.actions,
             grant.expires_at.to_rfc3339(),
         ),
-        JournalEvent::ActionProposed { manifest } => format!(
-            "action={} tool={} kind={:?} target={:?}:{} risk={:?} grants={:?}",
-            manifest.action_id,
-            manifest.tool_id,
-            manifest.action_kind,
-            manifest.target.resource_kind,
-            manifest.target.resource_id,
-            manifest.risk_class,
-            manifest.required_grants,
+        JournalEvent::CapabilityRevoked {
+            grant_id,
+            revocation_handle,
+            revoked_by,
+            reason,
+        } => format!(
+            "grant={} handle={} revoked_by={} reason={:?}",
+            grant_id, revocation_handle, revoked_by, reason
         ),
+        JournalEvent::PaymentMandateIssued { mandate } => format!(
+            "mandate={} holder={} rail={} asset={} max={} adapters={:?} formats={:?} expires={}",
+            mandate.mandate_id,
+            mandate.holder,
+            mandate.rail,
+            mandate.asset,
+            mandate.max_minor_units,
+            mandate.allowed_adapter_ids,
+            mandate.allowed_envelope_formats,
+            mandate.expires_at.to_rfc3339(),
+        ),
+        JournalEvent::ActionProposed { manifest } => {
+            let resolved = manifest
+                .resolved_target
+                .as_ref()
+                .map(|target| {
+                    format!(
+                        " resolved={:?}:{}",
+                        target.resource_kind, target.resource_id
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "action={} tool={} kind={:?} target={:?}:{}{} risk={:?} grants={:?}",
+                manifest.action_id,
+                manifest.tool_id,
+                manifest.action_kind,
+                manifest.target.resource_kind,
+                manifest.target.resource_id,
+                resolved,
+                manifest.risk_class,
+                manifest.required_grants,
+            )
+        }
         JournalEvent::PolicyDecided { decision } => format!(
             "decision={} action={} result={:?} why={:?}",
             decision.decision_id, decision.action_id, decision.result, decision.explanation
+        ),
+        JournalEvent::ApprovalRecorded { approval } => format!(
+            "approval={} action={} grant={} reviewer={}",
+            approval.review_id, approval.action_id, approval.grant_id, approval.reviewer_id
+        ),
+        JournalEvent::SimulationRecorded { simulation } => format!(
+            "simulation={} action={} scenario={}",
+            simulation.simulation_id, simulation.action_id, simulation.scenario_id
         ),
         JournalEvent::ReceiptAppended { receipt } => format!(
             "receipt={} action={} status={} effects={:?}",

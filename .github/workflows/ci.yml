@@ -2,24 +2,52 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches:
       - main
 
 jobs:
+  pr-review-packet:
+    name: PR review packet
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request_target'
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout trusted base policy
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          persist-credentials: false
+
+      - name: Check optimization packet
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/check-pr-review-packet.py
+
   macos:
     name: macOS Rust workspace
     runs-on: macos-latest
+    if: github.event_name != 'pull_request_target'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.93.1 --profile minimal --component clippy --component rustfmt
 
-      - name: Use stable Rust
-        run: rustup default stable
+      - name: Use pinned Rust
+        run: rustup default 1.93.1
+
+      - name: Toolchain provenance
+        run: |
+          rustc -vV
+          cargo -vV
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -29,3 +57,18 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Runtime-first guardrail
+        run: python3 scripts/run-beater-osd-runtime-smoke.py --json
+
+      - name: Migration frontier readiness (runtime phase)
+        run: >
+          python3 scripts/check-bare-metal-readiness.py
+          --check-host
+          --require-control-plane-lane
+          --require-workload-class policy-admission
+          --require-workload-route policy-admission=portable-control-plane
+          --require-migration-phase runtime
+
+      - name: Bare-metal e2e matrix
+        run: python3 scripts/run-bare-metal-e2e-matrix.py

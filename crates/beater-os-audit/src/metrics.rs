@@ -79,7 +79,9 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
     for record in &snapshot.records {
         match &record.event {
             JournalEvent::SessionCreated { .. } => sessions += 1,
+            JournalEvent::SessionStatusChanged { .. } => {}
             JournalEvent::CapabilityGranted { .. } => grants += 1,
+            JournalEvent::PaymentMandateIssued { .. } => {}
             JournalEvent::ActionProposed { manifest } => {
                 proposed_actions.insert(manifest.action_id.as_str());
             }

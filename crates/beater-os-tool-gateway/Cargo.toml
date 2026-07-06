@@ -1,0 +1,23 @@
+[package]
+name = "beater-os-tool-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runtime tool gateway that resolves registered tools, admits actions, executes sandbox lanes, and records receipts."
+
+[dependencies]
+beater-os-core = { path = "../beater-os-core" }
+beater-os-sandbox = { path = "../beater-os-sandbox" }
+beater-os-tool-registry = { path = "../beater-os-tool-registry" }
+beater-osd = { path = "../beater-osd" }
+chrono.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

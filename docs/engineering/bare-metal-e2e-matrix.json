@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "description": "Default deterministic host matrix for beaterOS bare-metal readiness checks.",
+  "cases": [
+    {
+      "name": "portable-control-plane-linux",
+      "host": {
+        "os": "linux",
+        "arch": "x86_64",
+        "cpu_cores": 8,
+        "memory_gib": 16,
+        "storage_iops": 6000,
+        "residual_latency_ms": 120,
+        "accelerators": ["cpu"]
+      },
+      "require_profile": "portable-host-control-plane",
+      "require_control_plane_lane": true,
+      "require_migration_phase": "runtime",
+      "require_workload_routes": {
+        "policy-admission": "portable-control-plane"
+      },
+      "require_workload_classes": ["policy-admission"]
+    },
+    {
+      "name": "portable-control-plane-darwin",
+      "host": {
+        "os": "darwin",
+        "arch": "arm64",
+        "cpu_cores": 8,
+        "memory_gib": 12,
+        "storage_iops": 6000,
+        "residual_latency_ms": 120,
+        "accelerators": ["cpu"]
+      },
+      "require_profile": "portable-host-control-plane",
+      "require_control_plane_lane": true,
+      "require_workload_routes": {
+        "policy-admission": "portable-control-plane"
+      },
+      "require_workload_classes": ["policy-admission"]
+    },
+    {
+      "name": "linux-cuda-tooling-route",
+      "host": {
+        "os": "linux",
+        "arch": "x86_64",
+        "cpu_cores": 16,
+        "memory_gib": 32,
+        "storage_iops": 12000,
+        "residual_latency_ms": 80,
+        "accelerators": ["cpu", "cuda"],
+        "gpu_mem_gib": 24,
+        "pcie_bwl_gbps": 24
+      },
+      "require_profile": "linux-cuda-scored-host",
+      "require_migration_phase": "metal-ready",
+      "require_workload_classes": ["tooling"],
+      "require_workload_routes": {
+        "tooling": "linux-cuda-lane"
+      }
+    },
+    {
+      "name": "apple-metal-media-route",
+      "host": {
+        "os": "darwin",
+        "arch": "arm64",
+        "cpu_cores": 12,
+        "memory_gib": 16,
+        "storage_iops": 12000,
+        "residual_latency_ms": 80,
+        "memory_bandwidth_gbps": 80,
+        "gpu_temp_c": 70,
+        "accelerators": ["cpu", "apple_gpu"]
+      },
+      "require_migration_phase": "metal-ready",
+      "require_workload_classes": ["media"],
+      "require_workload_routes": {
+        "media": "apple-metal-lane"
+      }
+    },
+    {
+      "name": "portable-control-plane-linux-mandatory",
+      "host": {
+        "os": "linux",
+        "arch": "x86_64",
+        "cpu_cores": 4,
+        "memory_gib": 4,
+        "storage_iops": 6000,
+        "residual_latency_ms": 120,
+        "accelerators": ["cpu"]
+      },
+      "require_lane": "portable-control-plane",
+      "require_workload_classes": ["policy-admission"],
+      "require_workload_routes": {
+        "policy-admission": "portable-control-plane"
+      }
+    },
+    {
+      "name": "portable-lane-not-runnable-on-weak-cuda-host",
+      "host": {
+        "os": "linux",
+        "arch": "x86_64",
+        "cpu_cores": 4,
+        "memory_gib": 6,
+        "storage_iops": 6000,
+        "residual_latency_ms": 120,
+        "accelerators": ["cpu", "cuda"]
+      },
+      "require_lane": "linux-cuda-lane",
+      "expected_result": "fail",
+      "expected_failure_contains": "required architecture lane is not runnable"
+    },
+    {
+      "name": "windows-portable-control-plane-fallback",
+      "host": {
+        "os": "windows",
+        "arch": "x86_64",
+        "cpu_cores": 4,
+        "memory_gib": 16,
+        "storage_iops": 6000,
+        "residual_latency_ms": 120,
+        "accelerators": ["cpu"]
+      },
+      "require_profile": "portable-host-control-plane",
+      "require_workload_routes": {
+        "policy-admission": "portable-control-plane"
+      },
+      "require_workload_classes": ["policy-admission"]
+    },
+    {
+      "name": "weak-memory-linux-cuda-fails-route",
+      "host": {
+        "os": "linux",
+        "arch": "x86_64",
+        "cpu_cores": 16,
+        "memory_gib": 8,
+        "storage_iops": 6000,
+        "residual_latency_ms": 120,
+        "accelerators": ["cpu", "cuda"],
+        "gpu_mem_gib": 24,
+        "pcie_bwl_gbps": 24
+      },
+      "require_profile": "linux-cuda-scored-host",
+      "require_control_plane_lane": true,
+      "expected_result": "fail",
+      "expected_failure_contains": "required profile not supported"
+    }
+  ]
+}

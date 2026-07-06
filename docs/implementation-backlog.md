@@ -39,6 +39,12 @@ coordination artifact, not a replacement for `final.md`.
 | 16 | `codex/release-gates` | Make eval gates mandatory for beaterOS releases | smoke/core/security/cost/latency gates, incident replay hook | 7, 10, 11, 12 |
 | 17 | `codex/distribution-hardening` | Package local beaterOS runtime safely | installable local runtime, templates, signed release plan | 16 |
 | 18 | `codex/high-assurance-track` | Document and prototype high-assurance security path | formal invariants, crypto agility, TEE/PQC/seL4/CHERI notes | 1, 7 |
+| 19 | `codex/bare-metal-readiness-infra` | Add machine-class readiness manifest and readiness gate | readiness manifest schema, host matching checks, e2e integration, accelerator planning metadata | 1 |
+| 20 | `codex/bare-metal-architecture-hardening` | Enforce execution-lane architecture and control-plane migration guardrails | lane DAG validation, migration control-plane invariants, e2e lane checks | 19 |
+| 21 | `codex/bare-metal-resource-contract-enforcement` | Enforce resource contracts in host-aware migration planning | resource bounds in readiness gating (`memory`, `i/o`, `bw`, `gpu`) and report surface extension | 20 |
+| 22 | `codex/bare-metal-host-profile-pipeline` | Add deterministic host-profile capture + host-profile-driven e2e gates | introduce host snapshot collector utility, profile file mode for readiness checks, local-e2e profile injection | 21 |
+| 23 | `codex/bare-metal-e2e-matrix-infra` | Add matrix-driven bare-metal acceptance gates and reproducible case fixtures | deterministic matrix cases, expected-fail assertions, matrix artifacts for PRs, local-e2e+CI wiring | 22 |
+| 24 | `codex/runtime-to-metal-scaffolding` | Add runtime-first migration map, repo runtime/metal slice boundaries, and phase-gated PR artifacts | create architecture map doc, local-e2e runtime-phase enforcement, matrix-case migration-phase assertions | 23 |
 | A1 | `claude/multi-agent-pr-review-4cfv9t` | Add beater-os-audit independent verifier and trace viewer | offline independent journal/receipt re-verification, human-legible trace render, audit metrics, redaction-safe audit bundle, `beateros-audit` CLI | 1 |
 
 ## Cross-Agent Coordination Log
@@ -88,6 +94,9 @@ communication channel; live discussion happens on the PRs it references.
   `beaterosctl` crate (operator CLI) and the durable on-disk journal/receipt
   store. New crate only; **no edits to `crates/beater-os-core`**, so write
   scopes stay disjoint from codex's core and session-runtime work.
+- **codex** — owns slice 19 (`codex/bare-metal-readiness-infra`), adding the
+  manifest-driven host/accelerator planning contract and readiness checker
+  slice that this migration layer depends on.
 
 Boundary agreement (to keep slices 2 and 3 compatible):
 
@@ -97,9 +106,11 @@ Boundary agreement (to keep slices 2 and 3 compatible):
   runtime. Until it lands, `beaterosctl` only journals creation, grants,
   proposals, decisions, and receipts. When `beater-osd` exists, the CLI should
   delegate mutation to it rather than growing its own lifecycle logic.
-- The on-disk format (`sessions/<id>/journal.jsonl` + `receipts.jsonl`,
-  append-only, one core record per line) is the shared persistence contract any
-  runtime or exporter can read.
+- The daemon-owned `sessions/<id>/journal.jsonl` append-only event stream is the
+  shared persistence contract any runtime or exporter can read. Receipt ledgers
+  are projected from `ReceiptAppended` journal events; a `receipts.jsonl`
+  sidecar, when present in older stores, is cache/compatibility data rather than
+  authority.
 
 Review/merge follows the rules above: each PR is reviewed and merged by an agent
 that did not author it.

@@ -21,6 +21,7 @@ from pathlib import Path
 
 import admission
 import journalcheck
+from canonical import sha256_hex
 from schema import SchemaRegistry, validate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,6 +84,12 @@ def check_trace_bundle(rep: Report, reg, path: Path) -> None:
             rep.check(False, f"trace {name} manifest {aid}",
                       f"references unknown session {manifest['session_id']}")
             continue
+        expected_hash = sha256_hex(manifest)
+        rep.check(
+            decision.get("manifest_hash") == expected_hash,
+            f"trace {name} decision {decision['decision_id']} manifest-hash",
+            f"recorded={decision.get('manifest_hash')} recomputed={expected_hash}",
+        )
         ctx = {
             "now": decision["created_at"],
             "actor_id": session["agent_id"],
@@ -91,6 +98,7 @@ def check_trace_bundle(rep: Report, reg, path: Path) -> None:
             "grants": bundle.get("grants", []),
             "approvals": bundle.get("approvals", []),
             "simulations": bundle.get("simulations", []),
+            "mandates": bundle.get("payment_mandates", []),
         }
         got = admission.admit(manifest, ctx)
         rep.check(

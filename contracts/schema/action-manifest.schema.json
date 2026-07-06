@@ -23,6 +23,31 @@
     "data_classes": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/data_class" }, "uniqueItems": true },
     "taint": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/taint_label" }, "uniqueItems": true },
     "idempotency_key": { "type": "string" },
+    "payment_intent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mandate_id", "rail", "adapter_id", "asset", "amount_minor_units", "counterparty_ref", "counterparty_binding_hash", "purpose", "payment_idempotency_key", "envelope_format", "envelope_hash"],
+          "properties": {
+            "mandate_id": { "type": "string", "minLength": 1 },
+            "rail": { "type": "string", "minLength": 1 },
+            "adapter_id": { "type": "string", "minLength": 1 },
+            "adapter_version": { "type": ["string", "null"], "minLength": 1 },
+            "asset": { "type": "string", "minLength": 1 },
+            "amount_minor_units": { "type": "integer", "minimum": 1 },
+            "counterparty_ref": { "type": "string", "minLength": 1 },
+            "counterparty_binding_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "purpose": { "type": "string", "minLength": 1 },
+            "payment_idempotency_key": { "type": "string", "minLength": 1 },
+            "envelope_format": { "type": "string", "minLength": 1 },
+            "envelope_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "envelope_expires_at": { "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }] }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
     "compensation_plan": { "type": "string" },
     "human_explanation": { "type": "string" }
   }

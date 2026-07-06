@@ -13,7 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot,
+    ActionManifest, CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot,
+    SessionStatus,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -93,6 +94,8 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
         check_sequence_contiguous(snapshot),
         check_hash_linkage(snapshot),
         check_receipt_causality(snapshot),
+        check_lifecycle_causality(snapshot),
+        check_memory_provenance(snapshot),
         // Novel gap-fillers — invariants the core journal verifier does NOT check.
         check_referential_sessions(snapshot),
         check_grant_references(snapshot),
@@ -104,6 +107,133 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
         records: snapshot.records.len(),
         ok,
         checks,
+    }
+}
+
+fn check_lifecycle_causality(snapshot: &JournalSnapshot) -> CheckResult {
+    let mut statuses: BTreeMap<&str, &SessionStatus> = BTreeMap::new();
+    for record in &snapshot.records {
+        match &record.event {
+            JournalEvent::SessionCreated { session } => {
+                if statuses
+                    .insert(session.session_id.as_str(), &session.status)
+                    .is_some()
+                {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!("session {} was created more than once", session.session_id),
+                    );
+                }
+            }
+            JournalEvent::SessionStatusChanged {
+                transition_id,
+                session_id,
+                from,
+                to,
+            } => {
+                let Some(current) = statuses.get(session_id.as_str()) else {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!(
+                            "transition {transition_id} references unknown session {session_id}"
+                        ),
+                    );
+                };
+                if *current != from {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!(
+                            "transition {transition_id} from {from:?} does not match current status {current:?}"
+                        ),
+                    );
+                }
+                if !valid_session_transition(from, to) {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!("illegal session transition {transition_id}: {from:?} -> {to:?}"),
+                    );
+                }
+                statuses.insert(session_id.as_str(), to);
+            }
+            _ => {}
+        }
+    }
+    CheckResult::pass(
+        "lifecycle_causality",
+        "session status transitions follow the legal state machine",
+    )
+}
+
+fn check_memory_provenance(snapshot: &JournalSnapshot) -> CheckResult {
+    let mut event_ids: BTreeSet<&str> = BTreeSet::new();
+    for record in &snapshot.records {
+        if let JournalEvent::MemoryWritten { memory } = &record.event {
+            if memory.source_event_id.trim().is_empty() {
+                return CheckResult::fail(
+                    "memory_provenance",
+                    format!("memory {} has an empty source_event_id", memory.memory_id),
+                );
+            }
+            if !event_ids.contains(memory.source_event_id.as_str()) {
+                return CheckResult::fail(
+                    "memory_provenance",
+                    format!(
+                        "memory {} references unknown source event {}",
+                        memory.memory_id, memory.source_event_id
+                    ),
+                );
+            }
+        }
+        if let Some(event_id) = primary_event_id(record)
+            && !event_ids.insert(event_id)
+        {
+            return CheckResult::fail(
+                "memory_provenance",
+                format!("journal event id {event_id} appears more than once"),
+            );
+        }
+    }
+    CheckResult::pass(
+        "memory_provenance",
+        "memory records reference prior unambiguous journal events",
+    )
+}
+
+/// Hash of the last record, or the genesis hash for an empty snapshot.
+///
+/// This is the value an external transparency log, signed bundle, incident
+/// ticket, or hand-off manifest must anchor if it wants to detect truncation or
+/// a coherent full re-hash. Internal chain verification can prove consistency;
+/// only an expected external root proves this is the same chain the reviewer
+/// intended to audit.
+pub fn snapshot_root_hash(snapshot: &JournalSnapshot) -> String {
+    snapshot
+        .records
+        .last()
+        .map(|record| record.hash.clone())
+        .unwrap_or_else(|| GENESIS_HASH.to_string())
+}
+
+/// Compare a snapshot's root hash against an externally trusted anchor.
+pub fn verify_expected_root(snapshot: &JournalSnapshot, expected_root: &str) -> CheckResult {
+    if expected_root.trim().is_empty() {
+        return CheckResult::fail(
+            "expected_root",
+            "expected root anchor must not be empty".to_string(),
+        );
+    }
+
+    let actual = snapshot_root_hash(snapshot);
+    if actual == expected_root {
+        CheckResult::pass(
+            "expected_root",
+            format!("snapshot root matches expected anchor {expected_root}"),
+        )
+    } else {
+        CheckResult::fail(
+            "expected_root",
+            format!("snapshot root mismatch: expected {expected_root}, actual {actual}"),
+        )
     }
 }
 
@@ -245,6 +375,7 @@ fn check_hash_linkage(snapshot: &JournalSnapshot) -> CheckResult {
 /// introduced by a `SessionCreated` event earlier in the journal.
 fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
     let mut known_sessions: BTreeSet<&str> = BTreeSet::new();
+    let mut transition_ids: BTreeSet<&str> = BTreeSet::new();
     for record in &snapshot.records {
         // (referrer kind, referrer id, referenced session id) that this record
         // requires to already exist. `SessionCreated` introduces a session
@@ -254,9 +385,37 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
                 known_sessions.insert(session.session_id.as_str());
                 None
             }
+            JournalEvent::SessionStatusChanged {
+                transition_id,
+                session_id,
+                ..
+            } => {
+                if transition_id.trim().is_empty() {
+                    return CheckResult::fail(
+                        "referential_sessions",
+                        "session transition id is empty".to_string(),
+                    );
+                }
+                if !transition_ids.insert(transition_id.as_str()) {
+                    return CheckResult::fail(
+                        "referential_sessions",
+                        format!("session transition {transition_id} appears more than once"),
+                    );
+                }
+                Some((
+                    "session transition",
+                    transition_id.as_str(),
+                    session_id.as_str(),
+                ))
+            }
             JournalEvent::CapabilityGranted { grant } => {
                 Some(("grant", grant.grant_id.as_str(), grant.session_id.as_str()))
             }
+            JournalEvent::PaymentMandateIssued { mandate } => Some((
+                "payment mandate",
+                mandate.mandate_id.as_str(),
+                mandate.session_id.as_str(),
+            )),
             JournalEvent::ActionProposed { manifest } => Some((
                 "action",
                 manifest.action_id.as_str(),
@@ -275,7 +434,7 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
     }
     CheckResult::pass(
         "referential_sessions",
-        "all grants and actions reference known sessions",
+        "all lifecycle events, grants, and actions reference known sessions",
     )
 }
 
@@ -310,23 +469,74 @@ fn check_grant_references(snapshot: &JournalSnapshot) -> CheckResult {
     )
 }
 
-/// A grant named by an action must be neither revoked nor expired at the moment
-/// the action is proposed. `final.md` §26 lists revocation as a never-compromise
-/// invariant: the core admission path enforces `is_active_at` live, but the
-/// offline journal verifier does not re-check it, so an audit would otherwise
-/// miss a use-after-revoke or use-after-expiry trace. This re-derives it.
-///
-/// The journal has no explicit revocation event today, so this reads the
-/// `revoked` flag and `expires_at` recorded on the grant at issuance. If a
-/// revocation event type is added later, this check should also honor it.
+/// A grant named by an allowed action must be neither revoked nor expired at the
+/// decision point. Denied proposals after revocation are valid audit evidence;
+/// only an `Allowed` decision after revocation is a use-after-revoke failure.
 fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
     let mut grants: BTreeMap<&str, &CapabilityGrant> = BTreeMap::new();
+    let mut issued_revocation_handles: BTreeSet<&str> = BTreeSet::new();
+    let mut prior_event_ids: BTreeSet<&str> = BTreeSet::new();
+    let mut revoked_handles: BTreeSet<&str> = BTreeSet::new();
+    let mut proposed: BTreeMap<&str, &ActionManifest> = BTreeMap::new();
     for record in &snapshot.records {
         match &record.event {
             JournalEvent::CapabilityGranted { grant } => {
+                if prior_event_ids.contains(grant.revocation_handle.as_str()) {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!(
+                            "grant {} revocation handle {} collides with a prior journal event id",
+                            grant.grant_id, grant.revocation_handle
+                        ),
+                    );
+                }
+                if !issued_revocation_handles.insert(grant.revocation_handle.as_str()) {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!(
+                            "grant {} revocation handle {} was already issued",
+                            grant.grant_id, grant.revocation_handle
+                        ),
+                    );
+                }
                 grants.insert(grant.grant_id.as_str(), grant);
             }
+            JournalEvent::CapabilityRevoked {
+                grant_id,
+                revocation_handle,
+                ..
+            } => {
+                let Some(grant) = grants.get(grant_id.as_str()) else {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!("revocation references grant {grant_id} before it was issued"),
+                    );
+                };
+                if grant.revocation_handle != *revocation_handle {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!(
+                            "revocation for grant {grant_id} uses handle {revocation_handle}, expected {}",
+                            grant.revocation_handle
+                        ),
+                    );
+                }
+                if !revoked_handles.insert(revocation_handle.as_str()) {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!("revocation handle {revocation_handle} appears more than once"),
+                    );
+                }
+            }
             JournalEvent::ActionProposed { manifest } => {
+                proposed.insert(manifest.action_id.as_str(), manifest.as_ref());
+            }
+            JournalEvent::PolicyDecided { decision }
+                if decision.result == DecisionResult::Allowed =>
+            {
+                let Some(manifest) = proposed.get(decision.action_id.as_str()) else {
+                    continue;
+                };
                 for required in &manifest.required_grants {
                     // Existence is `grant_references`' job; do not double-report.
                     let Some(grant) = grants.get(required.as_str()) else {
@@ -336,8 +546,17 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
                         return CheckResult::fail(
                             "grant_validity",
                             format!(
-                                "action {} uses revoked grant {required}",
-                                manifest.action_id
+                                "allowed decision {} uses revoked grant {required}",
+                                decision.decision_id
+                            ),
+                        );
+                    }
+                    if revoked_handles.contains(grant.revocation_handle.as_str()) {
+                        return CheckResult::fail(
+                            "grant_validity",
+                            format!(
+                                "allowed decision {} uses revoked grant {required}",
+                                decision.decision_id
                             ),
                         );
                     }
@@ -345,8 +564,8 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
                         return CheckResult::fail(
                             "grant_validity",
                             format!(
-                                "action {} at {} uses grant {required} that expired at {}",
-                                manifest.action_id,
+                                "allowed decision {} at {} uses grant {required} that expired at {}",
+                                decision.decision_id,
                                 record.created_at.to_rfc3339(),
                                 grant.expires_at.to_rfc3339()
                             ),
@@ -355,6 +574,9 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
                 }
             }
             _ => {}
+        }
+        if let Some(event_id) = primary_event_id(record) {
+            prior_event_ids.insert(event_id);
         }
     }
     CheckResult::pass(
@@ -436,6 +658,39 @@ fn check_denial_explained(snapshot: &JournalSnapshot) -> CheckResult {
     )
 }
 
+fn valid_session_transition(from: &SessionStatus, to: &SessionStatus) -> bool {
+    matches!(
+        (from, to),
+        (SessionStatus::Running, SessionStatus::Paused)
+            | (SessionStatus::Paused, SessionStatus::Running)
+            | (SessionStatus::Running, SessionStatus::Canceled)
+            | (SessionStatus::Paused, SessionStatus::Canceled)
+    )
+}
+
+fn primary_event_id(record: &JournalRecord) -> Option<&str> {
+    match &record.event {
+        JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
+        JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
+        JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::CapabilityRevoked {
+            revocation_handle, ..
+        } => Some(revocation_handle.as_str()),
+        JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
+        JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
+        JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
+        JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
+        JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
+        // Memory ids are mutable projection keys: the memory projection allows
+        // later writes to replace the same memory_id, so they cannot be used as
+        // globally unique journal event ids.
+        JournalEvent::MemoryWritten { .. } => None,
+        JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
+        JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -447,7 +702,7 @@ mod tests {
         let report = verify_snapshot(&snapshot);
         assert_eq!(report.records, 0);
         assert!(report.ok, "empty journal should pass: {:?}", report.checks);
-        assert_eq!(report.checks.len(), 8);
+        assert_eq!(report.checks.len(), 10);
         assert_eq!(report.failures().count(), 0);
     }
 }
