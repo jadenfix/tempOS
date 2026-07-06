@@ -109,5 +109,6 @@ final.md sections claimed: <list>
 A. Never-compromise: <PASS / BLOCKED: item(s)>
 B. Contracts:        <PASS / BLOCKED: item(s)>
 C. Craft:            <PASS / notes>
+D. Optimization:     <PASS / BLOCKED / n/a: item(s)>
 Agent-layer verdict: <APPROVE / REQUEST-CHANGES>
 ```

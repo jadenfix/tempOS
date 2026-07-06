@@ -46,6 +46,24 @@ REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "docs/engineering/optimization-evidence-runbook.md",
         "Performance-Sensitive PR Packet",
     ),
+    ".codex/skills/beateros-systems-engineering/SKILL.md": (
+        "docs/engineering/optimization-evidence-runbook.md",
+        "docs/source-matrix.md",
+    ),
+    "CLAUDE.md": (
+        "docs/engineering/optimization-evidence-runbook.md",
+        "docs/source-matrix.md",
+        "GPU, TPU, LPU, NPU",
+    ),
+    ".cursor/rules/beateros.mdc": (
+        "docs/engineering/optimization-evidence-runbook.md",
+        "docs/source-matrix.md",
+        "GPU, TPU, LPU, NPU",
+    ),
+    "README.md": (
+        "docs/engineering/optimization-evidence-runbook.md",
+        "python3 scripts/check-optimization-docs.py",
+    ),
     ".github/PULL_REQUEST_TEMPLATE.md": (
         "docs/engineering/optimization-evidence-runbook.md",
         "python3 scripts/check-optimization-docs.py",

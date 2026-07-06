@@ -53,15 +53,15 @@ workflow.
       story are preserved.
 - [ ] Source links and dates are included for claims about current language,
       compiler, accelerator, or OS behavior.
-- [ ] `python3 scripts/check-optimization-docs.py` passes when this PR changes
-      optimization doctrine, source-matrix rows, agent instructions, or review
-      packet structure.
 
 ## Tests
 
 - [ ] `cargo fmt --check`
 - [ ] `cargo test --workspace`
 - [ ] `cargo clippy --workspace --all-targets`
+- [ ] `python3 scripts/check-optimization-docs.py` when this PR changes
+      optimization doctrine, source-matrix rows, agent instructions, or review
+      packet structure.
 
 ## Review routing
 
