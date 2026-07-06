@@ -8,6 +8,7 @@ use beater_os_core::{
 };
 use beater_os_sandbox::{
     SandboxLimits, SandboxRequest, command_digest, execute as sandbox_execute,
+    safe_path_environment, validate_environment,
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use uuid::Uuid;
@@ -377,6 +378,22 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let command = args.require("command")?.to_string();
     let command_args: Vec<String> = args.all("arg");
     let cwd = args.require("cwd")?.to_string();
+    let mut environment = safe_path_environment();
+    for raw in args.all("env") {
+        let (name, value) = parse_env_assignment(&raw)?;
+        if name == "PATH" {
+            return Err(CliError::Refused(
+                "PATH is reserved for the sandbox's safe system search path".to_string(),
+            ));
+        }
+        if environment.contains_key(&name) {
+            return Err(CliError::Refused(format!(
+                "duplicate environment variable {name:?}"
+            )));
+        }
+        environment.insert(name, value);
+    }
+    validate_environment(&environment, &SandboxLimits::default())?;
 
     let required_grants: BTreeSet<String> = args.csv("grants").into_iter().collect();
     if required_grants.is_empty() {
@@ -405,7 +422,8 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let resolved_str = resolved.display().to_string();
 
     // (2) Build the manifest. `target` is the requested cwd; `resolved_target` is
-    // the canonical path (kernel-derived, §7.4). inputs_digest binds command+args.
+    // the canonical path (kernel-derived, §7.4). inputs_digest binds command,
+    // args, and the explicit environment allowlist.
     let target = CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
         resource_id: cwd.clone(),
@@ -414,12 +432,16 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         resource_kind: ResourceKind::FilePath,
         resource_id: resolved_str.clone(),
     });
-    let inputs_digest = command_digest(&command, &command_args);
-    let inputs_summary = if command_args.is_empty() {
+    let inputs_digest = command_digest(&command, &command_args, &environment);
+    let mut inputs_summary = if command_args.is_empty() {
         command.clone()
     } else {
         format!("{command} {}", command_args.join(" "))
     };
+    if environment.len() > 1 {
+        let names = environment.keys().cloned().collect::<Vec<_>>().join(",");
+        inputs_summary = format!("{inputs_summary} env=[{names}]");
+    }
 
     let risk_class: RiskClass = match args.get("risk") {
         Some(value) => args::parse_enum("risk", value)?,
@@ -526,10 +548,12 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         max_output_bytes,
         ..defaults
     };
+    validate_environment(&environment, &limits)?;
 
     let outcome = sandbox_execute(&SandboxRequest {
         command: command.clone(),
         args: command_args,
+        environment,
         working_dir: cwd,
         path_prefixes: confinement_prefixes,
         limits,
@@ -660,6 +684,13 @@ fn confinement_prefixes(
         }
     }
     prefixes.into_iter().collect()
+}
+
+fn parse_env_assignment(raw: &str) -> CliResult<(String, String)> {
+    let (name, value) = raw
+        .split_once('=')
+        .ok_or_else(|| CliError::invalid("env", raw))?;
+    Ok((name.to_string(), value.to_string()))
 }
 
 fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {

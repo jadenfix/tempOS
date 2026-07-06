@@ -38,6 +38,7 @@ that a real metal-touching agent OS would need.
 | Agent startup context | [AGENTS.md](AGENTS.md) | Repo map, non-negotiables, and common commands |
 | Implementation sequence | [docs/implementation-backlog.md](docs/implementation-backlog.md) | PR-sized slices and no-self-merge review rules |
 | Systems engineering | [docs/sota-systems-engineering.md](docs/sota-systems-engineering.md) | Hot-path, Rust/C/assembly, security, and macOS doctrine |
+| Optimization infrastructure | [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md) | Bottleneck taxonomy, benchmarks, language baselines, and accelerator review gates |
 | Threat model | [docs/threat-model.md](docs/threat-model.md) | Assets, trust boundaries, attacks, mitigations, residual risk |
 | Wire contracts | [spec/README.md](spec/README.md) | Language-neutral JSON Schema and conformance suite |
 | Rust core | [crates/beater-os-core](crates/beater-os-core) | Agent sessions, grants, manifests, decisions, receipts, journals |
