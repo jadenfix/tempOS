@@ -43,6 +43,7 @@ receipt ledger.
 | `session resume` | Resume a paused session through the daemon lifecycle state machine. |
 | `session cancel` | Cancel a running or paused session through the daemon lifecycle state machine. |
 | `grant issue` | Issue a scoped `CapabilityGrant` and journal `CapabilityGranted`. |
+| `grant revoke` | Resolve an issued grant's stored revocation handle and journal `CapabilityRevoked`. |
 | `action propose` | Journal an `ActionProposed`, run policy admission, journal `PolicyDecided`. |
 | `action execute` | Run a scoped shell action through the **sandbox execution lane**: canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
 | `receipt record` | Record a `CapabilityReceipt` for an **admitted** action (fails closed otherwise). |
@@ -56,11 +57,12 @@ list.
 
 `grant issue` generates a revocation handle by default and prints it with the
 grant. Operators can provide a stable handle with `--revocation-handle <h>`.
-`action propose` and `action execute` accept repeatable `--revoked-handle <h>`
-flags; those handles are passed to `beater-osd` as a per-admission revocation
-registry snapshot in `AdmissionContext`, so a grant or delegated ancestor with a
-matching handle fails closed at admission. Durable revocation-list storage is a
-separate runtime service; these flags are the replay/operator input surface.
+`grant revoke --grant-id <id> --reason <text>` resolves the issued grant's
+stored handle and appends `CapabilityRevoked`; callers cannot inject an
+arbitrary fake handle. `action propose` and `action execute` evaluate against
+the durable journal-projected revocation registry. They still accept repeatable
+`--revoked-handle <h>` flags as an external monotonic epoch overlay for replay
+or operator-supplied evidence.
 
 ## Worked MVP flow
 

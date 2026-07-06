@@ -139,6 +139,7 @@ pub struct Store {
 pub struct SessionProjection {
     pub session: AgentSession,
     pub grants: Vec<CapabilityGrant>,
+    pub revoked_handles: BTreeSet<String>,
     pub mandates: Vec<PaymentMandate>,
     pub manifests: Vec<ActionManifest>,
     pub decisions: Vec<PolicyDecision>,
@@ -150,9 +151,16 @@ pub struct SessionProjection {
 impl SessionProjection {
     /// Grants that are active at `now`, projected from daemon-owned journal state.
     pub fn active_grants(&self, now: DateTime<Utc>) -> Vec<CapabilityGrant> {
+        let grants_by_id: BTreeMap<&str, &CapabilityGrant> = self
+            .grants
+            .iter()
+            .map(|grant| (grant.grant_id.as_str(), grant))
+            .collect();
         self.grants
             .iter()
-            .filter(|grant| grant.is_active_at(now))
+            .filter(|grant| {
+                grant_effectively_active(grant, now, &self.revoked_handles, &grants_by_id)
+            })
             .cloned()
             .collect()
     }
@@ -323,6 +331,11 @@ impl Store {
                     "CapabilityGranted must be written through issue_grant".to_string(),
                 ));
             }
+            JournalEvent::CapabilityRevoked { .. } => {
+                return Err(DaemonError::Refused(
+                    "CapabilityRevoked must be written through revoke_grant".to_string(),
+                ));
+            }
             JournalEvent::PaymentMandateIssued { .. } => {
                 return Err(DaemonError::Refused(
                     "PaymentMandateIssued must be written through issue_payment_mandate"
@@ -436,8 +449,83 @@ impl Store {
                 )));
             }
             let grant = normalize_grant_file_authority(grant)?;
+            if grant.revocation_handle == grant.grant_id {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} revocation handle must not equal the grant id",
+                    grant.grant_id
+                )));
+            }
+            if admission_state.event_ids.contains(&grant.revocation_handle) {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} revocation handle {} collides with an existing journal event id",
+                    grant.grant_id, grant.revocation_handle
+                )));
+            }
+            if admission_state
+                .issued_revocation_handles
+                .contains(&grant.revocation_handle)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} revocation handle {} was already issued",
+                    grant.grant_id, grant.revocation_handle
+                )));
+            }
             validate_grant_authority(&admission_state, &grant)?;
             let record = journal.append(JournalEvent::CapabilityGranted { grant }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
+    /// Revoke an issued grant by resolving its daemon-stored revocation handle
+    /// and appending a `CapabilityRevoked` event. The caller supplies a grant id,
+    /// not a handle, so revocation cannot conjure authority for a fake handle.
+    pub fn revoke_grant(
+        &self,
+        session_id: &str,
+        grant_id: &str,
+        revoked_by: impl Into<String>,
+        reason: impl Into<String>,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let Some(grant) = admission_state.grants.get(grant_id) else {
+                return Err(DaemonError::Refused(format!(
+                    "grant {grant_id} has not been issued in session {session_id}"
+                )));
+            };
+            if admission_state
+                .revoked_handles
+                .contains(&grant.revocation_handle)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "grant {grant_id} is already revoked"
+                )));
+            }
+            let revoked_by = revoked_by.into();
+            if revoked_by.trim().is_empty() {
+                return Err(DaemonError::Refused(
+                    "revocation actor must not be empty".to_string(),
+                ));
+            }
+            let reason = reason.into();
+            if reason.trim().is_empty() {
+                return Err(DaemonError::Refused(
+                    "revocation reason must not be empty".to_string(),
+                ));
+            }
+            let record = journal.append(
+                JournalEvent::CapabilityRevoked {
+                    grant_id: grant.grant_id.clone(),
+                    revocation_handle: grant.revocation_handle.clone(),
+                    revoked_by,
+                    reason,
+                },
+                created_at,
+            )?;
             journal.verify_chain()?;
             self.write_journal_record_unlocked(session_id, &record)?;
             Ok(record)
@@ -492,8 +580,9 @@ impl Store {
         self.admit_action_with_revoked_handles(session_id, manifest, BTreeSet::new())
     }
 
-    /// Admit an action through the daemon-owned policy path while applying an
-    /// operator-supplied revocation registry snapshot.
+    /// Admit an action through the daemon-owned policy path while applying the
+    /// durable journal-projected revocation registry plus an optional
+    /// operator-supplied registry snapshot.
     ///
     /// Revocation handles are live external evidence: the CLI or daemon front
     /// end may receive a monotonic registry epoch from an operator, but the
@@ -503,7 +592,7 @@ impl Store {
         &self,
         session_id: &str,
         manifest: ActionManifest,
-        revoked_handles: BTreeSet<String>,
+        external_revoked_handles: BTreeSet<String>,
     ) -> DaemonResult<AdmissionOutcome> {
         self.with_session_lock(session_id, || {
             if manifest.session_id != session_id {
@@ -536,6 +625,8 @@ impl Store {
             }
 
             let now = Utc::now();
+            let mut revoked_handles = admission_state.revoked_handles;
+            revoked_handles.extend(external_revoked_handles);
             let ctx = AdmissionContext {
                 now,
                 actor_id: admission_state.session.agent_id,
@@ -739,6 +830,7 @@ impl Store {
         let journal = self.load_journal_unlocked(session_id)?;
         let mut session = None;
         let mut grants = Vec::new();
+        let mut revoked_handles = BTreeSet::new();
         let mut mandates = Vec::new();
         let mut manifests = Vec::new();
         let mut decisions = Vec::new();
@@ -779,6 +871,11 @@ impl Store {
                     projected.status = to.clone();
                 }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
+                JournalEvent::CapabilityRevoked {
+                    revocation_handle, ..
+                } => {
+                    revoked_handles.insert(revocation_handle.clone());
+                }
                 JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
                 JournalEvent::ActionProposed { manifest } => {
                     manifests.push(manifest.as_ref().clone())
@@ -802,6 +899,7 @@ impl Store {
         Ok(SessionProjection {
             session,
             grants,
+            revoked_handles,
             mandates,
             manifests,
             decisions,
@@ -948,6 +1046,9 @@ fn next_session_status(
 struct AdmissionState {
     session: AgentSession,
     grants: BTreeMap<String, CapabilityGrant>,
+    revoked_handles: BTreeSet<String>,
+    issued_revocation_handles: BTreeSet<String>,
+    event_ids: BTreeSet<String>,
     mandates: BTreeMap<String, PaymentMandate>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
@@ -966,6 +1067,9 @@ fn admission_state_from_journal(
 ) -> DaemonResult<AdmissionState> {
     let mut session = None;
     let mut grants = BTreeMap::new();
+    let mut revoked_handles = BTreeSet::new();
+    let mut issued_revocation_handles = BTreeSet::new();
+    let mut event_ids = BTreeSet::new();
     let mut mandates = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
@@ -1005,7 +1109,30 @@ fn admission_state_from_journal(
                 projected.status = to.clone();
             }
             JournalEvent::CapabilityGranted { grant } => {
+                issued_revocation_handles.insert(grant.revocation_handle.clone());
                 grants.insert(grant.grant_id.clone(), grant.clone());
+            }
+            JournalEvent::CapabilityRevoked {
+                grant_id,
+                revocation_handle,
+                ..
+            } => {
+                let Some(grant) = grants.get(grant_id) else {
+                    return Err(DaemonError::Refused(format!(
+                        "revocation references grant {grant_id} before it was issued"
+                    )));
+                };
+                if grant.revocation_handle != *revocation_handle {
+                    return Err(DaemonError::Refused(format!(
+                        "revocation for grant {grant_id} uses handle {revocation_handle}, expected {}",
+                        grant.revocation_handle
+                    )));
+                }
+                if !revoked_handles.insert(revocation_handle.clone()) {
+                    return Err(DaemonError::Refused(format!(
+                        "revocation handle {revocation_handle} was recorded more than once"
+                    )));
+                }
             }
             JournalEvent::PaymentMandateIssued { mandate } => {
                 mandates.insert(mandate.mandate_id.clone(), mandate.clone());
@@ -1029,6 +1156,9 @@ fn admission_state_from_journal(
             | JournalEvent::ScenarioEvaluated { .. }
             | JournalEvent::IncidentAnnotated { .. } => {}
         }
+        if let Some(event_id) = journal_event_id(&record.event) {
+            event_ids.insert(event_id.to_string());
+        }
     }
     let session = session.ok_or_else(|| {
         DaemonError::Refused(format!(
@@ -1038,12 +1168,35 @@ fn admission_state_from_journal(
     Ok(AdmissionState {
         session,
         grants,
+        revoked_handles,
+        issued_revocation_handles,
+        event_ids,
         mandates,
         proposals,
         latest_decisions,
         approvals,
         simulations,
     })
+}
+
+fn journal_event_id(event: &JournalEvent) -> Option<&str> {
+    match event {
+        JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
+        JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
+        JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::CapabilityRevoked {
+            revocation_handle, ..
+        } => Some(revocation_handle.as_str()),
+        JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
+        JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
+        JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
+        JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
+        JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
+        JournalEvent::MemoryWritten { .. } => None,
+        JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
+        JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
+    }
 }
 
 fn validate_approval_evidence(
@@ -1158,6 +1311,12 @@ fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> 
                 grant.grant_id, parent.grant_id
             )));
         }
+        if state.revoked_handles.contains(&parent.revocation_handle) || parent.revoked {
+            return Err(DaemonError::Refused(format!(
+                "grant {} parent {} is revoked",
+                grant.grant_id, parent.grant_id
+            )));
+        }
         if parent.delegation == DelegationMode::AttenuatedOnly
             && !grant_is_attenuated(parent, grant)
         {
@@ -1191,6 +1350,31 @@ fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> 
         }
     }
     Ok(())
+}
+
+fn grant_effectively_active(
+    grant: &CapabilityGrant,
+    now: DateTime<Utc>,
+    revoked_handles: &BTreeSet<String>,
+    grants_by_id: &BTreeMap<&str, &CapabilityGrant>,
+) -> bool {
+    let mut current = grant;
+    let mut seen = BTreeSet::new();
+    loop {
+        if !current.is_active_at(now) || revoked_handles.contains(&current.revocation_handle) {
+            return false;
+        }
+        let Some(parent_id) = current.parent_grant_id.as_deref() else {
+            return true;
+        };
+        if !seen.insert(current.grant_id.as_str()) {
+            return false;
+        }
+        let Some(parent) = grants_by_id.get(parent_id) else {
+            return false;
+        };
+        current = *parent;
+    }
 }
 
 fn normalize_grant_file_authority(mut grant: CapabilityGrant) -> DaemonResult<CapabilityGrant> {

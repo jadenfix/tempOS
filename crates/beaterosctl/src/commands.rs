@@ -40,6 +40,7 @@ pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         ("session", "resume") => session_transition(store, args, SessionTransition::Resume),
         ("session", "cancel") => session_transition(store, args, SessionTransition::Cancel),
         ("grant", "issue") => grant_issue(store, args),
+        ("grant", "revoke") => grant_revoke(store, args),
         ("action", "propose") => action_propose(store, args),
         ("action", "execute") => action_execute(store, args),
         ("receipt", "record") => receipt_record(store, args),
@@ -236,6 +237,29 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     ))
 }
 
+fn grant_revoke(store: &Store, args: &ParsedArgs) -> CliResult<String> {
+    let session_id = require_session(store, args)?;
+    let projection = store.project(&session_id)?;
+    let grant_id = args.require("grant-id")?.to_string();
+    let grant = projection
+        .grants
+        .iter()
+        .find(|grant| grant.grant_id == grant_id)
+        .ok_or_else(|| {
+            CliError::Refused(format!(
+                "grant {grant_id} has not been issued in session {session_id}"
+            ))
+        })?
+        .clone();
+    let revoked_by = args.get_or("revoked-by", &projection.session.created_by);
+    let reason = args.require("reason")?;
+    let record = store.revoke_grant(&session_id, &grant_id, revoked_by, reason, Utc::now())?;
+    Ok(format!(
+        "revoked grant {}\n  handle:      {}\n  revoked_by:  {}\n  reason:      {}\n  journal seq: {}",
+        grant.grant_id, grant.revocation_handle, revoked_by, reason, record.seq
+    ))
+}
+
 fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let session_id = require_session(store, args)?;
     let projection = store.project(&session_id)?;
@@ -423,8 +447,7 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     // never from an agent-supplied flag: the union of each grant's path prefixes
     // plus any concrete file-path resource it is scoped to. An agent cannot widen
     // its own sandbox.
-    let active_grants = projection.active_grants(now);
-    let confinement_prefixes = confinement_prefixes(&active_grants, &required_grants);
+    let confinement_prefixes = confinement_prefixes(&projection.grants, &required_grants);
     if confinement_prefixes.is_empty() {
         return Err(CliError::Refused(
             "named grants define no filesystem confinement prefix; refusing to execute unconfined"
@@ -857,15 +880,21 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         format!("grants ({}):", projection.grants.len()),
     ];
     for grant in &projection.grants {
-        let state = if grant.is_active_at(now) {
+        let state = if projection
+            .revoked_handles
+            .contains(&grant.revocation_handle)
+        {
+            "revoked"
+        } else if grant.is_active_at(now) {
             "active"
         } else {
             "inactive"
         };
         lines.push(format!(
-            "  - {} [{}] {:?} {} -> {:?}",
+            "  - {} [{}] handle={} {:?} {} -> {:?}",
             grant.grant_id,
             state,
+            grant.revocation_handle,
             grant.scope.selector.resource_kind,
             grant.scope.selector.resource_id,
             grant.scope.actions

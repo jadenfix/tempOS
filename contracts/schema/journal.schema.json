@@ -46,6 +46,17 @@
         },
         {
           "additionalProperties": false,
+          "required": ["kind", "grant_id", "revocation_handle", "revoked_by", "reason"],
+          "properties": {
+            "kind": { "const": "capability_revoked" },
+            "grant_id": { "type": "string", "minLength": 1 },
+            "revocation_handle": { "type": "string", "minLength": 1 },
+            "revoked_by": { "type": "string", "minLength": 1 },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "additionalProperties": false,
           "required": ["kind", "mandate"],
           "properties": {
             "kind": { "const": "payment_mandate_issued" },

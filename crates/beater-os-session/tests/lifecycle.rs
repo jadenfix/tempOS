@@ -380,9 +380,9 @@ fn interleaved_grant_and_lifecycle_preserve_order_and_chain() {
         .unwrap();
     session.pause(at(1_003)).unwrap();
     session.resume(at(1_004)).unwrap();
-    session
-        .bind_grant(grant_for("grant-2", SESSION_ID, AGENT), at(1_005))
-        .unwrap();
+    let mut grant_2 = grant_for("grant-2", SESSION_ID, AGENT);
+    grant_2.revocation_handle = "revoke-2".to_string();
+    session.bind_grant(grant_2, at(1_005)).unwrap();
     session.cancel(at(1_006)).unwrap();
 
     assert_eq!(

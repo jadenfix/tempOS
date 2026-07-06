@@ -478,9 +478,16 @@ fn detects_use_of_revoked_grant() -> Result<(), BeaterOsError> {
     let mut g = grant("G1", "S1", "agent:coder");
     g.revoked = true;
     journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_001))?;
+    let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: Box::new(manifest("A1", "S1", "tool:fs", &["G1"])),
+            manifest: Box::new(m.clone()),
+        },
+        ts(1_002),
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: decision("D1", &m, DecisionResult::Allowed, "incorrectly admitted")?,
         },
         ts(1_002),
     )?;
@@ -505,9 +512,16 @@ fn detects_use_of_expired_grant() -> Result<(), BeaterOsError> {
     let mut g = grant("G1", "S1", "agent:coder");
     g.expires_at = ts(1_001); // expires before the action at ts(1_002) uses it
     journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_000))?;
+    let m = manifest("A1", "S1", "tool:fs", &["G1"]);
     journal.append(
         JournalEvent::ActionProposed {
-            manifest: Box::new(manifest("A1", "S1", "tool:fs", &["G1"])),
+            manifest: Box::new(m.clone()),
+        },
+        ts(1_002),
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: decision("D1", &m, DecisionResult::Allowed, "incorrectly admitted")?,
         },
         ts(1_002),
     )?;

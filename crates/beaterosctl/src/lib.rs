@@ -78,6 +78,8 @@ pub fn help_text() -> String {
          \x20                 --actions <a,b> [--path-prefix <p>]... [--network-allow <h>]...\n\
          \x20                 [--max-risk <r>] [--expires-in-secs <n>]\n\
          \x20                 [--revocation-handle <h>] [--reason <text>]\n\
+         \x20 grant revoke    --session <id> --grant-id <id> --reason <text>\n\
+         \x20                 [--revoked-by <id>]\n\
          \x20 action propose  --session <id> --tool <id> --kind <action>\n\
          \x20                 --target-kind <kind> --target <id> --grants <g1,g2>\n\
          \x20                 [--risk <r>] [--side-effects <s,..>] [--data-classes <d,..>]\n\

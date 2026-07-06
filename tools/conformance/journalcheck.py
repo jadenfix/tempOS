@@ -61,6 +61,8 @@ def verify_journal_chain(records: list[dict]) -> list[str]:
     sessions: dict[str, str] = {}
     transition_ids: set[str] = set()
     event_ids: set[str] = set()
+    grants: dict[str, dict] = {}
+    revoked_handles: set[str] = set()
     proposed: dict[str, dict] = {}
     allowed: dict[str, str] = {}
     latest_decision: dict[str, str] = {}
@@ -84,6 +86,8 @@ def verify_journal_chain(records: list[dict]) -> list[str]:
                 sessions,
                 transition_ids,
                 event_ids,
+                grants,
+                revoked_handles,
                 proposed,
                 allowed,
                 latest_decision,
@@ -104,6 +108,8 @@ def _causality(
     sessions: dict[str, str],
     transition_ids: set[str],
     event_ids: set[str],
+    grants: dict[str, dict],
+    revoked_handles: set[str],
     proposed: dict[str, dict],
     allowed: dict[str, str],
     latest_decision: dict[str, str],
@@ -150,6 +156,45 @@ def _causality(
             errors.append(f"journal[{idx}] action {aid} proposed more than once")
         proposed[aid] = manifest
 
+    elif kind == "capability_granted":
+        grant = event["grant"]
+        handle = grant.get("revocation_handle", "")
+        if handle == grant["grant_id"]:
+            errors.append(
+                f"journal[{idx}] grant {grant['grant_id']} revocation handle "
+                "must not equal the grant event id"
+            )
+        if handle in event_ids:
+            errors.append(
+                f"journal[{idx}] grant {grant['grant_id']} revocation handle {handle} "
+                "collides with a prior journal event id"
+            )
+        if any(existing.get("revocation_handle") == handle for existing in grants.values()):
+            errors.append(
+                f"journal[{idx}] grant {grant['grant_id']} revocation handle {handle} "
+                "was already issued"
+            )
+        grants[grant["grant_id"]] = grant
+
+    elif kind == "capability_revoked":
+        grant_id = event["grant_id"]
+        handle = event["revocation_handle"]
+        grant = grants.get(grant_id)
+        if grant is None:
+            errors.append(f"journal[{idx}] revocation references grant {grant_id} before it was issued")
+        elif grant.get("revocation_handle") != handle:
+            errors.append(
+                f"journal[{idx}] revocation for grant {grant_id} uses handle {handle}, "
+                f"expected {grant.get('revocation_handle')}"
+            )
+        if not event.get("revoked_by", "").strip():
+            errors.append(f"journal[{idx}] revocation actor is empty")
+        if not event.get("reason", "").strip():
+            errors.append(f"journal[{idx}] revocation reason is empty")
+        if handle in revoked_handles:
+            errors.append(f"journal[{idx}] revocation handle {handle} appears more than once")
+        revoked_handles.add(handle)
+
     elif kind == "policy_decided":
         decision = event["decision"]
         aid = decision["action_id"]
@@ -167,6 +212,20 @@ def _causality(
                 )
         latest_decision[aid] = decision["result"]
         if decision["result"] == "allowed":
+            for required in proposed.get(aid, {}).get("required_grants", []):
+                grant = grants.get(required)
+                if grant is None:
+                    continue
+                if grant.get("revoked", False):
+                    errors.append(
+                        f"journal[{idx}] allowed decision {decision['decision_id']} "
+                        f"uses revoked grant {required}"
+                    )
+                if grant.get("revocation_handle") in revoked_handles:
+                    errors.append(
+                        f"journal[{idx}] allowed decision {decision['decision_id']} "
+                        f"uses revoked grant {required}"
+                    )
             allowed[aid] = decision.get("manifest_hash", "")
         else:
             allowed.pop(aid, None)
@@ -245,6 +304,8 @@ def _primary_event_id(record: dict) -> str | None:
         return event["transition_id"]
     if kind == "capability_granted":
         return event["grant"]["grant_id"]
+    if kind == "capability_revoked":
+        return event["revocation_handle"]
     if kind == "payment_mandate_issued":
         return event["mandate"]["mandate_id"]
     if kind == "action_proposed":

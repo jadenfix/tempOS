@@ -9,6 +9,7 @@ pub(crate) fn event_kind(event: &JournalEvent) -> &'static str {
         JournalEvent::SessionCreated { .. } => "session_created",
         JournalEvent::SessionStatusChanged { .. } => "session_status_changed",
         JournalEvent::CapabilityGranted { .. } => "capability_granted",
+        JournalEvent::CapabilityRevoked { .. } => "capability_revoked",
         JournalEvent::PaymentMandateIssued { .. } => "payment_mandate_issued",
         JournalEvent::ActionProposed { .. } => "action_proposed",
         JournalEvent::PolicyDecided { .. } => "policy_decided",

@@ -26,6 +26,12 @@ pub enum JournalEvent {
     CapabilityGranted {
         grant: CapabilityGrant,
     },
+    CapabilityRevoked {
+        grant_id: String,
+        revocation_handle: String,
+        revoked_by: String,
+        reason: String,
+    },
     PaymentMandateIssued {
         mandate: PaymentMandate,
     },
@@ -204,6 +210,8 @@ struct CausalityState {
     receipt_chain: Vec<CapabilityReceipt>,
     prior_event_ids: BTreeSet<String>,
     transition_ids: BTreeSet<String>,
+    issued_revocation_handles: BTreeSet<String>,
+    revoked_handles: BTreeSet<String>,
 }
 
 fn verify_event_causality(
@@ -265,9 +273,73 @@ fn verify_event_causality(
                 .insert(session_id.clone(), to.clone());
         }
         JournalEvent::CapabilityGranted { grant } => {
+            if grant.revocation_handle == grant.grant_id {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "grant {} revocation handle must not equal the grant event id",
+                        grant.grant_id
+                    ),
+                );
+            }
+            if state.prior_event_ids.contains(&grant.revocation_handle) {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "grant {} revocation handle {} collides with a prior journal event id",
+                        grant.grant_id, grant.revocation_handle
+                    ),
+                );
+            }
+            if !state
+                .issued_revocation_handles
+                .insert(grant.revocation_handle.clone())
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "grant {} revocation handle {} was already issued",
+                        grant.grant_id, grant.revocation_handle
+                    ),
+                );
+            }
             state
                 .issued_grants
                 .insert(grant.grant_id.clone(), grant.clone());
+        }
+        JournalEvent::CapabilityRevoked {
+            grant_id,
+            revocation_handle,
+            revoked_by,
+            reason,
+        } => {
+            if revoked_by.trim().is_empty() {
+                return causality_error(record.seq, "revocation actor is empty".to_string());
+            }
+            if reason.trim().is_empty() {
+                return causality_error(record.seq, "revocation reason is empty".to_string());
+            }
+            let Some(grant) = state.issued_grants.get(grant_id) else {
+                return causality_error(
+                    record.seq,
+                    format!("revocation references grant {grant_id} before it was issued"),
+                );
+            };
+            if grant.revocation_handle != *revocation_handle {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "revocation for grant {grant_id} uses handle {revocation_handle}, expected {}",
+                        grant.revocation_handle
+                    ),
+                );
+            }
+            if !state.revoked_handles.insert(revocation_handle.clone()) {
+                return causality_error(
+                    record.seq,
+                    format!("revocation handle {revocation_handle} was recorded more than once"),
+                );
+            }
         }
         JournalEvent::ActionProposed { manifest } => {
             if state
@@ -305,6 +377,29 @@ fn verify_event_causality(
                 .latest_decision_by_action
                 .insert(decision.action_id.clone(), decision.result.clone());
             if decision.result == DecisionResult::Allowed {
+                for required in &manifest.required_grants {
+                    let Some(grant) = state.issued_grants.get(required) else {
+                        continue;
+                    };
+                    if grant.revoked || state.revoked_handles.contains(&grant.revocation_handle) {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "allowed decision {} references revoked grant {}",
+                                decision.decision_id, required
+                            ),
+                        );
+                    }
+                    if grant.expires_at <= record.created_at {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "allowed decision {} references expired grant {}",
+                                decision.decision_id, required
+                            ),
+                        );
+                    }
+                }
                 state
                     .allowed_decisions
                     .insert(decision.action_id.clone(), decision.manifest_hash.clone());
@@ -529,6 +624,9 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
         JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
         JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::CapabilityRevoked {
+            revocation_handle, ..
+        } => Some(revocation_handle.as_str()),
         JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),

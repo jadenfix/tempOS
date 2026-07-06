@@ -62,6 +62,15 @@ fn summarize_event(event: &JournalEvent) -> String {
             grant.scope.actions,
             grant.expires_at.to_rfc3339(),
         ),
+        JournalEvent::CapabilityRevoked {
+            grant_id,
+            revocation_handle,
+            revoked_by,
+            reason,
+        } => format!(
+            "grant={} handle={} revoked_by={} reason={:?}",
+            grant_id, revocation_handle, revoked_by, reason
+        ),
         JournalEvent::PaymentMandateIssued { mandate } => format!(
             "mandate={} holder={} rail={} asset={} max={} adapters={:?} formats={:?} expires={}",
             mandate.mandate_id,

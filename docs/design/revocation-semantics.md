@@ -2,7 +2,7 @@
 
 Status: design spec. Closes the gap tracked in **issue #10**. Grounded in the
 merged `crates/beater-os-core` code (`CapabilityGrant`, `AdmissionContext`,
-policy admission). Does not edit `final.md`.
+policy admission) and the daemon journal runtime.
 
 Revocation is never-compromise (`final.md` §26) and appears throughout (§6.2
 "revoked through indirection", §12.2 "revoked grants fail closed", §13.15
@@ -19,9 +19,10 @@ A grant carries a `revocation_handle` and (new in this slice) an optional
 1. **Direct** — the grant's own `revoked` flag is `true`, or its `expires_at`
    has passed (`CapabilityGrant::is_active_at`).
 2. **Registry / epoch** — the grant's `revocation_handle` is present in
-   `AdmissionContext.revoked_handles`. This is the out-of-band case and the
-   common one: you revoke a grant you already handed out without mutating the
-   stored copy the agent holds.
+   `AdmissionContext.revoked_handles`. The daemon writes this as an append-only
+   `CapabilityRevoked` journal event by resolving a stored `grant_id` to its
+   stored handle; replay and external operators may also provide a monotonic
+   overlay epoch.
 
 `revoked_handles` is the **monotonic revocation epoch**: it only grows. Because
 admission is a pure function of `(manifest, ctx)` and the epoch never shrinks, a
@@ -87,8 +88,10 @@ time?) are orthogonal, and only the former is affected by revocation.
 
 **Implemented in code:** `parent_grant_id` on the grant, `revoked_handles` on the
 admission context, transitive chain liveness (cycle- and missing-ancestor-safe),
-and the admission denial with matched rule `grant_delegation_chain_active`. The
-JSON schemas gain the optional `parent_grant_id`.
+durable daemon `CapabilityRevoked` events, CLI `grant revoke`, daemon projection
+of revoked handles into admission, and the admission denial with matched rule
+`grant_delegation_chain_active`. The JSON schemas include `parent_grant_id` and
+the `capability_revoked` journal event.
 
 **Deferred (documented here, not coded):** the runtime abort path for uncommitted
 side effects and the compensation trigger for committed ones live in the

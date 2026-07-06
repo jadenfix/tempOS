@@ -13,7 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot, SessionStatus,
+    ActionManifest, CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot,
+    SessionStatus,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -468,23 +469,74 @@ fn check_grant_references(snapshot: &JournalSnapshot) -> CheckResult {
     )
 }
 
-/// A grant named by an action must be neither revoked nor expired at the moment
-/// the action is proposed. `final.md` §26 lists revocation as a never-compromise
-/// invariant: the core admission path enforces `is_active_at` live, but the
-/// offline journal verifier does not re-check it, so an audit would otherwise
-/// miss a use-after-revoke or use-after-expiry trace. This re-derives it.
-///
-/// The journal has no explicit revocation event today, so this reads the
-/// `revoked` flag and `expires_at` recorded on the grant at issuance. If a
-/// revocation event type is added later, this check should also honor it.
+/// A grant named by an allowed action must be neither revoked nor expired at the
+/// decision point. Denied proposals after revocation are valid audit evidence;
+/// only an `Allowed` decision after revocation is a use-after-revoke failure.
 fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
     let mut grants: BTreeMap<&str, &CapabilityGrant> = BTreeMap::new();
+    let mut issued_revocation_handles: BTreeSet<&str> = BTreeSet::new();
+    let mut prior_event_ids: BTreeSet<&str> = BTreeSet::new();
+    let mut revoked_handles: BTreeSet<&str> = BTreeSet::new();
+    let mut proposed: BTreeMap<&str, &ActionManifest> = BTreeMap::new();
     for record in &snapshot.records {
         match &record.event {
             JournalEvent::CapabilityGranted { grant } => {
+                if prior_event_ids.contains(grant.revocation_handle.as_str()) {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!(
+                            "grant {} revocation handle {} collides with a prior journal event id",
+                            grant.grant_id, grant.revocation_handle
+                        ),
+                    );
+                }
+                if !issued_revocation_handles.insert(grant.revocation_handle.as_str()) {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!(
+                            "grant {} revocation handle {} was already issued",
+                            grant.grant_id, grant.revocation_handle
+                        ),
+                    );
+                }
                 grants.insert(grant.grant_id.as_str(), grant);
             }
+            JournalEvent::CapabilityRevoked {
+                grant_id,
+                revocation_handle,
+                ..
+            } => {
+                let Some(grant) = grants.get(grant_id.as_str()) else {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!("revocation references grant {grant_id} before it was issued"),
+                    );
+                };
+                if grant.revocation_handle != *revocation_handle {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!(
+                            "revocation for grant {grant_id} uses handle {revocation_handle}, expected {}",
+                            grant.revocation_handle
+                        ),
+                    );
+                }
+                if !revoked_handles.insert(revocation_handle.as_str()) {
+                    return CheckResult::fail(
+                        "grant_validity",
+                        format!("revocation handle {revocation_handle} appears more than once"),
+                    );
+                }
+            }
             JournalEvent::ActionProposed { manifest } => {
+                proposed.insert(manifest.action_id.as_str(), manifest.as_ref());
+            }
+            JournalEvent::PolicyDecided { decision }
+                if decision.result == DecisionResult::Allowed =>
+            {
+                let Some(manifest) = proposed.get(decision.action_id.as_str()) else {
+                    continue;
+                };
                 for required in &manifest.required_grants {
                     // Existence is `grant_references`' job; do not double-report.
                     let Some(grant) = grants.get(required.as_str()) else {
@@ -494,8 +546,17 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
                         return CheckResult::fail(
                             "grant_validity",
                             format!(
-                                "action {} uses revoked grant {required}",
-                                manifest.action_id
+                                "allowed decision {} uses revoked grant {required}",
+                                decision.decision_id
+                            ),
+                        );
+                    }
+                    if revoked_handles.contains(grant.revocation_handle.as_str()) {
+                        return CheckResult::fail(
+                            "grant_validity",
+                            format!(
+                                "allowed decision {} uses revoked grant {required}",
+                                decision.decision_id
                             ),
                         );
                     }
@@ -503,8 +564,8 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
                         return CheckResult::fail(
                             "grant_validity",
                             format!(
-                                "action {} at {} uses grant {required} that expired at {}",
-                                manifest.action_id,
+                                "allowed decision {} at {} uses grant {required} that expired at {}",
+                                decision.decision_id,
                                 record.created_at.to_rfc3339(),
                                 grant.expires_at.to_rfc3339()
                             ),
@@ -513,6 +574,9 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
                 }
             }
             _ => {}
+        }
+        if let Some(event_id) = primary_event_id(record) {
+            prior_event_ids.insert(event_id);
         }
     }
     CheckResult::pass(
@@ -609,6 +673,9 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
         JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
         JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::CapabilityRevoked {
+            revocation_handle, ..
+        } => Some(revocation_handle.as_str()),
         JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
