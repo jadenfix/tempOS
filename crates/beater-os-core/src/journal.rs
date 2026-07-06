@@ -260,7 +260,9 @@ fn verify_event_causality(
                     format!("illegal session transition {transition_id}: {from:?} -> {to:?}"),
                 );
             }
-            state.session_statuses.insert(session_id.clone(), to.clone());
+            state
+                .session_statuses
+                .insert(session_id.clone(), to.clone());
         }
         JournalEvent::CapabilityGranted { grant } => {
             state

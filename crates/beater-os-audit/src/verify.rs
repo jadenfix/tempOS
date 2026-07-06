@@ -272,7 +272,11 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
                         format!("session transition {transition_id} appears more than once"),
                     );
                 }
-                Some(("session transition", transition_id.as_str(), session_id.as_str()))
+                Some((
+                    "session transition",
+                    transition_id.as_str(),
+                    session_id.as_str(),
+                ))
             }
             JournalEvent::CapabilityGranted { grant } => {
                 Some(("grant", grant.grant_id.as_str(), grant.session_id.as_str()))

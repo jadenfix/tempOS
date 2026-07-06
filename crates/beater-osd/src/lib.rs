@@ -274,8 +274,10 @@ impl Store {
             let projection = self.project_unlocked(session_id)?;
             let from = projection.session.status.clone();
             let to = next_session_status(transition, &from)?;
-            let transition_id =
-                format!("session:{session_id}:transition:{}", journal.records().len());
+            let transition_id = format!(
+                "session:{session_id}:transition:{}",
+                journal.records().len()
+            );
             let record = journal.append(
                 JournalEvent::SessionStatusChanged {
                     transition_id,

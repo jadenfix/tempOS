@@ -388,11 +388,11 @@ fn interleaved_grant_and_lifecycle_preserve_order_and_chain() {
     assert_eq!(
         event_kinds(&session),
         vec![
-            "session_created",    // create
-            "capability_granted", // grant-1
+            "session_created",        // create
+            "capability_granted",     // grant-1
             "session_status_changed", // pause
             "session_status_changed", // resume
-            "capability_granted", // grant-2
+            "capability_granted",     // grant-2
             "session_status_changed", // cancel
         ]
     );
