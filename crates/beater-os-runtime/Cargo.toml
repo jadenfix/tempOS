@@ -1,0 +1,18 @@
+[package]
+name = "beater-os-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed agent runtime loop over the beaterOS daemon store."
+
+[dependencies]
+beater-os-core = { path = "../beater-os-core" }
+beater-osd = { path = "../beater-osd" }
+chrono.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

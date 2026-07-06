@@ -33,6 +33,10 @@ review boundaries.
 - `crates/beater-os-tool-gateway`
   - Registered-tool resolution, kernel-derived manifest construction, daemon
     admission, sandbox execution, and receipt append for local shell tools.
+- `crates/beater-os-runtime`
+  - Typed agent runtime loop over the daemon store: session bootstrap, bounded
+    grant issuance, sequential step admission, and no-side-effect observation
+    receipts.
 - `crates/beater-os-audit`
   - Trace/receipt validation, integrity reporting, and replay tooling.
 

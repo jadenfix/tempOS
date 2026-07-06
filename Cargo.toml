@@ -6,6 +6,7 @@ members = [
     "crates/beater-os-sandbox",
     "crates/beater-os-session",
     "crates/beater-os-tool-gateway",
+    "crates/beater-os-runtime",
     "crates/beater-osd",
     "crates/beater-os-tool-registry",
     "crates/beater-os-scenario",

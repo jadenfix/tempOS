@@ -103,6 +103,12 @@ fn default_tool_registry() -> BTreeMap<String, ToolManifest> {
             false,
         ),
         tool_manifest(
+            "tool:beater-os-runtime",
+            RiskClass::Low,
+            [SideEffectClass::None],
+            false,
+        ),
+        tool_manifest(
             "tool:payment",
             RiskClass::High,
             [SideEffectClass::Payment],
