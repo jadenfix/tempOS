@@ -32,12 +32,17 @@ the same code path that *produced* it. It re-derives the audit invariants from
   (`final.md` §6.6, §13.15).
 - **`beateros-audit` binary** — `verify` / `show` / `metrics` / `bundle` a
   journal snapshot from a file or stdin.
+- **Expected-root verification** — `verify --expected-root <hash>` compares the
+  snapshot root against an external anchor, so a valid prefix or coherent
+  re-hash can be detected relative to the trusted hand-off value.
 
 ## CLI
 
 ```sh
 # exit non-zero if any independent audit check fails
 beateros-audit verify snapshot.json
+# require the snapshot to match an externally anchored root hash
+beateros-audit verify --expected-root <root-hash> snapshot.json
 # print a legible timeline
 beateros-audit show snapshot.json
 # coverage metrics as JSON

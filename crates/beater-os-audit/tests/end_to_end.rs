@@ -8,6 +8,10 @@
 //! denial, tampered hash).
 
 use std::collections::BTreeSet;
+use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 
 use beater_os_core::{
     ActionKind, ActionManifest, ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant,
@@ -17,7 +21,10 @@ use beater_os_core::{
 };
 use chrono::{DateTime, Utc};
 
-use beater_os_audit::{build_bundle, compute_metrics, render_trace, verify_snapshot};
+use beater_os_audit::{
+    CheckOutcome, build_bundle, compute_metrics, render_trace, snapshot_root_hash,
+    verify_expected_root, verify_snapshot,
+};
 
 fn ts(secs: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(secs, 0).unwrap_or_else(Utc::now)
@@ -176,6 +183,29 @@ fn valid_snapshot() -> Result<JournalSnapshot, BeaterOsError> {
     Ok(journal.snapshot())
 }
 
+struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    fn snapshot(snapshot: &JournalSnapshot, tag: &str) -> Result<Self, Box<dyn Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "beateros-audit-{tag}-{}-{}.json",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let json = serde_json::to_vec(snapshot)?;
+        fs::write(&path, json)?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 #[test]
 fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
     let snapshot = valid_snapshot()?;
@@ -219,12 +249,84 @@ fn trace_render_and_bundle_are_coherent() -> Result<(), BeaterOsError> {
 
     let bundle = build_bundle(&snapshot);
     assert_eq!(bundle.records, 5);
+    assert_eq!(bundle.root_hash, snapshot_root_hash(&snapshot));
     assert!(bundle.report.ok);
     assert_eq!(bundle.record_digests.len(), 5);
     // The bundle carries hashes and kinds but not raw event payloads.
     let json = beater_os_audit::bundle_to_json(&bundle)?;
     assert!(json.contains("session_created"));
     assert!(!json.contains("read /ws/demo/file.txt")); // inputs_summary is not exported
+    Ok(())
+}
+
+#[test]
+fn expected_root_anchor_accepts_matching_root() -> Result<(), BeaterOsError> {
+    let snapshot = valid_snapshot()?;
+    let root = snapshot_root_hash(&snapshot);
+    let check = verify_expected_root(&snapshot, &root);
+    assert_eq!(check.outcome, CheckOutcome::Pass);
+    assert!(check.detail.contains(&root));
+    Ok(())
+}
+
+#[test]
+fn expected_root_anchor_detects_truncation() -> Result<(), BeaterOsError> {
+    let full = valid_snapshot()?;
+    let full_root = snapshot_root_hash(&full);
+    let mut truncated = full.clone();
+    truncated.records.pop();
+
+    let check = verify_expected_root(&truncated, &full_root);
+    assert_eq!(check.outcome, CheckOutcome::Fail);
+    assert!(check.detail.contains("mismatch"));
+    assert!(check.detail.contains(&full_root));
+    Ok(())
+}
+
+#[test]
+fn cli_verify_expected_root_succeeds_for_matching_anchor() -> Result<(), Box<dyn Error>> {
+    let snapshot = valid_snapshot()?;
+    let root = snapshot_root_hash(&snapshot);
+    let file = TempFile::snapshot(&snapshot, "match")?;
+    let path = file.path.display().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_beateros-audit"))
+        .args(["verify", "--expected-root", &root, &path])
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "expected success, stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("expected_root"));
+    assert!(stdout.contains("OK: 5 record(s) passed all audit checks"));
+    Ok(())
+}
+
+#[test]
+fn cli_verify_expected_root_fails_for_mismatched_anchor() -> Result<(), Box<dyn Error>> {
+    let snapshot = valid_snapshot()?;
+    let file = TempFile::snapshot(&snapshot, "mismatch")?;
+    let path = file.path.display().to_string();
+    let wrong_root = "f".repeat(64);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_beateros-audit"))
+        .args(["verify", "--expected-root", &wrong_root, &path])
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "expected failure, stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("expected_root"));
+    assert!(stdout.contains("snapshot root mismatch"));
+    assert!(stdout.contains("FAIL: 1 check(s) failed"));
     Ok(())
 }
 

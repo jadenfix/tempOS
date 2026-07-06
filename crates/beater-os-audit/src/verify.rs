@@ -198,6 +198,44 @@ fn check_memory_provenance(snapshot: &JournalSnapshot) -> CheckResult {
     )
 }
 
+/// Hash of the last record, or the genesis hash for an empty snapshot.
+///
+/// This is the value an external transparency log, signed bundle, incident
+/// ticket, or hand-off manifest must anchor if it wants to detect truncation or
+/// a coherent full re-hash. Internal chain verification can prove consistency;
+/// only an expected external root proves this is the same chain the reviewer
+/// intended to audit.
+pub fn snapshot_root_hash(snapshot: &JournalSnapshot) -> String {
+    snapshot
+        .records
+        .last()
+        .map(|record| record.hash.clone())
+        .unwrap_or_else(|| GENESIS_HASH.to_string())
+}
+
+/// Compare a snapshot's root hash against an externally trusted anchor.
+pub fn verify_expected_root(snapshot: &JournalSnapshot, expected_root: &str) -> CheckResult {
+    if expected_root.trim().is_empty() {
+        return CheckResult::fail(
+            "expected_root",
+            "expected root anchor must not be empty".to_string(),
+        );
+    }
+
+    let actual = snapshot_root_hash(snapshot);
+    if actual == expected_root {
+        CheckResult::pass(
+            "expected_root",
+            format!("snapshot root matches expected anchor {expected_root}"),
+        )
+    } else {
+        CheckResult::fail(
+            "expected_root",
+            format!("snapshot root mismatch: expected {expected_root}, actual {actual}"),
+        )
+    }
+}
+
 /// Canonical hash pre-image for a journal record.
 ///
 /// This is an independent re-declaration of the exact field set and order that
