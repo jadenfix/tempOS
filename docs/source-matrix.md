@@ -142,6 +142,18 @@ current-version claim.
 | Python downloads page, Python 3.14.6, 2026-06-10: https://www.python.org/downloads/ | Audit/research script runtime freshness | Python scripts must remain bounded and non-authoritative |
 | NVIDIA CUDA Programming Guide: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html | GPU programming model, memory hierarchy, streams, launch/occupancy vocabulary | CUDA is a backend, not the OS contract |
 
+## Eval Statistics Inputs
+
+These sources support `final.md` §14.9 and
+`docs/design/eval-statistical-method.md`. They define how beaterOS release gates
+avoid single-run point estimates for probabilistic agents.
+
+| Source | beaterOS use | Caveat |
+| --- | --- | --- |
+| tau-bench, `arXiv:2406.12045`, submitted 2024-06-17: https://arxiv.org/abs/2406.12045 | pass^k reliability metric for repeated agent trials; motivates reporting reliability across k consecutive successes | Benchmark domains are not beaterOS requirements; the metric is the reusable input |
+| Adding Error Bars to Evals, `arXiv:2411.00640`, submitted 2024-11-01: https://arxiv.org/abs/2411.00640 | Error bars, paired model comparisons, and experiment-planning discipline for language-model evals | Preprint guidance; beaterOS still needs local gate calibration |
+| Sequential Testing for Early Stopping of Online Experiments, SIGIR 2015: https://dl.acm.org/doi/10.1145/2766462.2767729 | Sequential stopping pattern so expensive multi-trial agent evals can stop once evidence is decisive | Online-experiment setting, not agent-specific; gate configs must declare stopping rules before runs |
+
 ## Maintenance Rules
 
 When adding a source:

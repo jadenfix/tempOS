@@ -2243,6 +2243,8 @@ Agents are probabilistic, so eval gates decided on single-run point estimates pa
 - The eval runner supports sequential stopping: stop once the confidence interval clears the gate threshold. This is what makes multi-sampling affordable — agent runs are expensive, and sequential designs cut trial counts substantially in A/B practice.
 - Trace metrics (section 14.4) report distributions — p50, p95, p99 — not means.
 
+The `ScenarioManifest` remains the task fixture; trial counts, pass^k targets, confidence targets, and stopping rules live in release-gate configuration so the same scenario can be reused across smoke, core, and irreversible-action gates.
+
 (Issue #50.)
 
 ## 15. Next-Generation Model Support
