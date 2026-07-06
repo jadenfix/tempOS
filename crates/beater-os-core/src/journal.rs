@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -112,6 +112,10 @@ impl InMemoryJournal {
         created_at: DateTime<Utc>,
     ) -> BeaterOsResult<JournalRecord> {
         let seq = self.records.len() as u64;
+        if let JournalEvent::MemoryWritten { memory } = &event {
+            let known_event_ids = self.records.iter().filter_map(primary_event_id);
+            validate_memory_source(memory, seq, known_event_ids)?;
+        }
         let prev_hash = self
             .records
             .last()
@@ -191,6 +195,7 @@ struct CausalityState {
     review_ids: BTreeMap<String, ()>,
     simulation_ids: BTreeMap<String, ()>,
     receipt_chain: Vec<CapabilityReceipt>,
+    prior_event_ids: BTreeSet<String>,
 }
 
 fn verify_event_causality(
@@ -436,11 +441,62 @@ fn verify_event_causality(
             state.receipt_chain.push(receipt.clone());
             ReceiptLedger::from_receipts(state.receipt_chain.clone()).verify_chain()?;
         }
+        JournalEvent::MemoryWritten { memory } => {
+            validate_memory_source(
+                memory,
+                record.seq,
+                state.prior_event_ids.iter().map(String::as_str),
+            )?;
+        }
         JournalEvent::SessionCreated { .. }
         | JournalEvent::PaymentMandateIssued { .. }
-        | JournalEvent::MemoryWritten { .. }
         | JournalEvent::ScenarioEvaluated { .. }
         | JournalEvent::IncidentAnnotated { .. } => {}
+    }
+    if let Some(event_id) = primary_event_id(record) {
+        state.prior_event_ids.insert(event_id.to_string());
+    }
+    Ok(())
+}
+
+fn primary_event_id(record: &JournalRecord) -> Option<&str> {
+    match &record.event {
+        JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
+        JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
+        JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
+        JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
+        JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
+        JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
+        JournalEvent::MemoryWritten { memory } => Some(memory.memory_id.as_str()),
+        JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
+        JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
+    }
+}
+
+fn validate_memory_source<'a>(
+    memory: &MemoryRecord,
+    seq: u64,
+    known_event_ids: impl Iterator<Item = &'a str>,
+) -> BeaterOsResult<()> {
+    if memory.source_event_id.trim().is_empty() {
+        return causality_error(
+            seq,
+            format!("memory {} has an empty source_event_id", memory.memory_id),
+        );
+    }
+    if !known_event_ids
+        .into_iter()
+        .any(|id| id == memory.source_event_id)
+    {
+        return causality_error(
+            seq,
+            format!(
+                "memory {} references unknown source event {}",
+                memory.memory_id, memory.source_event_id
+            ),
+        );
     }
     Ok(())
 }

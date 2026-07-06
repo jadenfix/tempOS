@@ -71,6 +71,7 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 use beater_os_core::{DataClass, MemoryRecord};
 use beater_os_core::{HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot};
@@ -342,18 +343,25 @@ pub fn project_with_redactions(
             None => false,
         };
 
-        // Last-writer-wins: a later `MemoryWritten` for the same id replaces the
-        // earlier projection (keyed insert overwrites), so `memory_id` stays
-        // unique and provenance points at the winning record.
-        memories.insert(
-            memory.memory_id.clone(),
-            ProjectedMemory {
-                record: projected_record,
-                provenance,
-                expired,
-                redacted,
-            },
-        );
+        // Last-writer-wins by journal seq, not caller iteration order. This
+        // keeps raw record vectors deterministic even if the caller hands us an
+        // out-of-order slice.
+        let projected = ProjectedMemory {
+            record: projected_record,
+            provenance,
+            expired,
+            redacted,
+        };
+        match memories.entry(memory.memory_id.clone()) {
+            Entry::Vacant(slot) => {
+                slot.insert(projected);
+            }
+            Entry::Occupied(mut slot) => {
+                if record.seq >= slot.get().provenance.journal_seq {
+                    slot.insert(projected);
+                }
+            }
+        }
     }
 
     MemoryProjection {
