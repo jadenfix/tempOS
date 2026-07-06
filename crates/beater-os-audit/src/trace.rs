@@ -44,6 +44,15 @@ fn summarize_event(event: &JournalEvent) -> String {
             "session={} agent={} by={} goal={:?}",
             session.session_id, session.agent_id, session.created_by, session.goal
         ),
+        JournalEvent::SessionStatusChanged {
+            transition_id,
+            session_id,
+            from,
+            to,
+        } => format!(
+            "transition={} session={} {:?}->{:?}",
+            transition_id, session_id, from, to
+        ),
         JournalEvent::CapabilityGranted { grant } => format!(
             "grant={} holder={} scope={:?}:{} actions={:?} expires={}",
             grant.grant_id,

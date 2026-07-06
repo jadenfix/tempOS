@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
     ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult, MemoryRecord,
-    PaymentMandate, PolicyDecision, ScenarioManifest, SimulationEvidence,
+    PaymentMandate, PolicyDecision, ScenarioManifest, SessionStatus, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
@@ -16,6 +16,12 @@ use crate::receipt::{CapabilityReceipt, ReceiptLedger};
 pub enum JournalEvent {
     SessionCreated {
         session: AgentSession,
+    },
+    SessionStatusChanged {
+        transition_id: String,
+        session_id: String,
+        from: SessionStatus,
+        to: SessionStatus,
     },
     CapabilityGranted {
         grant: CapabilityGrant,
@@ -188,6 +194,7 @@ impl InMemoryJournal {
 
 #[derive(Default)]
 struct CausalityState {
+    session_statuses: BTreeMap<String, SessionStatus>,
     proposed_actions: BTreeMap<String, ActionManifest>,
     issued_grants: BTreeMap<String, CapabilityGrant>,
     allowed_decisions: BTreeMap<String, HashValue>,
@@ -196,6 +203,7 @@ struct CausalityState {
     simulation_ids: BTreeMap<String, ()>,
     receipt_chain: Vec<CapabilityReceipt>,
     prior_event_ids: BTreeSet<String>,
+    transition_ids: BTreeSet<String>,
 }
 
 fn verify_event_causality(
@@ -203,6 +211,59 @@ fn verify_event_causality(
     state: &mut CausalityState,
 ) -> BeaterOsResult<()> {
     match &record.event {
+        JournalEvent::SessionCreated { session } => {
+            if state
+                .session_statuses
+                .insert(session.session_id.clone(), session.status.clone())
+                .is_some()
+            {
+                return causality_error(
+                    record.seq,
+                    format!("session {} was created more than once", session.session_id),
+                );
+            }
+        }
+        JournalEvent::SessionStatusChanged {
+            transition_id,
+            session_id,
+            from,
+            to,
+        } => {
+            if transition_id.trim().is_empty() {
+                return causality_error(record.seq, "session transition id is empty".to_string());
+            }
+            if !state.transition_ids.insert(transition_id.clone()) {
+                return causality_error(
+                    record.seq,
+                    format!("session transition {transition_id} was recorded more than once"),
+                );
+            }
+            let Some(current) = state.session_statuses.get(session_id) else {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "session transition {transition_id} references unknown session {session_id}"
+                    ),
+                );
+            };
+            if current != from {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "session transition {transition_id} from {from:?} does not match current status {current:?}"
+                    ),
+                );
+            }
+            if !valid_session_transition(from, to) {
+                return causality_error(
+                    record.seq,
+                    format!("illegal session transition {transition_id}: {from:?} -> {to:?}"),
+                );
+            }
+            state
+                .session_statuses
+                .insert(session_id.clone(), to.clone());
+        }
         JournalEvent::CapabilityGranted { grant } => {
             state
                 .issued_grants
@@ -448,13 +509,17 @@ fn verify_event_causality(
                 state.prior_event_ids.iter().map(String::as_str),
             )?;
         }
-        JournalEvent::SessionCreated { .. }
-        | JournalEvent::PaymentMandateIssued { .. }
+        JournalEvent::PaymentMandateIssued { .. }
         | JournalEvent::ScenarioEvaluated { .. }
         | JournalEvent::IncidentAnnotated { .. } => {}
     }
-    if let Some(event_id) = primary_event_id(record) {
-        state.prior_event_ids.insert(event_id.to_string());
+    if let Some(event_id) = primary_event_id(record)
+        && !state.prior_event_ids.insert(event_id.to_string())
+    {
+        return causality_error(
+            record.seq,
+            format!("journal event id {event_id} was recorded more than once"),
+        );
     }
     Ok(())
 }
@@ -462,6 +527,7 @@ fn verify_event_causality(
 fn primary_event_id(record: &JournalRecord) -> Option<&str> {
     match &record.event {
         JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
+        JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
         JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
         JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
@@ -469,10 +535,23 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
-        JournalEvent::MemoryWritten { memory } => Some(memory.memory_id.as_str()),
+        // Memory ids are mutable projection keys: `beater-os-memory` explicitly
+        // supports last-writer-wins rewrites for the same memory_id. They are
+        // therefore not unambiguous journal event ids for provenance.
+        JournalEvent::MemoryWritten { .. } => None,
         JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
         JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
     }
+}
+
+fn valid_session_transition(from: &SessionStatus, to: &SessionStatus) -> bool {
+    matches!(
+        (from, to),
+        (SessionStatus::Running, SessionStatus::Paused)
+            | (SessionStatus::Paused, SessionStatus::Running)
+            | (SessionStatus::Running, SessionStatus::Canceled)
+            | (SessionStatus::Paused, SessionStatus::Canceled)
+    )
 }
 
 fn validate_memory_source<'a>(

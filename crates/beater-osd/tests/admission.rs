@@ -343,6 +343,25 @@ fn registered_tool(
 }
 
 #[test]
+fn create_session_normalizes_genesis_status_to_running() {
+    let root = TempDir::new("session-genesis-status");
+    let store = Store::open(&root.path).unwrap();
+    let session_id = "sess_genesis_status";
+    let mut caller_session = session(&root, session_id);
+    caller_session.status = SessionStatus::Canceled;
+
+    store.create_session(&caller_session).unwrap();
+
+    let projected = store.project(session_id).unwrap();
+    assert_eq!(projected.session.status, SessionStatus::Running);
+    let journal = store.load_journal(session_id).unwrap();
+    assert!(matches!(
+        &journal.records()[0].event,
+        JournalEvent::SessionCreated { session } if session.status == SessionStatus::Running
+    ));
+}
+
+#[test]
 fn admit_action_appends_proposal_and_decision() {
     let (_root, store) = create_store_with_session("admit-allowed", "sess_admit");
     let session_id = "sess_admit";
@@ -506,8 +525,8 @@ fn execution_lock_excludes_lifecycle_transition_until_receipt_append() {
         .position(|record| {
             matches!(
                 &record.event,
-                JournalEvent::SessionCreated { session }
-                    if session.status == SessionStatus::Paused
+                JournalEvent::SessionStatusChanged { to, .. }
+                    if *to == SessionStatus::Paused
             )
         })
         .unwrap();
@@ -805,13 +824,14 @@ fn raw_grants_and_proposals_are_refused_by_public_append_event() {
     let (_root, store) = create_store_with_session("raw-authority", "sess_raw_authority");
     let session_id = "sess_raw_authority";
 
-    let mut rewritten = session(&TempDir::new("unused-session-builder"), session_id);
-    rewritten
-        .initial_capability_ids
-        .insert("grant-extra".to_string());
     let raw_session = store.append_event(
         session_id,
-        JournalEvent::SessionCreated { session: rewritten },
+        JournalEvent::SessionStatusChanged {
+            transition_id: "raw-transition".to_string(),
+            session_id: session_id.to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Paused,
+        },
         Utc::now(),
     );
     assert!(
@@ -854,19 +874,18 @@ fn raw_grants_and_proposals_are_refused_by_public_append_event() {
 }
 
 #[test]
-fn tampered_lifecycle_snapshot_cannot_rewrite_root_authority() {
+fn tampered_lifecycle_event_cannot_skip_legal_transition() {
     let (root, store) = create_store_with_initial("session-snapshot-tamper", "sess_tamper", []);
     let session_id = "sess_tamper";
     let mut journal = store.load_journal(session_id).unwrap();
-    let mut rewritten = session_with_initial(&root, session_id, ["grant-write"]);
-    rewritten.created_at = match &journal.records()[0].event {
-        JournalEvent::SessionCreated { session } => session.created_at,
-        _ => unreachable!("genesis is checked by store"),
-    };
-    rewritten.status = SessionStatus::Paused;
     let record = journal
         .append(
-            JournalEvent::SessionCreated { session: rewritten },
+            JournalEvent::SessionStatusChanged {
+                transition_id: "transition-tampered".to_string(),
+                session_id: session_id.to_string(),
+                from: SessionStatus::Running,
+                to: SessionStatus::Completed,
+            },
             Utc::now(),
         )
         .unwrap();
@@ -881,7 +900,38 @@ fn tampered_lifecycle_snapshot_cannot_rewrite_root_authority() {
     let result = store.load_journal(session_id);
 
     assert!(
-        matches!(result, Err(DaemonError::Refused(message)) if message.contains("immutable session authority"))
+        matches!(result, Err(DaemonError::Core(beater_os_core::BeaterOsError::JournalCausality { reason, .. })) if reason.contains("illegal session transition"))
+    );
+}
+
+#[test]
+fn tampered_journal_cannot_project_second_session_created_event() {
+    let (root, store) = create_store_with_initial("session-extra-genesis-tamper", "sess_real", []);
+    let session_id = "sess_real";
+    let mut journal = store.load_journal(session_id).unwrap();
+    let other_session = session(&root, "sess_other");
+    let record = journal
+        .append(
+            JournalEvent::SessionCreated {
+                session: other_session,
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    journal.verify_chain().unwrap();
+    let journal_path = root
+        .path
+        .join("sessions")
+        .join(session_id)
+        .join("journal.jsonl");
+    let mut file = OpenOptions::new().append(true).open(journal_path).unwrap();
+    writeln!(file, "{}", serde_json::to_string(&record).unwrap()).unwrap();
+
+    let result = store.project(session_id);
+
+    assert!(
+        matches!(result, Err(DaemonError::Refused(ref message)) if message.contains("SessionCreated for sess_other")),
+        "{result:?}"
     );
 }
 

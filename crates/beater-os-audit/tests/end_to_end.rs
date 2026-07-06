@@ -186,7 +186,7 @@ fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
         report.failures().collect::<Vec<_>>()
     );
     assert_eq!(report.records, 5);
-    assert_eq!(report.checks.len(), 8);
+    assert_eq!(report.checks.len(), 10);
     assert_eq!(report.failures().count(), 0);
     Ok(())
 }

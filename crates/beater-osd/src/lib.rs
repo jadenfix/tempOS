@@ -244,6 +244,8 @@ impl Store {
             if self.session_exists_unlocked(&session.session_id)? {
                 return Err(DaemonError::SessionExists(session.session_id.clone()));
             }
+            let mut session = session.clone();
+            session.status = SessionStatus::Running;
             fs::create_dir_all(self.session_dir(&session.session_id)?)?;
             File::create(self.journal_path(&session.session_id)?)?;
             File::create(self.receipts_path(&session.session_id)?)?;
@@ -261,8 +263,8 @@ impl Store {
     }
 
     /// Apply a daemon-owned session lifecycle transition under the per-session
-    /// writer lock. The current core journal has no dedicated lifecycle event,
-    /// so this records an authoritative session snapshot with the new status.
+    /// writer lock. Status changes are explicit journal events, not rewritten
+    /// session snapshots, so the genesis authority object remains immutable.
     pub fn transition_session(
         &self,
         session_id: &str,
@@ -271,12 +273,19 @@ impl Store {
     ) -> DaemonResult<JournalRecord> {
         self.with_session_lock(session_id, || {
             let mut journal = self.load_journal_unlocked(session_id)?;
-            let mut projection = self.project_unlocked(session_id)?;
-            projection.session.status =
-                next_session_status(transition, &projection.session.status)?;
+            let projection = self.project_unlocked(session_id)?;
+            let from = projection.session.status.clone();
+            let to = next_session_status(transition, &from)?;
+            let transition_id = format!(
+                "session:{session_id}:transition:{}",
+                journal.records().len()
+            );
             let record = journal.append(
-                JournalEvent::SessionCreated {
-                    session: projection.session,
+                JournalEvent::SessionStatusChanged {
+                    transition_id,
+                    session_id: session_id.to_string(),
+                    from,
+                    to,
                 },
                 created_at,
             )?;
@@ -301,8 +310,12 @@ impl Store {
         match event {
             JournalEvent::SessionCreated { .. } => {
                 return Err(DaemonError::Refused(
-                    "SessionCreated must be written through create_session or transition_session"
-                        .to_string(),
+                    "SessionCreated must be written through create_session".to_string(),
+                ));
+            }
+            JournalEvent::SessionStatusChanged { .. } => {
+                return Err(DaemonError::Refused(
+                    "SessionStatusChanged must be written through transition_session".to_string(),
                 ));
             }
             JournalEvent::CapabilityGranted { .. } => {
@@ -687,7 +700,6 @@ impl Store {
         let journal = InMemoryJournal::from_records(records);
         journal.verify_chain()?;
         ensure_genesis(session_id, &journal)?;
-        verify_session_snapshots(session_id, &journal)?;
         Ok(journal)
     }
 
@@ -720,7 +732,35 @@ impl Store {
         for record in journal.records() {
             match &record.event {
                 JournalEvent::SessionCreated { session: created } => {
+                    if created.session_id != session_id {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains SessionCreated for {}",
+                            created.session_id
+                        )));
+                    }
+                    if session.is_some() {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains more than one SessionCreated event"
+                        )));
+                    }
                     session = Some(created.clone());
+                }
+                JournalEvent::SessionStatusChanged {
+                    session_id: event_session_id,
+                    to,
+                    ..
+                } => {
+                    if event_session_id != session_id {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains status transition for {event_session_id}"
+                        )));
+                    }
+                    let Some(projected) = session.as_mut() else {
+                        return Err(DaemonError::Refused(format!(
+                            "session transition for {event_session_id} appears before SessionCreated"
+                        )));
+                    };
+                    projected.status = to.clone();
                 }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
                 JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
@@ -862,64 +902,6 @@ fn ensure_genesis(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<(
     }
 }
 
-fn verify_session_snapshots(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<()> {
-    let Some(first_record) = journal.records().first() else {
-        return Err(DaemonError::SessionNotFound(session_id.to_string()));
-    };
-    let JournalEvent::SessionCreated { session: baseline } = &first_record.event else {
-        return Err(DaemonError::Refused(format!(
-            "session {session_id} journal does not start with SessionCreated"
-        )));
-    };
-
-    let mut current_status = baseline.status.clone();
-    for record in journal.records().iter().skip(1) {
-        let JournalEvent::SessionCreated { session } = &record.event else {
-            continue;
-        };
-        if !same_session_identity_and_authority(baseline, session) {
-            return Err(DaemonError::Refused(format!(
-                "session {session_id} lifecycle snapshot at seq {} changes immutable session authority",
-                record.seq
-            )));
-        }
-        if !valid_status_step(&current_status, &session.status) {
-            return Err(DaemonError::Refused(format!(
-                "session {session_id} lifecycle snapshot at seq {} has illegal status transition {:?} -> {:?}",
-                record.seq, current_status, session.status
-            )));
-        }
-        current_status = session.status.clone();
-    }
-    Ok(())
-}
-
-fn same_session_identity_and_authority(left: &AgentSession, right: &AgentSession) -> bool {
-    left.session_id == right.session_id
-        && left.created_at == right.created_at
-        && left.created_by == right.created_by
-        && left.agent_id == right.agent_id
-        && left.workspace_id == right.workspace_id
-        && left.goal == right.goal
-        && left.constraints == right.constraints
-        && left.policy_profile == right.policy_profile
-        && left.initial_capability_ids == right.initial_capability_ids
-        && left.budget == right.budget
-        && left.model_policy == right.model_policy
-        && left.memory_scope == right.memory_scope
-        && left.journal_root == right.journal_root
-}
-
-fn valid_status_step(current: &SessionStatus, next: &SessionStatus) -> bool {
-    matches!(
-        (current, next),
-        (SessionStatus::Running, SessionStatus::Paused)
-            | (SessionStatus::Paused, SessionStatus::Running)
-            | (SessionStatus::Running, SessionStatus::Canceled)
-            | (SessionStatus::Paused, SessionStatus::Canceled)
-    )
-}
-
 fn ensure_session_running(session: &AgentSession) -> DaemonResult<()> {
     if session.status == SessionStatus::Running {
         Ok(())
@@ -976,7 +958,35 @@ fn admission_state_from_journal(
     for record in journal.records() {
         match &record.event {
             JournalEvent::SessionCreated { session: created } => {
+                if created.session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains SessionCreated for {}",
+                        created.session_id
+                    )));
+                }
+                if session.is_some() {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains more than one SessionCreated event"
+                    )));
+                }
                 session = Some(created.clone());
+            }
+            JournalEvent::SessionStatusChanged {
+                session_id: event_session_id,
+                to,
+                ..
+            } => {
+                if event_session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains status transition for {event_session_id}"
+                    )));
+                }
+                let Some(projected) = session.as_mut() else {
+                    return Err(DaemonError::Refused(format!(
+                        "session transition for {event_session_id} appears before SessionCreated"
+                    )));
+                };
+                projected.status = to.clone();
             }
             JournalEvent::CapabilityGranted { grant } => {
                 grants.insert(grant.grant_id.clone(), grant.clone());

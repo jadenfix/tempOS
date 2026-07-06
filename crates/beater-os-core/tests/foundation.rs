@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, ApprovalMode,
     ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant, CapabilityReceipt,
     CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
     DelegationMode, GrantConstraints, HashValue, InMemoryJournal, JournalEvent, MemoryRecord,
     PaymentIntent, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind,
-    RiskClass, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest, hash_json,
+    RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest,
+    hash_json,
 };
 use chrono::{Duration, TimeZone, Utc};
 use serde::Serialize;
@@ -78,6 +79,25 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         revoked_handles: BTreeSet::new(),
         tool_registry: BTreeMap::new(),
         require_registered_tools: false,
+    }
+}
+
+fn session_fixture(status: SessionStatus) -> AgentSession {
+    AgentSession {
+        session_id: "session-1".to_string(),
+        created_at: fixed_time(),
+        created_by: "user:jaden".to_string(),
+        agent_id: "agent:beater-os".to_string(),
+        workspace_id: "workspace-1".to_string(),
+        goal: "exercise the session lifecycle".to_string(),
+        constraints: Vec::new(),
+        policy_profile: "policy-v1".to_string(),
+        initial_capability_ids: BTreeSet::new(),
+        budget: Budget::default(),
+        model_policy: Default::default(),
+        memory_scope: None,
+        journal_root: "root".to_string(),
+        status,
     }
 }
 
@@ -1272,6 +1292,64 @@ fn journal_rejects_decision_for_stale_manifest_hash() -> Result<(), Box<dyn std:
         now,
     )?;
     assert!(journal.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_accepts_legal_session_status_transition() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            transition_id: "transition-1".to_string(),
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Paused,
+        },
+        now + Duration::seconds(1),
+    )?;
+    journal.append(
+        JournalEvent::MemoryWritten {
+            memory: memory_record("mem-transition", "transition-1", now),
+        },
+        now + Duration::seconds(2),
+    )?;
+
+    assert!(journal.verify_chain().is_ok());
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_illegal_session_status_transition() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            transition_id: "transition-bad".to_string(),
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Completed,
+        },
+        now + Duration::seconds(1),
+    )?;
+
+    let err = journal.verify_chain().err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected lifecycle causality error");
+    };
+    assert!(reason.contains("illegal session transition"));
     Ok(())
 }
 
