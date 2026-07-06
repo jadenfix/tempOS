@@ -12,6 +12,8 @@ pub enum DaemonError {
     Json(#[from] serde_json::Error),
     #[error("core error: {0}")]
     Core(#[from] beater_os_core::BeaterOsError),
+    #[error("registry error: {0}")]
+    Registry(#[from] beater_os_tool_registry::RegistryError),
     #[error("invalid value for {field}: {value}")]
     Invalid { field: String, value: String },
     #[error("session not found: {0}")]

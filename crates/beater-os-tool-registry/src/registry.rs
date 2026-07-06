@@ -337,6 +337,22 @@ impl ToolRegistry {
             .insert(workspace_id.to_string(), set);
     }
 
+    /// Add one tool id to a workspace allowlist without dropping existing
+    /// entries. This is the durable-runtime mutation used by local operators
+    /// registering a new tool version for a workspace.
+    pub fn allow_workspace_tool(&mut self, workspace_id: &str, tool_id: impl Into<String>) {
+        let set = self
+            .workspace_allowlists
+            .entry(workspace_id.to_string())
+            .or_default();
+        if set.insert(tool_id.into()) {
+            self.events.push(RegistryEvent::WorkspaceAllowlistSet {
+                workspace_id: workspace_id.to_string(),
+                tool_ids: set.iter().cloned().collect(),
+            });
+        }
+    }
+
     /// Return whether a workspace has an explicit allowlist configured.
     ///
     /// `resolve` intentionally preserves an unrestricted global registry view

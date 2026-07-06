@@ -28,6 +28,9 @@ use beater_os_core::{
     ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
     ToolManifest,
 };
+use beater_os_tool_registry::{
+    RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
+};
 use chrono::{DateTime, Utc};
 
 pub use crate::error::{DaemonError, DaemonResult};
@@ -35,6 +38,8 @@ pub use crate::error::{DaemonError, DaemonResult};
 const SESSIONS_DIR: &str = "sessions";
 const JOURNAL_FILE: &str = "journal.jsonl";
 const RECEIPTS_FILE: &str = "receipts.jsonl";
+const TOOL_REGISTRY_FILE: &str = "tool-registry.json";
+const TOOL_REGISTRY_LOCK: &str = "tool-registry.lock";
 const LOCK_SUFFIX: &str = ".lock";
 /// Policy contract version enforced by daemon-owned authority writes.
 pub const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
@@ -148,6 +153,17 @@ pub struct SessionProjection {
     pub receipts: Vec<CapabilityReceipt>,
 }
 
+/// Exact local-shell tool version to persist in the daemon-owned tool registry.
+#[derive(Clone, Debug)]
+pub struct LocalShellToolRegistration {
+    pub workspace_id: String,
+    pub tool_id: String,
+    pub version: String,
+    pub content_digest: String,
+    pub side_effects: BTreeSet<SideEffectClass>,
+    pub risk_class: RiskClass,
+}
+
 impl SessionProjection {
     /// Grants that are active at `now`, projected from daemon-owned journal state.
     pub fn active_grants(&self, now: DateTime<Utc>) -> Vec<CapabilityGrant> {
@@ -215,6 +231,64 @@ impl Store {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Load the daemon-owned durable tool registry.
+    pub fn load_tool_registry(&self) -> DaemonResult<ToolRegistry> {
+        self.with_registry_lock(|| self.load_tool_registry_unlocked())
+    }
+
+    /// Register or confirm an exact local-shell tool version in the durable
+    /// registry, then allow it for one workspace.
+    ///
+    /// This is intentionally a store operation, not CLI-local state: the
+    /// gateway receives a registry loaded from durable daemon-owned storage, and
+    /// a conflicting version+digest fails closed rather than being silently
+    /// replaced by the caller.
+    pub fn register_local_shell_tool(
+        &self,
+        registration: LocalShellToolRegistration,
+    ) -> DaemonResult<ToolRegistry> {
+        self.with_registry_lock(|| {
+            let mut registry = self.load_tool_registry_unlocked()?;
+            match registry.get(&registration.tool_id, &registration.version) {
+                Ok(existing) if existing.content_digest != registration.content_digest => {
+                    return Err(DaemonError::Refused(format!(
+                        "registered tool {}@{} has digest {}, not requested {}",
+                        registration.tool_id,
+                        registration.version,
+                        existing.content_digest,
+                        registration.content_digest
+                    )));
+                }
+                Ok(_) => {}
+                Err(beater_os_tool_registry::RegistryError::Unregistered { .. }) => {
+                    registry.register(RegisteredTool {
+                        manifest: ToolManifest {
+                            tool_id: registration.tool_id.clone(),
+                            publisher: "beaterosd.local".to_string(),
+                            version: registration.version.clone(),
+                            transport: "local_shell".to_string(),
+                            required_capabilities: Vec::new(),
+                            side_effects: registration.side_effects.clone(),
+                            risk_class: registration.risk_class,
+                            sandbox_required: true,
+                        },
+                        content_digest: registration.content_digest.clone(),
+                        signature: None,
+                        test_status: TestStatus::Passing,
+                        trust: ToolTrust::Trusted,
+                        registered_at: Utc::now(),
+                        notes: "daemon-owned local shell registration".to_string(),
+                    })?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+            registry.pin(&registration.tool_id, &registration.version)?;
+            registry.allow_workspace_tool(&registration.workspace_id, registration.tool_id);
+            self.write_tool_registry_unlocked(&registry)?;
+            Ok(registry)
+        })
     }
 
     /// Whether a session exists and its journal genesis verifies.
@@ -826,6 +900,29 @@ impl Store {
         Ok(ledger)
     }
 
+    fn load_tool_registry_unlocked(&self) -> DaemonResult<ToolRegistry> {
+        let path = self.tool_registry_path();
+        if !path.is_file() {
+            return Ok(default_runtime_tool_registry());
+        }
+        Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    }
+
+    fn write_tool_registry_unlocked(&self, registry: &ToolRegistry) -> DaemonResult<()> {
+        fs::create_dir_all(&self.root)?;
+        let tmp_path = self.root.join(format!("{TOOL_REGISTRY_FILE}.tmp"));
+        let mut file = File::create(&tmp_path)?;
+        file.write_all(serde_json::to_string_pretty(registry)?.as_bytes())?;
+        file.write_all(
+            b"
+",
+        )?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(tmp_path, self.tool_registry_path())?;
+        Ok(())
+    }
+
     fn project_unlocked(&self, session_id: &str) -> DaemonResult<SessionProjection> {
         let journal = self.load_journal_unlocked(session_id)?;
         let mut session = None;
@@ -934,6 +1031,14 @@ impl Store {
         Ok(self.session_dir(session_id)?.join(RECEIPTS_FILE))
     }
 
+    fn tool_registry_path(&self) -> PathBuf {
+        self.root.join(TOOL_REGISTRY_FILE)
+    }
+
+    fn registry_lock_path(&self) -> PathBuf {
+        self.root.join(TOOL_REGISTRY_LOCK)
+    }
+
     fn lock_path(&self, session_id: &str) -> DaemonResult<PathBuf> {
         validate_session_id(session_id)?;
         Ok(self
@@ -951,8 +1056,17 @@ impl Store {
         f()
     }
 
+    fn with_registry_lock<T>(&self, f: impl FnOnce() -> DaemonResult<T>) -> DaemonResult<T> {
+        let _lock = self.acquire_lock_path(self.registry_lock_path(), "tool-registry")?;
+        f()
+    }
+
     fn acquire_session_lock(&self, session_id: &str) -> DaemonResult<SessionLock> {
         let path = self.lock_path(session_id)?;
+        self.acquire_lock_path(path, session_id)
+    }
+
+    fn acquire_lock_path(&self, path: PathBuf, label: &str) -> DaemonResult<SessionLock> {
         let deadline = Instant::now()
             .checked_add(self.options.lock_timeout)
             .unwrap_or_else(Instant::now);
@@ -962,7 +1076,7 @@ impl Store {
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     let now = Instant::now();
                     if now >= deadline {
-                        return Err(DaemonError::LockTimeout(session_id.to_string()));
+                        return Err(DaemonError::LockTimeout(label.to_string()));
                     }
                     let remaining = deadline.saturating_duration_since(now);
                     let poll = if self.options.lock_poll_interval.is_zero() {
@@ -976,6 +1090,13 @@ impl Store {
             }
         }
     }
+}
+
+fn default_runtime_tool_registry() -> ToolRegistry {
+    ToolRegistry::new(RegistryPolicy {
+        require_signature: false,
+        ..Default::default()
+    })
 }
 
 struct SessionLock {

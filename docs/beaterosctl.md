@@ -116,13 +116,14 @@ action, confined and fail-closed, via `beater-os-tool-gateway`,
 execute` turns an `Allowed` decision into a real OS process and emits a
 filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
 
-1. **Resolve a pinned local shell tool.** The CLI constructs an
-   invocation-scoped local registry entry for `--tool`, `--tool-version`, and the
-   exact local shell digest. Operators can pass `--tool-digest <sha256>` to pin
-   the expected executable+args+environment digest explicitly; otherwise the CLI
-   computes the digest for compatibility. The gateway recomputes the digest and
-   resolves the tool through `ToolRegistry` with an explicit workspace allowlist
-   before any action is admitted.
+1. **Resolve a pinned local shell tool.** The CLI asks the daemon store to
+   persist the exact `--tool` + `--tool-version` local shell digest in
+   `<home>/tool-registry.json`, under a bounded registry lock. Operators can
+   pass `--tool-digest <sha256>` to pin the expected executable+args+environment
+   digest explicitly; otherwise the CLI computes the digest for compatibility.
+   The gateway reloads the daemon-owned `ToolRegistry`, checks the workspace
+   allowlist, recomputes the digest, and resolves the pinned tool before any
+   action is admitted.
 2. **Canonicalize + confine.** The sandbox resolves `--cwd` with realpath
    (`std::fs::canonicalize`, following every symlink) and rejects it if it
    escapes the confinement prefix. The confinement prefix is derived from the
@@ -197,10 +198,9 @@ macOS local lane. Linux `seccomp`/Landlock/cgroups and container/VM lanes
 
 ## Scope boundary
 
-This crate deliberately does **not** implement a persistent daemon-owned tool
-registry yet. `action execute` now routes through the gateway and registry
-contracts using an invocation-scoped local registry entry; the durable registry
-service is a separate backlog slice. Richer lanes (network, container/VM,
-browser) remain future targets. The current CLI opens the `beater-osd` store
-in-process; the next runtime step is exposing the same store through a
-long-running local daemon API without changing the authority contract.
+`action execute` now routes through the gateway and a daemon-owned durable local
+tool registry file. Richer registry operations (signed remote publishers,
+operator review queues, network/container/VM/browser tool lanes) remain future
+targets. The current CLI opens the `beater-osd` store in-process; the next
+runtime step is exposing the same store through a long-running local daemon API
+without changing the authority contract.

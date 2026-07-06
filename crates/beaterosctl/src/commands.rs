@@ -10,10 +10,7 @@ use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environme
 use beater_os_tool_gateway::{
     GatewayError, LocalToolInvocation, execute_local_tool, local_shell_tool_digest_with_environment,
 };
-use beater_os_tool_registry::{
-    RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
-};
-use beater_osd::{DAEMON_POLICY_VERSION, SessionTransition, Store};
+use beater_osd::{DAEMON_POLICY_VERSION, LocalShellToolRegistration, SessionTransition, Store};
 use chrono::{DateTime, TimeDelta, Utc};
 use uuid::Uuid;
 
@@ -393,9 +390,8 @@ const DEFAULT_EXECUTE_TIMEOUT_SECS: u64 = 30;
 /// gateway owns registry resolution, confinement, manifest derivation,
 /// admission, sandbox execution, and receipt append (final.md §8, §10.6, §13.8).
 ///
-/// The current CLI builds an invocation-scoped in-memory registry entry so the
-/// runtime path already exercises registry resolution and workspace allowlists.
-/// A daemon-owned persistent registry is the next authority-boundary slice.
+/// The CLI asks the daemon store to persist the exact local-shell tool digest,
+/// then gives the gateway a registry loaded from daemon-owned durable storage.
 fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let session_id = require_session(store, args)?;
     let projection = store.project(&session_id)?;
@@ -479,14 +475,14 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         .get("tool-digest")
         .map(str::to_string)
         .unwrap_or_else(|| computed_digest.clone());
-    let registry = local_shell_registry(
-        &tool_id,
-        &tool_version,
-        &expected_tool_digest,
-        &projection.session.workspace_id,
-        &expected_side_effects,
+    let registry = store.register_local_shell_tool(LocalShellToolRegistration {
+        workspace_id: projection.session.workspace_id.clone(),
+        tool_id: tool_id.clone(),
+        version: tool_version.clone(),
+        content_digest: expected_tool_digest.clone(),
+        side_effects: expected_side_effects.clone(),
         risk_class,
-    )?;
+    })?;
 
     let outcome = execute_local_tool(
         store,
@@ -567,41 +563,6 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         receipt.receipt_id, receipt.receipt_hash
     ));
     Ok(out.join("\n"))
-}
-
-fn local_shell_registry(
-    tool_id: &str,
-    version: &str,
-    digest: &str,
-    workspace_id: &str,
-    side_effects: &BTreeSet<SideEffectClass>,
-    risk_class: RiskClass,
-) -> CliResult<ToolRegistry> {
-    let mut registry = ToolRegistry::new(RegistryPolicy {
-        require_signature: false,
-        ..Default::default()
-    });
-    registry.register(RegisteredTool {
-        manifest: ToolManifest {
-            tool_id: tool_id.to_string(),
-            publisher: "beaterosctl.local".to_string(),
-            version: version.to_string(),
-            transport: "local_shell".to_string(),
-            required_capabilities: Vec::new(),
-            side_effects: side_effects.clone(),
-            risk_class,
-            sandbox_required: true,
-        },
-        content_digest: digest.to_string(),
-        signature: None,
-        test_status: TestStatus::Passing,
-        trust: ToolTrust::Trusted,
-        registered_at: Utc::now(),
-        notes: "invocation-scoped local shell registry entry".to_string(),
-    })?;
-    registry.pin(tool_id, version)?;
-    registry.set_workspace_allowlist(workspace_id, [tool_id.to_string()]);
-    Ok(registry)
 }
 
 /// Canonicalize file-path authority before it is written into a grant.

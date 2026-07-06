@@ -111,6 +111,7 @@ name = "beater-osd"
 version = "0.1.0"
 dependencies = [
  "beater-os-core",
+ "beater-os-tool-registry",
  "chrono",
  "serde",
  "serde_json",
