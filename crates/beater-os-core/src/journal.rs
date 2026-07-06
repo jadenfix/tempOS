@@ -513,13 +513,13 @@ fn verify_event_causality(
         | JournalEvent::ScenarioEvaluated { .. }
         | JournalEvent::IncidentAnnotated { .. } => {}
     }
-    if let Some(event_id) = primary_event_id(record) {
-        if !state.prior_event_ids.insert(event_id.to_string()) {
-            return causality_error(
-                record.seq,
-                format!("journal event id {event_id} was recorded more than once"),
-            );
-        }
+    if let Some(event_id) = primary_event_id(record)
+        && !state.prior_event_ids.insert(event_id.to_string())
+    {
+        return causality_error(
+            record.seq,
+            format!("journal event id {event_id} was recorded more than once"),
+        );
     }
     Ok(())
 }

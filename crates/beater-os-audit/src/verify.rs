@@ -183,13 +183,13 @@ fn check_memory_provenance(snapshot: &JournalSnapshot) -> CheckResult {
                 );
             }
         }
-        if let Some(event_id) = primary_event_id(record) {
-            if !event_ids.insert(event_id) {
-                return CheckResult::fail(
-                    "memory_provenance",
-                    format!("journal event id {event_id} appears more than once"),
-                );
-            }
+        if let Some(event_id) = primary_event_id(record)
+            && !event_ids.insert(event_id)
+        {
+            return CheckResult::fail(
+                "memory_provenance",
+                format!("journal event id {event_id} appears more than once"),
+            );
         }
     }
     CheckResult::pass(
