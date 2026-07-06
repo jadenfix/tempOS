@@ -36,14 +36,14 @@ action, admission fails closed unless a mandate covers it:
    rail payload into chain-neutral fields: mandate id, rail, adapter id, asset,
    integer amount, counterparty reference and digest, purpose, idempotency key,
    envelope format, envelope hash, and optional envelope expiry.
-3. **The intent is internally bound.** The manifest target must be a
-   `payment_rail`; the target rail, requested budget amount, and manifest
+3. **The intent is internally bound.** Every spend/payment manifest must target
+   a `payment_rail`; the target rail, requested budget amount, and manifest
    idempotency key must match the payment intent; hashes must be lowercase
    32-byte hex.
 4. **A covering mandate exists**, where the mandate is
    - bound to this session (`session_id`) and holder (`actor_id`),
-   - bound to the manifest target rail when the action targets a
-     `payment_rail`,
+   - bound to the manifest target rail, which every payment action must declare
+     as a `payment_rail`,
    - still active (`expires_at > now`), and
    - selected by `payment_intent.mandate_id`.
 5. **The mandate covers the intent**, where rail, asset, purpose, idempotency
@@ -98,13 +98,14 @@ contract. Those fields stay in the Aether envelope and receipt artifacts.
 
 Admission tests cover: no mandate present (denied), missing payment intent
 (denied), amount over ceiling (denied), undeclared amount (denied), mandate bound
-to another session or holder (denied), expired mandate (denied), rail mismatch
-(denied), invalid envelope hash (denied), Aether adapter or envelope format
-mismatch (denied), and a covered payment that passes the gate and then routes to
-simulation. The independent Python conformance port and adversarial payment
-scenarios exercise the same gates. The untrusted-payment tests supply a covering
-mandate and still assert their `NeedsApproval` outcome, proving the mandate gate
-sits cleanly ahead of the taint/approval gates.
+to another session or holder (denied), expired mandate (denied), non-rail
+payment target (denied), rail mismatch (denied), invalid envelope hash (denied),
+Aether adapter or envelope format mismatch (denied), and a covered payment that
+passes the gate and then routes to simulation. The independent Python
+conformance port and adversarial payment scenarios exercise the same gates. The
+untrusted-payment tests supply a covering mandate and still assert their
+`NeedsApproval` outcome, proving the mandate gate sits cleanly ahead of the
+taint/approval gates.
 
 Related: #8 (risk floor — payments are Critical), #67/#40 (budget ceilings are a
 *different* axis from mandate authority), #10 (a revoked grant already fails

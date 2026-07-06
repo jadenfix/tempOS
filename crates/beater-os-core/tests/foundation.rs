@@ -633,6 +633,25 @@ fn policy_denies_payment_when_mandate_rail_does_not_match_target() {
 }
 
 #[test]
+fn policy_denies_payment_when_target_is_not_payment_rail() {
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::CloudResource,
+        resource_id: "stablecoin:x402".to_string(),
+    };
+    let mut grant = grant_spend(now);
+    grant.scope.selector.resource_kind = ResourceKind::CloudResource;
+    grant.scope.selector.resource_id = "stablecoin:x402".to_string();
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("payment_rail"));
+}
+
+#[test]
 fn policy_admits_payment_backed_by_mandate_then_gates_on_simulation() {
     // A covered payment passes the mandate gate (rule recorded) and proceeds to
     // the pre-existing high-risk-external-effect simulation gate.
