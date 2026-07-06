@@ -15,7 +15,11 @@ For the full doctrine, read
 `docs/sota-systems-engineering.md` in the repository. Read `AGENTS.md` for the
 repo map and `final.md` when product intent or OS-level direction is unclear.
 For performance-sensitive work, language-boundary changes, accelerator paths, or
-optimization claims, also read `docs/optimization-agent-playbook.md`.
+optimization claims, also read `docs/optimization-agent-playbook.md`,
+`docs/engineering/optimization-evidence-runbook.md`, and `docs/source-matrix.md`.
+
+This skill is paired with `beateros-pr-review`, which handles the reviewer-facing
+contract and non-author merge process.
 
 ## Workflow
 
@@ -41,10 +45,7 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
    - Use C for ABI, boot/platform, driver, hypervisor, sandbox, existing C
      library, or measured hot-path interop needs.
    - Use assembly only for unavoidable hardware boundaries.
-- Wrap unsafe/C/assembly in small safe Rust APIs with explicit invariants.
-
-This skill is paired with `beateros-pr-review`, which handles the reviewer-facing
-contract and non-author merge process.
+   - Wrap unsafe/C/assembly in small safe Rust APIs with explicit invariants.
 
 4. Bound all resources.
    - CPU, memory, IO, queue length, model calls, tool calls, browser contexts,

@@ -3,6 +3,12 @@
 Start with [AGENTS.md](AGENTS.md). It is the compact repo map and cross-agent
 context. The full plan is [final.md](final.md), and the systems-engineering
 doctrine is [docs/sota-systems-engineering.md](docs/sota-systems-engineering.md).
+Optimization workflow lives in
+[docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md),
+replay packet rules live in
+[docs/engineering/optimization-evidence-runbook.md](docs/engineering/optimization-evidence-runbook.md),
+and temporal language/backend source snapshots live in
+[docs/source-matrix.md](docs/source-matrix.md).
 
 ## Contract Rule
 
@@ -30,6 +36,9 @@ beaterOS should be designed like close-to-metal systems software:
 - Keep macOS and Apple Silicon as first-class development targets. Linux-specific
   mechanisms need an abstraction, a macOS fallback, or an explicit future-target
   label.
+- GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, and future ASIC paths
+  are OS resources behind beaterOS admission, queues, telemetry, receipts, and
+  fallback contracts.
 
 ## Before Coding
 
@@ -43,3 +52,5 @@ For non-trivial changes, state or encode:
 - language choice and Rust tie-breaker analysis
 - macOS impact
 - local verification command
+- current compiler/runtime/backend source when the claim depends on "latest" or
+  current-version behavior

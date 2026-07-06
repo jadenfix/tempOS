@@ -54,6 +54,11 @@ boundary.
   performance-sensitive implementation, language-boundary decisions, compiler
   freshness checks, bottleneck analysis, accelerator review packets, and
   benchmark/trace evidence.
+- `docs/engineering/optimization-evidence-runbook.md` is the compact replay
+  packet, language-boundary, and accelerator evidence runbook for optimization
+  PRs.
+- `docs/source-matrix.md` is the current source and toolchain freshness snapshot;
+  verify primary sources there before making current-version claims.
 - `.codex/skills/beateros-systems-engineering/SKILL.md` packages that doctrine
   as a reusable Codex skill.
 - `.codex/skills/beateros-pr-review/SKILL.md` packages review and repo-governance
@@ -124,13 +129,17 @@ cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 git diff --check
+python3 scripts/check-optimization-docs.py
 TMPDIR=/private/tmp python3 scripts/local-e2e.py
 ```
 
 ## Performance-Sensitive PR Packet
 
-Paste this into any PR that claims a performance, language-boundary, compiler,
-runtime, accelerator, or close-to-metal improvement:
+Use the canonical packet in
+[docs/engineering/optimization-evidence-runbook.md](docs/engineering/optimization-evidence-runbook.md)
+and [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md).
+At minimum, any PR that claims a performance, language-boundary, compiler,
+runtime, accelerator, or close-to-metal improvement must answer:
 
 ```md
 ### Optimization Packet

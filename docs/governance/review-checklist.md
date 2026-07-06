@@ -81,6 +81,25 @@ item (e.g. a docs-only PR), mark it `n/a` and say why.
       PR pass. (governance rule, from `docs/implementation-backlog.md` "Review
       And Merge Rules"; not a `final.md` section)
 
+## D. Optimization and metal-readiness review
+
+Use this section for PRs that claim performance, language-boundary,
+compiler/runtime, accelerator, scheduler, or close-to-metal value. Mark it
+`n/a` for unrelated docs-only or correctness-only PRs.
+
+- [ ] The PR uses `docs/engineering/optimization-evidence-runbook.md` and names
+      workload, baseline, budget, profile/trace artifact, bottleneck class,
+      regression gate, macOS path, fallback, and rollback story.
+- [ ] Current language/compiler/backend claims cite `docs/source-matrix.md` or a
+      newer primary source with verification date.
+- [ ] The optimization attacks the named bottleneck class and does not add FFI,
+      unsafe code, assembly, accelerator dependencies, or vendor lock-in before
+      simpler contract, algorithm, layout, batching, caching, indexing, or
+      backpressure fixes were considered.
+- [ ] GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, or ASIC paths
+      keep admission, queue bounds, memory/residency budgets, cancellation,
+      telemetry, receipts, and fallback under beaterOS contracts.
+
 ## Reviewer sign-off block (paste into the PR review)
 
 ```
@@ -90,5 +109,6 @@ final.md sections claimed: <list>
 A. Never-compromise: <PASS / BLOCKED: item(s)>
 B. Contracts:        <PASS / BLOCKED: item(s)>
 C. Craft:            <PASS / notes>
+D. Optimization:     <PASS / BLOCKED / n/a: item(s)>
 Agent-layer verdict: <APPROVE / REQUEST-CHANGES>
 ```

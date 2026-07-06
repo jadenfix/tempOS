@@ -19,6 +19,9 @@ It operationalizes `final.md` and the bare-metal readiness tooling so each PR ca
 - **Phase 3 (Measured metal move):** Move only what this host/runtime contract proves cannot be safely done through hosted compatibility lanes.
   - Introduce explicit accelerator/resource contracts for new lanes.
   - Preserve fail-closed policy semantics at every new hardware boundary.
+  - Treat GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, and future
+    ASIC execution as scheduled OS resources with admission, bounded queues,
+    memory/residency budgets, cancellation, telemetry, receipts, and fallback.
 
 A PR is only valid for this objective if it increases capability in a layer *above* the previous layer, or explicitly proves a reason to move down-stack.
 
@@ -110,6 +113,8 @@ The next operating model is explicit by layer:
 - **Layer C — Platform/metal pilots (only with proof):**
   - `apple-metal-lane` workloads in manifest profiles
   - `linux-cuda-lane` workloads in manifest profiles
+  - future TPU, LPU, NPU, media-engine, enclave, and custom-silicon lanes only
+    after portable accelerator contracts and replay evidence exist
   - micro-VM/hypervisor or driver-adjacent experiments
 
 A PR must target only one layer unless the release explicitly proves transition.

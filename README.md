@@ -43,6 +43,7 @@ that a real metal-touching agent OS would need.
 | Runtime-to-metal architecture | [docs/architecture-runtime-to-metal-path.md](docs/architecture-runtime-to-metal-path.md) | Runtime-first migration map, layer boundaries, and migration-gate expectations |
 | Systems engineering | [docs/sota-systems-engineering.md](docs/sota-systems-engineering.md) | Hot-path, Rust/C/assembly, security, and macOS doctrine |
 | Optimization infrastructure | [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md) | Bottleneck taxonomy, benchmarks, language baselines, and accelerator review gates |
+| Optimization evidence | [docs/engineering/optimization-evidence-runbook.md](docs/engineering/optimization-evidence-runbook.md) | Replay packet, language-boundary review, and accelerator evidence requirements |
 | Threat model | [docs/threat-model.md](docs/threat-model.md) | Assets, trust boundaries, attacks, mitigations, residual risk |
 | Wire contracts | [spec/README.md](spec/README.md) | Language-neutral JSON Schema and conformance suite |
 | Rust core | [crates/beater-os-core](crates/beater-os-core) | Agent sessions, grants, manifests, decisions, receipts, journals |
@@ -111,6 +112,7 @@ beaterOS follows the neighboring Beater Rust workspace style:
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
+python3 scripts/check-optimization-docs.py
 python3 spec/conformance/validate.py --quiet
 ```
 

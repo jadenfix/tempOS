@@ -61,6 +61,9 @@ jobs:
       - name: Runtime-first guardrail
         run: python3 scripts/run-beater-osd-runtime-smoke.py --json
 
+      - name: Optimization docs health gate
+        run: python3 scripts/check-optimization-docs.py
+
       - name: Migration frontier readiness (runtime phase)
         run: >
           python3 scripts/check-bare-metal-readiness.py

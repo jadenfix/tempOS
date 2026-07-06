@@ -93,6 +93,10 @@ language or compiler behavior. `docs/source-matrix.md` keeps the
 repo-maintained current-version snapshot for language and accelerator inputs.
 Those entries are not beaterOS pins; they are a reminder that agents must
 verify current versions before making current-version claims.
+Operational replay packets live in
+`docs/engineering/optimization-evidence-runbook.md` and the detailed workflow
+lives in `docs/optimization-agent-playbook.md`; this file owns doctrine, not
+per-PR evidence format.
 
 Default choices:
 

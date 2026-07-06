@@ -55,6 +55,7 @@ class PlanTest(unittest.TestCase):
                     ),
                 ),
                 ("bare-metal-e2e-matrix", ("python3", "scripts/run-bare-metal-e2e-matrix.py")),
+                ("optimization-docs", ("python3", "scripts/check-optimization-docs.py")),
                 ("python-unit-tests", ("python3", "-m", "unittest", "discover", "-s", "tests")),
                 ("spec-conformance", ("python3", "spec/conformance/validate.py", "--quiet")),
                 ("conformance-selftest", ("python3", "tools/conformance/selftest.py")),
