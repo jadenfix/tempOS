@@ -116,24 +116,28 @@ portable contracts, not reasons to bind beaterOS to one vendor SDK.
 
 | Source | beaterOS use | Caveat |
 | --- | --- | --- |
-| NVIDIA CUDA Programming Guide and Best Practices Guide | GPU execution model, streams, memory movement, launch overhead, and kernel optimization vocabulary | CUDA-specific; keep OS contract vendor-neutral |
-| NVIDIA MIG User Guide | Hardware GPU partitioning and tenant isolation model for accelerator scheduling | Only supported on specific NVIDIA datacenter GPUs |
-| Google Cloud TPU documentation and TPU architecture docs | TPU as custom ASIC/pod resource for matrix-heavy ML workloads through VM/GKE/Vertex surfaces | Cloud/provider-specific; APIs and generations change |
-| Groq LPU architecture documentation | Deterministic token-generation silicon and low-jitter inference as a distinct accelerator class | Vendor-specific claims need benchmarked local validation |
-| Apple Silicon platform documentation | Local NPU/GPU/media/security engines as low-power private accelerator targets on macOS | Public low-level access varies by framework and entitlement |
+| NVIDIA CUDA Programming Guide and CUDA Toolkit pages: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html and https://developer.nvidia.com/cuda/toolkit | GPU execution model, streams, memory movement, launch overhead, kernel optimization vocabulary, and CUDA 13.x feature tracking | CUDA-specific; keep OS contract vendor-neutral |
+| NVIDIA MIG User Guide: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/index.html | Hardware GPU partitioning and tenant isolation model for accelerator scheduling | Only supported on specific NVIDIA datacenter GPUs |
+| OpenXLA, StableHLO, and JAX docs: https://openxla.org/ and https://openxla.org/stablehlo/spec and https://docs.jax.dev/ | Portable accelerator compiler shape, StableHLO as an ML compiler interchange layer, and CPU/GPU/TPU array execution vocabulary | Framework/compiler behavior changes; conformance must be local |
+| Google Cloud TPU documentation and TPU architecture docs: https://docs.cloud.google.com/tpu/docs and https://docs.cloud.google.com/tpu/docs/system-architecture-tpu-vm | TPU as custom ASIC/pod resource for matrix-heavy ML workloads through VM/GKE/Vertex surfaces | Cloud/provider-specific; APIs and generations change |
+| Groq LPU architecture documentation: https://groq.com/lpu-architecture | Deterministic token-generation silicon and low-jitter inference as a distinct accelerator class | Vendor-specific claims need benchmarked local validation |
+| Apple Metal and Core AI documentation: https://developer.apple.com/metal/whats-new/ and https://developer.apple.com/videos/play/wwdc2026/324/ | Local GPU, neural-accelerator, tensor, and on-device model deployment direction for macOS and Apple Silicon | Public low-level access varies by framework and entitlement |
 
 ## Language And Optimization Toolchain Inputs
 
 These sources support `docs/optimization-agent-playbook.md` and the language
 freshness notes in `docs/sota-systems-engineering.md`. They are not repo pins;
 they tell agents where to verify current facts before making toolchain claims.
+All versions in this table were checked against the linked official sources on
+2026-07-06; re-check those sources before treating any row as a
+current-version claim.
 
 | Source | beaterOS use | Caveat |
 | --- | --- | --- |
 | Rust release blog, Rust 1.96.1, 2026-06-30: https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Current Rust release verification and Cargo/rustup update provenance | Use the repo-pinned toolchain unless a PR explicitly updates it |
 | LLVM project home/release page, LLVM 22.1.8, 2026-06-16: https://llvm.org/ | Compiler/backend, sanitizer, C/C++/Rust backend, and toolchain-version checks | LLVM version alone does not prove a Rust, Apple Clang, or vendor compiler behavior |
 | Zig download page, 0.16.0 release and 0.17.0-dev snapshots: https://ziglang.org/download/ | Freestanding/cross-compilation experiment tracking | Zig remains non-TCB until stability and reviewer coverage are proven |
-| Swift.org install page, Swift 6.3.3, and Swift 6.3 release note: https://swift.org/install/windows/ and https://swift.org/blog/swift-6.3-released/ | Apple-native platform integration and Swift build-tooling awareness | Swift is not the beaterOS authority boundary |
+| Swift.org macOS install page and Swift 6.3.3 announcement: https://swift.org/install/macos/ and https://forums.swift.org/t/announcing-swift-6-3-3/87888 | Apple-native platform integration and Swift build-tooling awareness | Swift is not the beaterOS authority boundary |
 | Go downloads page, Go 1.26.4 artifacts: https://go.dev/dl/ | Non-TCB infrastructure daemon/tooling version checks | Go is not used for policy, journals, receipts, or scheduler authority paths |
 | Python downloads page, Python 3.14.6, 2026-06-10: https://www.python.org/downloads/ | Audit/research script runtime freshness | Python scripts must remain bounded and non-authoritative |
 | NVIDIA CUDA Programming Guide: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html | GPU programming model, memory hierarchy, streams, launch/occupancy vocabulary | CUDA is a backend, not the OS contract |

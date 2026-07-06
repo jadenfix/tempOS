@@ -115,6 +115,12 @@ implementation tasks. Every feature should land through a scoped PR, get
 reviewed by an agent or person who did not author it, and be merged by a
 non-author. Do not shorten or weaken [final.md](final.md) while implementing it.
 
+Performance-sensitive PRs must include an optimization packet: workload, replay
+command, bottleneck class, baseline, target budget, profile or trace artifact,
+compiler/runtime/backend versions when relevant, authority boundary, macOS path,
+fallback, regression gate, and independent reviewer sign-off for both
+performance and authority claims.
+
 ## License
 
 beaterOS is licensed under the [Apache License 2.0](LICENSE).

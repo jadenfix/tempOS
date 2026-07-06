@@ -12,10 +12,10 @@ see that authority, receipts, and macOS compatibility were preserved.
 ## Current Toolchain Discipline
 
 Toolchain facts change. At the start of any performance-sensitive PR, record the
-date and the primary source used for the current compiler/runtime version. As of
-2026-07-06, official sources show Rust 1.96.1, LLVM 22.1.8, Zig 0.16.0 with
-0.17.0-dev snapshots, Swift 6.3.3, Go 1.26.4, and Python 3.14.6. Do not treat
-this list as a pin; treat it as proof that agents must verify freshness before
+date and the primary source used for the current compiler/runtime version.
+`docs/source-matrix.md` keeps the latest repo-maintained snapshot for Rust,
+LLVM, Zig, Swift, Go, Python, CUDA, and accelerator inputs. Do not treat that
+snapshot as a pin; treat it as proof that agents must verify freshness before
 making language or compiler claims.
 
 Rules:
@@ -97,6 +97,20 @@ class, because lower classes often vanish after the higher class is fixed.
 Each PR should state the class, the measured baseline, the target, and the
 artifact that will catch regression.
 
+Evidence map:
+
+| Bottleneck class | Minimum useful evidence |
+| --- | --- |
+| Contract work | manifest/action count, receipt count, policy-decision trace, model/tool call count |
+| Algorithm | complexity argument, input-size sweep, lookup/index profile, before/after benchmark |
+| Data layout | allocation profile, cache/locality profile, struct-size check, clone count |
+| Copy/encoding | copy/clone count, serialized bytes, buffer growth, JSON/binary encode timing |
+| Syscall and IO | syscall count, fsync count, descriptor count, network round trips, storage latency trace |
+| Concurrency | queue-depth spans, lock/wakeup profile, cancellation latency, retry count |
+| Scheduler and platform | context-switch/page-fault profile, CPU affinity note, power/thermal state, timer latency |
+| Accelerator | launch count, occupancy or provider metric, residency/copy bytes, queue delay, throttling |
+| Provider/runtime | SDK trace, rate-limit/cold-start evidence, token latency, browser/cloud control-plane timing |
+
 ## Required Optimization Packet
 
 A performance PR needs the smallest packet that proves the claim:
@@ -117,6 +131,58 @@ A performance PR needs the smallest packet that proves the claim:
 
 Do not accept "faster" without the baseline and the replay command. Do not
 accept "more optimized language" without the boundary and safety packet.
+
+Benchmark hygiene:
+
+- run release/profile-mode builds unless the claim is explicitly about debug
+  tooling
+- record warmup count, sample count, variance/noise, machine load, CPU/GPU
+  architecture, OS version, power mode, thermal state, and input size
+- keep before/after commands, fixtures, feature flags, and environment variables
+  identical except for the intended change
+- report when results are too noisy to claim; do not round noise into evidence
+- include p95/p99 for latency-sensitive paths and throughput plus tail latency
+  for batched paths
+
+Stop conditions:
+
+- do not optimize cold paths unless they block correctness, security, or a
+  measured user-facing workflow
+- do not add FFI, unsafe code, assembly, or accelerator/vendor dependencies for
+  marginal gains
+- prefer deleting work, batching, caching, indexing, or layout fixes before
+  adding a new abstraction
+- require a rollback path for any change that increases TCB size, build
+  complexity, operational state, or platform-specific behavior
+- stop when the measured bottleneck moves outside the changed subsystem and open
+  a follow-up instead of widening the PR
+
+## Optimization Review Infrastructure
+
+Optimization work should leave enough structure for the next agent to reproduce
+and challenge the result without guessing.
+
+Required infrastructure for serious performance work:
+
+- benchmark manifest: workload name, input fixture, command, warmup, sample
+  count, timeout, target machine class, and expected metric
+- trace schema: spans for admission, queue wait, execution, journal append,
+  receipt emission, model/tool/provider call, and accelerator enqueue/start/end
+- profile artifact: Instruments, `sample`, Rust benchmark output, allocation
+  counts, syscall counts, Nsight/Xcode GPU tools, TPU/GPU provider metrics, or
+  equivalent
+- regression gate: unit/property/scenario/benchmark/CI check tied to the
+  bottleneck, with a tolerance that avoids noise while catching meaningful
+  regressions
+- review checklist: hot path, cold path, authority boundary, copy/allocation
+  budget, syscall budget, queue bounds, cancellation, fallback, and rollback
+- source note: current compiler/runtime/backend versions and links when the
+  performance claim depends on toolchain or accelerator behavior
+
+Agents should create a small reusable skill, script, fixture, or checklist when
+the same profiling or review task appears in more than one PR. Keep the artifact
+boring: one command to reproduce, one place to read results, and one failure
+mode that tells reviewers what changed.
 
 ## Agent Workflow
 
@@ -142,6 +208,34 @@ Useful subagent prompts:
 - "Compare the language boundary against the playbook and identify any missing
   ownership, error, cancellation, or macOS story."
 
+## Portable Accelerator Contract Sketch
+
+Every accelerator backend should map to the same beaterOS shape before any
+vendor API is called:
+
+- `DeviceClass`: `cpu`, `gpu`, `tpu`, `lpu`, `npu`, `apple_gpu`, `apple_ane`,
+  `media_engine`, `secure_enclave`, or future registered class
+- `Backend`: vendor/runtime/compiler identity, version, driver/framework, target
+  triple or device capability, and feature flags
+- `AcceleratorJob`: manifest digest, principal, data class, model/artifact
+  digest, precision, quantization, batch/streaming mode, expected p95/p99,
+  timeout, cancellation token, and fallback route
+- `MemoryPolicy`: host bytes, device bytes, pinned bytes, unified-memory bytes,
+  HBM/VRAM/SRAM residency, spill policy, cache key, eviction rule, and
+  sensitivity/residency constraints
+- `QueuePolicy`: bounded depth, admission class, priority/fairness rule, maximum
+  batch wait, tenant isolation, overload behavior, and retry limit
+- `Telemetry`: enqueue/dequeue/start/finish timestamps, queue delay, launch
+  count, copy/map/sync bytes, execution time, occupancy where available,
+  throttling, errors, and fallback reason
+- `Receipt`: placement, backend version, partition/slice identity when
+  available, input/output digests, observed side effects, and replay evidence
+
+Conformance tests should exercise at least one macOS backend path and one Linux
+or provider backend path once those implementations exist. A backend that cannot
+report a field must record that limitation explicitly rather than silently
+pretending the value is zero.
+
 ## Accelerator Review Packet
 
 GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, and custom ASIC work
@@ -165,3 +259,24 @@ must include:
   digest, timing, queueing, and observed effects
 
 Vendor SDKs can provide execution. They cannot provide authority.
+
+Apple Silicon-specific checks:
+
+- identify whether the path uses CPU SIMD, Metal GPU, Metal Performance Shaders,
+  Core ML, ANE/Core AI-style framework routing, media engines, or the secure
+  enclave
+- account for unified memory as shared pressure, not free transfer: bandwidth,
+  cache pressure, synchronization/fence cost, page migration, mapped-vs-copied
+  buffers, and total RSS impact
+- provide fallback when ANE/GPU placement is unavailable, opaque, revoked by the
+  platform, thermally throttled, or not observable enough for the risk class
+- use Xcode/Instruments/Metal tooling or framework telemetry where available,
+  and record when placement or timing is hidden by the framework
+
+SIMD-specific checks:
+
+- document feature detection, target features, compiler flags, alignment,
+  scalar fallback, vector-width assumptions, and precision/determinism drift
+- benchmark compiler auto-vectorization before adding intrinsics
+- keep unsafe vector code behind a small safe API with property tests comparing
+  scalar and vector paths

@@ -55,7 +55,14 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
    - Preserve canonical encodings, schema versions, hashes, and receipt chains.
    - Do not treat model memory as privileged truth without provenance.
 
-6. Verify on macOS.
+6. Require the optimization packet for performance claims.
+   - Record workload, replay command, bottleneck class, baseline, target budget,
+     profile/trace artifact, compiler/runtime/backend versions, authority
+     boundary, macOS path, fallback, regression gate, and independent reviewer.
+   - Reject noisy benchmark claims, cold-path tuning, and complexity-raising
+     FFI/unsafe/accelerator paths unless the measured bottleneck justifies them.
+
+7. Verify on macOS.
    - Keep `cargo fmt --all -- --check`, `cargo test --workspace --locked`, and
      `cargo clippy --workspace --all-targets --locked -- -D warnings` passing.
    - Do not add Linux-only APIs without a platform abstraction or macOS path.
@@ -70,8 +77,11 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
 - Keep hot records compact; move diagnostics, strings, and large blobs out of
   hot structs.
 - For accelerator paths, account for host-device copies, queue delay, model
-  residency, partitioning, precision, throttling, cancellation, telemetry, and
-  fallback routes.
+  residency, unified-memory pressure, partitioning, precision, throttling,
+  cancellation, telemetry, and fallback routes.
+- For Apple Silicon and SIMD paths, require placement/fallback clarity, feature
+  detection, scalar fallback, alignment rules, precision/determinism checks, and
+  evidence that vectorization or accelerator placement helps.
 - Add a benchmark, trace, property test, scenario, or CI gate for every serious
   performance or safety claim.
 

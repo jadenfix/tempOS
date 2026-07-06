@@ -118,3 +118,25 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 git diff --check
 TMPDIR=/private/tmp python3 scripts/local-e2e.py
 ```
+
+## Performance-Sensitive PR Packet
+
+Paste this into any PR that claims a performance, language-boundary, compiler,
+runtime, accelerator, or close-to-metal improvement:
+
+```md
+### Optimization Packet
+
+- Workload:
+- Replay command:
+- Bottleneck class:
+- Baseline:
+- Target budget:
+- Profile/trace artifact:
+- Compiler/runtime/backend versions:
+- Authority boundary preserved:
+- Copy/allocation/syscall/queue/device budget:
+- macOS path and fallback:
+- Regression gate:
+- Independent reviewer for performance + authority:
+```

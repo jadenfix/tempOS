@@ -89,10 +89,10 @@ satisfy.
 
 Toolchain facts are temporal. For a performance-sensitive PR, record the date
 and primary source for the compiler/runtime version if the change depends on
-language or compiler behavior. As of 2026-07-06, official sources showed Rust
-1.96.1, LLVM 22.1.8, Zig 0.16.0 with 0.17.0-dev snapshots, Swift 6.3.3, Go
-1.26.4, and Python 3.14.6. These are not beaterOS pins; they are a reminder that
-agents must verify current versions before making current-version claims.
+language or compiler behavior. `docs/source-matrix.md` keeps the
+repo-maintained current-version snapshot for language and accelerator inputs.
+Those entries are not beaterOS pins; they are a reminder that agents must
+verify current versions before making current-version claims.
 
 Default choices:
 
@@ -146,18 +146,30 @@ Accelerator engineering rules:
 - Model accelerator work as schedulable jobs with device class, model/artifact
   digest, runtime/compiler version, memory budget, precision/quantization,
   batch/streaming mode, tenant isolation, timeout, and fallback route.
-- Count host-device copies, HBM/VRAM/SRAM residency, pinned memory, DMA, queue
+- Count host-device copies, HBM/VRAM/SRAM residency, pinned memory, DMA, memory
+  bandwidth, cache pressure, synchronization/fence cost, page migration, queue
   delay, kernel launch overhead, and thermal/power throttling as part of the hot
   path.
 - Prefer keeping weights and hot embeddings resident when the authority and
   data-sensitivity boundary allows it. Eviction and cache reuse are policy
   decisions, not hidden SDK behavior.
+- Treat discrete-device memory and Apple-style unified memory differently.
+  Discrete accelerators pay explicit copy/DMA/pinning costs; unified-memory
+  systems still pay bandwidth, cache, synchronization, page-migration, and
+  shared-RSS costs. A copy-vs-map decision needs evidence.
+- Accelerator queues need bounded depth, admission class, priority/fairness
+  rules, maximum batch wait, cancellation-drain behavior, tenant isolation,
+  overload behavior, and enqueue/dequeue/start/finish receipt evidence.
 - Use hardware partitioning when available, such as GPU MIG or VM/pod-level
   accelerator slices. When unavailable, isolate with processes, sandboxes,
   microVMs, device ACLs, and conservative scheduling.
 - Never hard-code one accelerator vendor as the OS contract. GPU, TPU, LPU,
   NPU, Apple Silicon, and future ASIC paths must implement the same admission,
   receipt, telemetry, and fallback shape.
+- On Apple Silicon, name whether a path uses CPU SIMD, Metal GPU, Metal
+  Performance Shaders, Core ML, ANE/Core AI-style framework routing, media
+  engines, or the secure enclave. If placement, timing, or throttling is hidden
+  by the framework, record that limitation and provide a fallback.
 
 Use C only when at least one condition is true:
 
@@ -287,6 +299,9 @@ Important constraints:
   eventing behavior.
 - Apple Silicon is `aarch64`; consider alignment, atomics, SIMD, endian
   assumptions, and page-size differences.
+- SIMD work must document feature detection, target features, compiler flags,
+  alignment, scalar fallback, vector-width assumptions, precision/determinism
+  drift, and benchmarks showing that auto-vectorization or intrinsics help.
 - Bare-metal boot on modern Macs is not the first target. Prefer a macOS-hosted
   runtime, simulator, or hypervisor-backed path first, then define separate
   hardware bring-up targets.
