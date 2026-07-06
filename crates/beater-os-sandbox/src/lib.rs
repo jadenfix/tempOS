@@ -29,9 +29,14 @@
 //!    an unconfined command. This is the macOS lane; a Linux lane (seccomp-bpf +
 //!    Landlock + mount namespaces) is a future implementor of the same
 //!    [`Confiner`] seam.
-//! 3. **Scrubbed environment.** The child is spawned with
-//!    [`Command::env_clear`](std::process::Command::env_clear); only a minimal
-//!    safe `PATH` is set. No inherited global secrets (§13.8).
+//! 3. **Explicit environment allowlist.** The child is spawned through
+//!    `/usr/bin/sandbox-exec` with
+//!    [`Command::env_clear`](std::process::Command::env_clear); it receives
+//!    exactly the variables listed on [`SandboxRequest::environment`]. Because
+//!    the Seatbelt wrapper sees that same environment before `exec`, allowed
+//!    names are intentionally narrow: the trusted safe `PATH` baseline and
+//!    caller-owned `BEATER_*` variables only. No inherited global secrets (§13.8),
+//!    no dynamic-loader variables, and no implicit `PATH`.
 //! 4. **Bounded execution.** A wall-clock timeout kills a runaway process, and
 //!    captured stdout/stderr are capped so a hostile command cannot exhaust
 //!    memory. The filesystem walk is bounded by a file count and a per-file byte
@@ -57,9 +62,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-/// A minimal, safe `PATH` for the confined child. The agent's inherited `PATH`
-/// (which may point at attacker-writable directories) is discarded; only the
-/// standard system locations are exposed so common tools still resolve.
+/// A minimal, safe `PATH` callers may opt into for the confined child. The
+/// agent's inherited `PATH` must never be forwarded; this value exposes only
+/// standard system locations so common tools still resolve.
 const SAFE_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 /// Absolute path to the macOS Seatbelt runner. Hardcoded (not resolved via
@@ -129,6 +134,10 @@ pub enum SandboxError {
     /// embedded into a Seatbelt profile safely, so we fail closed.
     #[error("path {path} cannot be encoded into a sandbox profile")]
     ProfilePath { path: String },
+    /// Environment variables are authority-bearing process inputs. Invalid or
+    /// ambiguous names/values are rejected before spawn.
+    #[error("invalid sandbox environment variable {name:?}: {reason}")]
+    InvalidEnvironment { name: String, reason: &'static str },
 }
 
 /// Bounds on a single sandboxed execution. Defaults are conservative and cheap;
@@ -146,6 +155,10 @@ pub struct SandboxLimits {
     /// Files larger than this are recorded by length (not content) to bound the
     /// memory a single hostile file can force us to read.
     pub max_file_bytes: u64,
+    /// Maximum number of explicitly allowed environment variables.
+    pub max_environment_vars: usize,
+    /// Maximum combined bytes across environment variable names and values.
+    pub max_environment_bytes: usize,
 }
 
 impl Default for SandboxLimits {
@@ -155,6 +168,8 @@ impl Default for SandboxLimits {
             max_output_bytes: 64 * 1024,
             max_files: 10_000,
             max_file_bytes: 8 * 1024 * 1024,
+            max_environment_vars: 16,
+            max_environment_bytes: 8 * 1024,
         }
     }
 }
@@ -162,10 +177,15 @@ impl Default for SandboxLimits {
 /// A request to execute a scoped shell action in the confined lane.
 #[derive(Clone, Debug)]
 pub struct SandboxRequest {
-    /// The program to run (resolved via [`SAFE_PATH`], not the agent's `PATH`).
+    /// The program to run (resolved by the OS; a canonical read allowlist is
+    /// derived via [`SAFE_PATH`] for bare program names).
     pub command: String,
     /// Arguments passed verbatim (no shell interpolation by this crate).
     pub args: Vec<String>,
+    /// Environment variables explicitly allowed for this action. The sandbox
+    /// starts from `env_clear`; an empty map means the child receives no
+    /// variables, including no `PATH`.
+    pub environment: BTreeMap<String, String>,
     /// The granted working directory. Canonicalized and confined before use.
     pub working_dir: String,
     /// The grant's path prefix(es). The canonical working directory must lie
@@ -259,6 +279,13 @@ impl SandboxOutcome {
     }
 }
 
+/// A narrow environment allowlist for callers that intentionally want standard
+/// system command lookup. Passing an empty map to [`SandboxRequest`] is stricter
+/// and gives the child no `PATH`.
+pub fn safe_path_environment() -> BTreeMap<String, String> {
+    BTreeMap::from([("PATH".to_string(), SAFE_PATH.to_string())])
+}
+
 /// SHA-256 (hex) of arbitrary bytes.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -266,9 +293,14 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// The input digest for a command + args: the receipt's `input_digest`. A stable
-/// framing (length-prefixed) so distinct argument vectors never collide.
-pub fn command_digest(command: &str, args: &[String]) -> String {
+/// The input digest for a command + args + explicit environment: the receipt's
+/// `input_digest`. A stable framing (length-prefixed) so distinct inputs never
+/// collide.
+pub fn command_digest(
+    command: &str,
+    args: &[String],
+    environment: &BTreeMap<String, String>,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update((command.len() as u64).to_le_bytes());
     hasher.update(command.as_bytes());
@@ -276,6 +308,13 @@ pub fn command_digest(command: &str, args: &[String]) -> String {
     for arg in args {
         hasher.update((arg.len() as u64).to_le_bytes());
         hasher.update(arg.as_bytes());
+    }
+    hasher.update((environment.len() as u64).to_le_bytes());
+    for (name, value) in environment {
+        hasher.update((name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+        hasher.update((value.len() as u64).to_le_bytes());
+        hasher.update(value.as_bytes());
     }
     hex::encode(hasher.finalize())
 }
@@ -328,6 +367,8 @@ fn path_within(path: &Path, prefix: &Path) -> bool {
 /// called directly. On success the returned [`SandboxOutcome`] carries the exit
 /// status, capped stdout/stderr, and the observed filesystem diff.
 pub fn execute(request: &SandboxRequest) -> SandboxResult<SandboxOutcome> {
+    validate_environment(&request.environment, &request.limits)?;
+
     let resolved_target = resolve_confined(&request.working_dir, &request.path_prefixes)?;
 
     // Observe across EVERY granted prefix, not just the cwd: the confinement
@@ -553,6 +594,81 @@ fn resolve_program_path(command: &str, cwd: &Path) -> Option<PathBuf> {
     Some(resolved)
 }
 
+pub fn validate_environment(
+    environment: &BTreeMap<String, String>,
+    limits: &SandboxLimits,
+) -> SandboxResult<()> {
+    if environment.len() > limits.max_environment_vars {
+        return Err(SandboxError::InvalidEnvironment {
+            name: "*".to_string(),
+            reason: "too many variables",
+        });
+    }
+
+    let total_bytes = environment
+        .iter()
+        .map(|(name, value)| name.len() + value.len())
+        .sum::<usize>();
+    if total_bytes > limits.max_environment_bytes {
+        return Err(SandboxError::InvalidEnvironment {
+            name: "*".to_string(),
+            reason: "environment byte limit exceeded",
+        });
+    }
+
+    for (name, value) in environment {
+        if name.is_empty() {
+            return Err(SandboxError::InvalidEnvironment {
+                name: name.clone(),
+                reason: "name is empty",
+            });
+        }
+        if name.contains('=') {
+            return Err(SandboxError::InvalidEnvironment {
+                name: name.clone(),
+                reason: "name contains '='",
+            });
+        }
+        if name.as_bytes().contains(&0) {
+            return Err(SandboxError::InvalidEnvironment {
+                name: name.clone(),
+                reason: "name contains NUL",
+            });
+        }
+        if name
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_digit())
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(SandboxError::InvalidEnvironment {
+                name: name.clone(),
+                reason: "name is not a portable environment variable identifier",
+            });
+        }
+        if value.as_bytes().contains(&0) {
+            return Err(SandboxError::InvalidEnvironment {
+                name: name.clone(),
+                reason: "value contains NUL",
+            });
+        }
+        if name == "PATH" {
+            if value != SAFE_PATH {
+                return Err(SandboxError::InvalidEnvironment {
+                    name: name.clone(),
+                    reason: "PATH must be the sandbox safe baseline",
+                });
+            }
+        } else if !name.starts_with("BEATER_") {
+            return Err(SandboxError::InvalidEnvironment {
+                name: name.clone(),
+                reason: "name must be PATH or start with BEATER_",
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Spawn and supervise the confined child: real OS filesystem confinement
 /// (macOS Seatbelt), scrubbed environment, confined cwd, bounded output capture,
 /// and a wall-clock timeout.
@@ -574,13 +690,13 @@ fn run_confined(request: &SandboxRequest, cwd: &Path) -> SandboxResult<RunResult
         confiner.confined_command(command_program, &request.args, &prefixes, &exec_paths)?;
     command
         .current_dir(cwd)
-        // No inherited secrets (§13.8): start from an empty environment and add
-        // back only a minimal safe PATH so the child still resolves tools.
         .env_clear()
-        .env("PATH", SAFE_PATH)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (name, value) in &request.environment {
+        command.env(name, value);
+    }
 
     let mut child = command.spawn()?;
     let cap = request.limits.max_output_bytes;
@@ -803,6 +919,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits: SandboxLimits::default(),
@@ -829,6 +946,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits: SandboxLimits::default(),
@@ -849,6 +967,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command: "rm".to_string(),
             args: vec!["gone.txt".to_string()],
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits: SandboxLimits::default(),
@@ -873,6 +992,7 @@ mod tests {
         let result = execute(&SandboxRequest {
             command: "sh".to_string(),
             args: vec!["-c".to_string(), "touch pwned".to_string()],
+            environment: safe_path_environment(),
             working_dir: link.display().to_string(),
             path_prefixes: vec![granted.str()],
             limits: SandboxLimits::default(),
@@ -899,6 +1019,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: work.str(),
             path_prefixes: vec![work.str()],
             limits: SandboxLimits::default(),
@@ -937,6 +1058,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: work.str(),
             path_prefixes: vec![work.str()],
             limits: SandboxLimits::default(),
@@ -962,6 +1084,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: work.str(),
             path_prefixes: vec![work.str()],
             limits: SandboxLimits::default(),
@@ -988,6 +1111,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: work.str(),
             path_prefixes: vec![work.str()],
             limits: SandboxLimits::default(),
@@ -1011,6 +1135,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: work.str(),
             path_prefixes: vec![work.str()],
             limits: SandboxLimits::default(),
@@ -1090,6 +1215,7 @@ mod tests {
         let result = execute(&SandboxRequest {
             command: "sh".to_string(),
             args: vec!["-c".to_string(), "touch x".to_string()],
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![],
             limits: SandboxLimits::default(),
@@ -1113,6 +1239,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits: SandboxLimits::default(),
@@ -1127,6 +1254,73 @@ mod tests {
     }
 
     #[test]
+    fn empty_environment_allows_no_variables() {
+        let dir = TempDir::new("empty-env");
+        let outcome = execute(&SandboxRequest {
+            command: "/usr/bin/env".to_string(),
+            args: Vec::new(),
+            environment: BTreeMap::new(),
+            working_dir: dir.str(),
+            path_prefixes: vec![dir.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute");
+
+        assert_eq!(outcome.status, SandboxStatus::Ok);
+        assert!(
+            outcome.stdout.is_empty(),
+            "empty allowlist must produce no child environment: {:?}",
+            String::from_utf8_lossy(&outcome.stdout)
+        );
+    }
+
+    #[test]
+    fn explicit_environment_allowlist_is_passed_without_inheritance() {
+        let parent = std::env::var("CARGO_PKG_NAME").expect("cargo sets CARGO_PKG_NAME");
+        let dir = TempDir::new("allow-env");
+        let mut environment = safe_path_environment();
+        environment.insert("BEATER_ALLOWED".to_string(), "ok".to_string());
+        let outcome = execute(&SandboxRequest {
+            command: "/usr/bin/env".to_string(),
+            args: Vec::new(),
+            environment,
+            working_dir: dir.str(),
+            path_prefixes: vec![dir.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute");
+
+        assert_eq!(outcome.status, SandboxStatus::Ok);
+        let stdout = String::from_utf8_lossy(&outcome.stdout);
+        assert!(stdout.contains("BEATER_ALLOWED=ok"));
+        assert!(!stdout.contains(&parent));
+    }
+
+    #[test]
+    fn invalid_environment_fails_closed_before_execution() {
+        let dir = TempDir::new("bad-env");
+        let mut environment = BTreeMap::new();
+        environment.insert("BAD-NAME".to_string(), "x".to_string());
+        let result = execute(&SandboxRequest {
+            command: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "touch should_not_exist".to_string()],
+            environment,
+            working_dir: dir.str(),
+            path_prefixes: vec![dir.str()],
+            limits: SandboxLimits::default(),
+        });
+
+        assert!(matches!(
+            result,
+            Err(SandboxError::InvalidEnvironment {
+                name,
+                reason: "name is not a portable environment variable identifier"
+            }) if name == "BAD-NAME"
+        ));
+        assert!(!dir.path.join("should_not_exist").exists());
+    }
+
+    #[test]
     fn output_is_capped_not_unbounded() {
         let dir = TempDir::new("cap");
         // Emit far more than the cap; capture must be bounded and flagged.
@@ -1138,6 +1332,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits,
@@ -1159,6 +1354,7 @@ mod tests {
         let outcome = execute(&SandboxRequest {
             command,
             args,
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits,
@@ -1184,6 +1380,7 @@ mod tests {
         let result = execute(&SandboxRequest {
             command: "sh".to_string(),
             args: vec!["-c".to_string(), "true".to_string()],
+            environment: safe_path_environment(),
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
             limits,
@@ -1193,10 +1390,15 @@ mod tests {
 
     #[test]
     fn command_digest_is_stable_and_arg_sensitive() {
-        let a = command_digest("git", &["add".to_string(), ".".to_string()]);
-        let b = command_digest("git", &["add".to_string(), ".".to_string()]);
-        let c = command_digest("git", &["add".to_string(), "-A".to_string()]);
+        let env = safe_path_environment();
+        let a = command_digest("git", &["add".to_string(), ".".to_string()], &env);
+        let b = command_digest("git", &["add".to_string(), ".".to_string()], &env);
+        let c = command_digest("git", &["add".to_string(), "-A".to_string()], &env);
+        let mut changed_env = env.clone();
+        changed_env.insert("BEATER_MODE".to_string(), "audit".to_string());
+        let d = command_digest("git", &["add".to_string(), ".".to_string()], &changed_env);
         assert_eq!(a, b);
         assert_ne!(a, c);
+        assert_ne!(a, d);
     }
 }

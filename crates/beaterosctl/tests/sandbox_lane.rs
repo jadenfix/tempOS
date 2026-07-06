@@ -247,11 +247,13 @@ fn environment_is_scrubbed_no_inherited_secrets() {
             "--arg",
             "-c",
             "--arg",
-            "echo pkg=$CARGO_PKG_NAME > leak.txt",
+            "printf '%s:%s' \"$BEATER_ALLOWED\" \"$CARGO_PKG_NAME\" > leak.txt",
             "--cwd",
             &workdir,
             "--grants",
             &grant_id,
+            "--env",
+            "BEATER_ALLOWED=ok",
             "--side-effects",
             "local_write",
             "--action-id",
@@ -261,12 +263,73 @@ fn environment_is_scrubbed_no_inherited_secrets() {
 
     let leaked = fs::read_to_string(PathBuf::from(&workdir).join("leak.txt")).unwrap();
     assert!(
+        leaked.starts_with("ok:"),
+        "explicitly allowed env var must be passed: {leaked:?}"
+    );
+    assert!(
         !leaked.contains(&secret),
         "env_clear must scrub inherited env, but child wrote {secret:?}: {leaked:?}"
     );
     assert!(
-        leaked.contains("pkg="),
+        leaked.ends_with(':'),
         "command should still run: {leaked:?}"
+    );
+}
+
+#[test]
+fn invalid_environment_allowlist_fails_before_journaling() {
+    let home = TempDir::new("home");
+    let work = TempDir::new("work");
+    let h = home.canonical();
+    let workdir = work.canonical();
+    let session = "sess-bad-env";
+
+    create_session(&h, session);
+    let grant_id = issue_grant(
+        &h,
+        session,
+        &["--actions", "execute", "--path-prefix", &workdir],
+    );
+
+    let result = cli(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "shell",
+            "--command",
+            "sh",
+            "--arg",
+            "-c",
+            "--arg",
+            "touch should_not_exist.txt",
+            "--cwd",
+            &workdir,
+            "--grants",
+            &grant_id,
+            "--env",
+            "BAD-NAME=x",
+            "--action-id",
+            "act-bad-env",
+        ],
+    );
+
+    assert!(
+        matches!(result, Err(CliError::Sandbox(_))),
+        "invalid env must fail closed: {result:?}"
+    );
+    assert!(
+        !PathBuf::from(&workdir)
+            .join("should_not_exist.txt")
+            .exists()
+    );
+    let show = ok(&h, &["session", "show", "--session", session]);
+    assert!(
+        show.contains("actions:    0"),
+        "no action should be journaled before env validation:\n{show}"
     );
 }
 

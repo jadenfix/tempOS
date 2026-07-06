@@ -113,6 +113,9 @@ be able to answer:
 - What benchmark, trace, property test, or scenario would catch a regression?
 - Why is the chosen language boundary the best fit, and if the tradeoff was
   close, why not Rust?
+- If this touches GPU, TPU, NPU, LPU, or future silicon acceleration, what
+  portable contract, fallback, device-memory bound, copy budget, and backend
+  receipt metadata make it auditable?
 
 ## Common Commands
 

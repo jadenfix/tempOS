@@ -85,6 +85,7 @@ pub fn help_text() -> String {
          \x20                 --cwd <dir> --grants <g1,g2> [--risk <r>]\n\
          \x20                 [--side-effects <s,..>] [--idempotency-key <k>]\n\
          \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\
+         \x20                 [--env <NAME=VALUE>]...\n\
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\
          \x20 journal verify  --session <id>\n\
          \x20 trace show      --session <id>\n\

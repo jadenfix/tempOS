@@ -5,6 +5,8 @@ Use this checklist for design reviews, code reviews, and architecture changes.
 ## Critical Path
 
 - Name the hot path and cold path.
+- Name the bottleneck class: scheduler, memory, IO, serialization, sandbox,
+  model, accelerator, audit, or other measured subsystem.
 - State p95/p99 or throughput expectations when relevant.
 - Count likely allocations, copies, serializations, syscalls, locks, and network
   round trips.
@@ -52,3 +54,11 @@ Use this checklist for design reviews, code reviews, and architecture changes.
   benchmark, trace, or CI gate.
 - Performance claims include a measurement plan or benchmark.
 - Security claims include a negative test or threat-model link.
+
+## Accelerator And Metal-Adjacent Work
+
+- GPU/TPU/NPU/LPU work is behind a portable contract with explicit fallback.
+- Host-device copies, synchronization points, launch overhead, and device memory
+  ceilings are named.
+- Backend choice is recorded as authority-bearing execution metadata, not hidden
+  behind an ambient library call.
