@@ -8,7 +8,7 @@ use beater_os_core::{
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
-    LocalToolInvocation, execute_local_tool, local_shell_tool_digest_with_environment,
+    GatewayError, LocalToolInvocation, execute_local_tool, local_shell_tool_digest_with_environment,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
@@ -515,7 +515,11 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
                 .to_string(),
             limits,
         },
-    )?;
+    )
+    .map_err(|err| match err {
+        GatewayError::Sandbox(source) => CliError::Sandbox(source),
+        other => CliError::Gateway(other),
+    })?;
 
     let decision = outcome.decision;
     let manifest = outcome.manifest;

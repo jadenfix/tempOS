@@ -220,6 +220,7 @@ pub fn execute_local_tool(
     }
 
     let resolved = resolve_confined(&invocation.cwd, &confinement_prefixes)?;
+    let resolved_target = resolved.display().to_string();
     let mut inputs_summary = if invocation.args.is_empty() {
         invocation.command.clone()
     } else {
@@ -251,11 +252,11 @@ pub fn execute_local_tool(
         action_kind: ActionKind::Execute,
         target: CapabilitySelector {
             resource_kind: ResourceKind::FilePath,
-            resource_id: invocation.cwd.clone(),
+            resource_id: resolved_target.clone(),
         },
         resolved_target: Some(CapabilitySelector {
             resource_kind: ResourceKind::FilePath,
-            resource_id: resolved.display().to_string(),
+            resource_id: resolved_target,
         }),
         inputs_digest: inputs_digest.clone(),
         inputs_summary,
