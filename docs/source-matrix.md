@@ -2,7 +2,9 @@
 
 Status: living verification artifact for `final.md` section 27.
 
-Last checked: 2026-07-03 from the macOS repository checkout.
+Last checked: 2026-07-06 from the macOS repository checkout for source-list
+shape and newly added systems inputs. The last full URL reachability pass was
+2026-07-03.
 
 ## Purpose
 
@@ -18,21 +20,28 @@ Source-quality order for beaterOS design decisions:
 3. Company blogs for direction and product constraints.
 4. Speculation only when clearly marked as speculation.
 
-## 2026-07-03 Reachability Pass
+## Source Extraction
 
 Command shape:
 
 ```sh
-sed -n '3137,3208p' final.md | rg -o 'https?://[^ )]+' |
+sed -n '/^## 27\\. Source Matrix/,/^## 28\\. Final Strategic Recommendation/p' final.md |
+  rg -o 'https?://[^ )]+' |
   while read url; do
     curl -L --max-time 20 --connect-timeout 10 \
       -A 'beaterOS-source-audit/0.1' -o /dev/null -s -w '%{http_code}' "$url"
   done
 ```
 
-Result:
+Current result:
 
-- 51 URLs were extracted from `final.md` section 27.
+- 86 URLs are extracted from the current `final.md` section 27.
+
+## 2026-07-03 Reachability Pass
+
+Result from the then-current source list:
+
+- 51 URLs were extracted from `final.md` section 27 at that revision.
 - 44 returned HTTP 200 from the command-line reachability pass.
 - 7 returned HTTP 403 to `curl` but resolved in a browser-style fetch:
   - `https://wiki.osdev.org/Main_Page`
@@ -43,9 +52,10 @@ Result:
   - `https://openai.com/index/chatgpt-agent-system-card/`
   - `https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html`
 
-Interpretation: no `final.md` section 27 URL was found dead in this pass, but
-HTTP reachability is not the same as scholarly endorsement, benchmark quality,
-or implementation correctness.
+Interpretation: no `final.md` section 27 URL was found dead in the 2026-07-03
+pass, but HTTP reachability is not the same as scholarly endorsement, benchmark
+quality, or implementation correctness. New sources added after that pass must
+be audited independently before their reachability is treated as checked.
 
 ## Issue #16 arXiv Audit
 
@@ -80,6 +90,57 @@ requirements.
   authority must still be enforced outside model output and outside tool claims.
 - Crypto, TEE, stablecoin, and post-quantum sources are input material for
   threat-model and schema agility; they are not reasons to invent cryptography.
+
+## 2026 Systems Optimization Inputs
+
+These sources inform the metal-touching roadmap added to `final.md` §8.1.1 and
+§8.1.2. They are design inputs, not implementation commitments.
+
+| Source | beaterOS use | Caveat |
+| --- | --- | --- |
+| Linux `sched_ext` documentation | Linux add-on experiments for policy-aware scheduling before native scheduler work | Linux-specific; not portable policy truth |
+| Linux `io_uring` and zero-copy receive documentation | Ring-buffer IO, batching, completion records, and copy-budget discipline | API is Linux-specific and security-sensitive |
+| eBPF/XDP documentation | Early packet filtering, tracing, observability, and enforcement hooks on Linux | Requires verifier limits and platform abstraction |
+| Rust-for-Linux documentation | Memory-safe kernel-adjacent implementation path | Kernel Rust APIs remain evolving |
+| DPDK poll-mode driver documentation | When user-space polling and direct descriptors beat interrupt-heavy paths | Burns CPU and weakens isolation if used casually |
+| SPDK documentation | Zero-copy, asynchronous, lockless storage path inspiration | Specialized storage workloads only |
+| Firecracker documentation | Minimal device model and microVM isolation for risky agent lanes | Depends on KVM/Linux host primitives |
+| seL4 documentation | Capability microkernel and verification model for high-assurance future appliances | Broad hardware/device support is not free |
+| CHERI architecture material | Hardware memory capabilities and compartmentalization direction | Research/availability constraints remain |
+| Linux CXL memory-tiering background | Memory hierarchy planning for hot context, cold provenance, trace archives, and far-memory experiments | Linux- and hardware-dependent; not a near-term requirement |
+
+## Accelerator And Custom-Silicon Inputs
+
+These sources inform `final.md` accelerator-fabric language. They are inputs for
+portable contracts, not reasons to bind beaterOS to one vendor SDK.
+
+| Source | beaterOS use | Caveat |
+| --- | --- | --- |
+| NVIDIA CUDA Programming Guide and CUDA Toolkit pages: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html and https://developer.nvidia.com/cuda/toolkit | GPU execution model, streams, memory movement, launch overhead, kernel optimization vocabulary, and CUDA 13.x feature tracking | CUDA-specific; keep OS contract vendor-neutral |
+| NVIDIA MIG User Guide: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/index.html | Hardware GPU partitioning and tenant isolation model for accelerator scheduling | Only supported on specific NVIDIA datacenter GPUs |
+| OpenXLA, StableHLO, and JAX docs: https://openxla.org/ and https://openxla.org/stablehlo/spec and https://docs.jax.dev/ | Portable accelerator compiler shape, StableHLO as an ML compiler interchange layer, and CPU/GPU/TPU array execution vocabulary | Framework/compiler behavior changes; conformance must be local |
+| Google Cloud TPU documentation and TPU architecture docs: https://docs.cloud.google.com/tpu/docs and https://docs.cloud.google.com/tpu/docs/system-architecture-tpu-vm | TPU as custom ASIC/pod resource for matrix-heavy ML workloads through VM/GKE/Vertex surfaces | Cloud/provider-specific; APIs and generations change |
+| Groq LPU architecture documentation: https://groq.com/lpu-architecture | Deterministic token-generation silicon and low-jitter inference as a distinct accelerator class | Vendor-specific claims need benchmarked local validation |
+| Apple Metal and Core AI documentation: https://developer.apple.com/metal/whats-new/ and https://developer.apple.com/videos/play/wwdc2026/324/ | Local GPU, neural-accelerator, tensor, and on-device model deployment direction for macOS and Apple Silicon | Public low-level access varies by framework and entitlement |
+
+## Language And Optimization Toolchain Inputs
+
+These sources support `docs/optimization-agent-playbook.md` and the language
+freshness notes in `docs/sota-systems-engineering.md`. They are not repo pins;
+they tell agents where to verify current facts before making toolchain claims.
+All versions in this table were checked against the linked official sources on
+2026-07-06; re-check those sources before treating any row as a
+current-version claim.
+
+| Source | beaterOS use | Caveat |
+| --- | --- | --- |
+| Rust release blog, Rust 1.96.1, 2026-06-30: https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Current Rust release verification and Cargo/rustup update provenance | Use the repo-pinned toolchain unless a PR explicitly updates it |
+| LLVM project home/release page, LLVM 22.1.8, 2026-06-16: https://llvm.org/ | Compiler/backend, sanitizer, C/C++/Rust backend, and toolchain-version checks | LLVM version alone does not prove a Rust, Apple Clang, or vendor compiler behavior |
+| Zig download page, 0.16.0 release and 0.17.0-dev snapshots: https://ziglang.org/download/ | Freestanding/cross-compilation experiment tracking | Zig remains non-TCB until stability and reviewer coverage are proven |
+| Swift.org macOS install page and Swift 6.3.3 announcement: https://swift.org/install/macos/ and https://forums.swift.org/t/announcing-swift-6-3-3/87888 | Apple-native platform integration and Swift build-tooling awareness | Swift is not the beaterOS authority boundary |
+| Go downloads page, Go 1.26.4 artifacts: https://go.dev/dl/ | Non-TCB infrastructure daemon/tooling version checks | Go is not used for policy, journals, receipts, or scheduler authority paths |
+| Python downloads page, Python 3.14.6, 2026-06-10: https://www.python.org/downloads/ | Audit/research script runtime freshness | Python scripts must remain bounded and non-authoritative |
+| NVIDIA CUDA Programming Guide: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html | GPU programming model, memory hierarchy, streams, launch/occupancy vocabulary | CUDA is a backend, not the OS contract |
 
 ## Maintenance Rules
 
