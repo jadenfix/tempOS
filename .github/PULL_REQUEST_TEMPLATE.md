@@ -25,7 +25,7 @@
 
 Complete this section for performance, language-boundary, unsafe/FFI, scheduler,
 runtime, accelerator, or close-to-metal changes. For docs/process-only PRs, state
-`N/A` in the reviewer notes.
+exactly `N/A` as the only content under this heading.
 
 - [ ] Hot path and cold path are named.
 - [ ] Bottleneck class is identified (contract, algorithm, layout, copy/encoding,
