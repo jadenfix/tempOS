@@ -21,8 +21,8 @@ use std::path::PathBuf;
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, BeaterOsError, Budget, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass,
-    DecisionResult, DelegationMode, GrantConstraints, ModelPolicy, ResourceKind, RiskClass,
-    SessionStatus, SideEffectClass, TaintLabel, hash_json,
+    DecisionResult, DelegationMode, GrantConstraints, HashValue, ModelPolicy, ResourceKind,
+    RiskClass, SessionStatus, SideEffectClass, TaintLabel, hash_json,
 };
 use beater_osd::{AdmissionOutcome, DAEMON_POLICY_VERSION, DaemonError, SessionProjection, Store};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -187,17 +187,29 @@ impl AgentRuntime {
             manifest.clone(),
             external_revoked_handles,
         )?;
-        let receipt = if admission.decision.result == DecisionResult::Allowed {
+        let receipt_outcome = if admission.decision.result == DecisionResult::Allowed {
             observation
                 .map(|observation| self.append_observation_receipt(&manifest, observation))
                 .transpose()?
         } else {
             None
         };
+        let receipt_root_hash = match &receipt_outcome {
+            Some(outcome) => outcome.receipt.receipt_hash.clone(),
+            None => admission.receipt_root_hash.clone(),
+        };
+        let evidence = StepReplayEvidence::from_parts(
+            &manifest,
+            &admission,
+            receipt_outcome.as_ref(),
+            receipt_root_hash,
+        );
+        let receipt = receipt_outcome.map(|outcome| outcome.receipt);
         let projection = self.store.project(&session_id)?;
         Ok(RuntimeStepOutcome {
             admission,
             receipt,
+            evidence,
             projection,
         })
     }
@@ -206,11 +218,11 @@ impl AgentRuntime {
         &self,
         manifest: &ActionManifest,
         observation: RuntimeObservation,
-    ) -> RuntimeResult<CapabilityReceipt> {
+    ) -> RuntimeResult<beater_osd::ReceiptAppendOutcome> {
         let started_at = observation.started_at.unwrap_or_else(Utc::now);
         let finished_at = observation.finished_at.unwrap_or_else(Utc::now);
         let output_digest = hash_json(&observation.output_summary)?;
-        let receipt = self.store.append_receipt(
+        let receipt = self.store.append_receipt_with_record(
             &manifest.session_id,
             CapabilityReceiptInput {
                 receipt_id: observation.receipt_id,
@@ -442,7 +454,63 @@ impl RuntimeObservation {
 pub struct RuntimeStepOutcome {
     pub admission: AdmissionOutcome,
     pub receipt: Option<CapabilityReceipt>,
+    pub evidence: StepReplayEvidence,
     pub projection: SessionProjection,
+}
+
+/// Deterministic replay anchor for one runtime step.
+///
+/// `PolicyDecision::decision_id` is intentionally nonce-like, so replay should
+/// anchor on the manifest hash plus append-only journal/receipt chain roots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepReplayEvidence {
+    pub session_id: String,
+    pub action_id: String,
+    pub manifest_hash: HashValue,
+    pub policy_version: String,
+    pub proposal_seq: u64,
+    pub proposal_hash: HashValue,
+    pub decision_seq: u64,
+    pub decision_hash: HashValue,
+    pub admission_journal_root_hash: HashValue,
+    pub receipt_journal_seq: Option<u64>,
+    pub receipt_journal_hash: Option<HashValue>,
+    pub receipt_seq: Option<u64>,
+    pub receipt_hash: Option<HashValue>,
+    pub receipt_root_hash: HashValue,
+    pub final_journal_root_hash: HashValue,
+}
+
+impl StepReplayEvidence {
+    fn from_parts(
+        manifest: &ActionManifest,
+        admission: &AdmissionOutcome,
+        receipt_outcome: Option<&beater_osd::ReceiptAppendOutcome>,
+        receipt_root_hash: HashValue,
+    ) -> Self {
+        let admission_journal_root_hash = admission.decision_record.hash.clone();
+        let final_journal_root_hash = receipt_outcome
+            .map(|outcome| outcome.receipt_record.hash.clone())
+            .unwrap_or_else(|| admission_journal_root_hash.clone());
+        Self {
+            session_id: manifest.session_id.clone(),
+            action_id: manifest.action_id.clone(),
+            manifest_hash: admission.decision.manifest_hash.clone(),
+            policy_version: admission.decision.policy_version.clone(),
+            proposal_seq: admission.proposal_record.seq,
+            proposal_hash: admission.proposal_record.hash.clone(),
+            decision_seq: admission.decision_record.seq,
+            decision_hash: admission.decision_record.hash.clone(),
+            admission_journal_root_hash,
+            receipt_journal_seq: receipt_outcome.map(|outcome| outcome.receipt_record.seq),
+            receipt_journal_hash: receipt_outcome
+                .map(|outcome| outcome.receipt_record.hash.clone()),
+            receipt_seq: receipt_outcome.map(|outcome| outcome.receipt.seq),
+            receipt_hash: receipt_outcome.map(|outcome| outcome.receipt.receipt_hash.clone()),
+            receipt_root_hash,
+            final_journal_root_hash,
+        }
+    }
 }
 
 pub fn default_root_grant_id(session_id: &str) -> String {

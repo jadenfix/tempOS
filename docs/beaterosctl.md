@@ -223,7 +223,8 @@ tool registry file. Richer registry operations (signed remote publishers,
 operator review queues, network/container/VM/browser tool lanes) remain future
 targets. The typed `beater-os-runtime` crate now centralizes the reusable agent
 loop over `beater-osd`: session bootstrap, grant issuance, sequential admission,
-and no-side-effect observation receipts. The current CLI still opens the
+no-side-effect observation receipts, and deterministic step replay evidence
+anchored to journal and receipt-chain hashes. The current CLI still opens the
 `beater-osd` store in-process for write operations; the daemon API starts with
 read-only session projection so the control-plane boundary can harden before
 action execution moves behind the long-running process.

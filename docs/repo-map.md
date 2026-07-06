@@ -37,6 +37,8 @@ review boundaries.
   - Typed agent runtime loop over the daemon store: session bootstrap, bounded
     grant issuance, sequential step admission, and no-side-effect observation
     receipts.
+  - Deterministic step replay evidence anchored to proposal, decision, receipt,
+    journal-root, and receipt-root hashes.
 - `crates/beater-os-audit`
   - Trace/receipt validation, integrity reporting, and replay tooling.
 

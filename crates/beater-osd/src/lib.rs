@@ -24,9 +24,9 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
-    InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine,
-    ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
-    ToolManifest,
+    HashValue, InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision,
+    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
+    SimulationEvidence, ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
@@ -209,6 +209,14 @@ pub struct AdmissionOutcome {
     pub proposal_record: JournalRecord,
     pub decision_record: JournalRecord,
     pub decision: PolicyDecision,
+    pub receipt_root_hash: HashValue,
+}
+
+/// Result of appending a receipt through the daemon boundary.
+#[derive(Debug, Clone)]
+pub struct ReceiptAppendOutcome {
+    pub receipt_record: JournalRecord,
+    pub receipt: CapabilityReceipt,
 }
 
 /// Durable lifecycle transition applied by the daemon store.
@@ -747,11 +755,15 @@ impl Store {
             )?;
             records_to_write.push(decision_record.clone());
             journal.verify_chain()?;
+            let receipt_root_hash = self
+                .receipt_ledger_from_journal_unlocked(session_id)?
+                .root_hash();
             self.write_journal_records_unlocked(session_id, records_to_write.iter())?;
             Ok(AdmissionOutcome {
                 proposal_record,
                 decision_record,
                 decision,
+                receipt_root_hash,
             })
         })
     }
@@ -765,19 +777,35 @@ impl Store {
         input: CapabilityReceiptInput,
         created_at: DateTime<Utc>,
     ) -> DaemonResult<CapabilityReceipt> {
+        Ok(self
+            .append_receipt_with_record(session_id, input, created_at)?
+            .receipt)
+    }
+
+    /// Build and persist a receipt and return the exact `ReceiptAppended`
+    /// journal record that made it durable.
+    pub fn append_receipt_with_record(
+        &self,
+        session_id: &str,
+        input: CapabilityReceiptInput,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<ReceiptAppendOutcome> {
         self.with_session_lock(session_id, || {
             let projection = self.project_unlocked(session_id)?;
             ensure_session_running(&projection.session)?;
             let mut ledger = self.receipt_ledger_from_journal_unlocked(session_id)?;
             let receipt = ledger.append(input)?;
-            self.append_event_unlocked(
+            let receipt_record = self.append_event_unlocked(
                 session_id,
                 JournalEvent::ReceiptAppended {
                     receipt: receipt.clone(),
                 },
                 created_at,
             )?;
-            Ok(receipt)
+            Ok(ReceiptAppendOutcome {
+                receipt_record,
+                receipt,
+            })
         })
     }
 
