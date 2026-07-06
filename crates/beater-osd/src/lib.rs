@@ -356,7 +356,6 @@ impl Store {
         created_at: DateTime<Utc>,
     ) -> DaemonResult<JournalRecord> {
         self.with_session_lock(session_id, || {
-            let grant = normalize_grant_file_authority(grant)?;
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
             ensure_session_running(&admission_state.session)?;
@@ -408,6 +407,7 @@ impl Store {
                     grant.grant_id, grant.policy_version
                 )));
             }
+            let grant = normalize_grant_file_authority(grant)?;
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
             ensure_session_running(&admission_state.session)?;
