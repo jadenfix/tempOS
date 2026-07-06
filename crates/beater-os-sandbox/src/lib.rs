@@ -519,38 +519,37 @@ fn canonical_prefixes(prefixes: &[String]) -> SandboxResult<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Resolve the child program to canonical executable paths for the read and exec
-/// allowlists. An absolute or path-bearing command is canonicalized directly; a
-/// bare name is resolved against [`SAFE_PATH`]. Returns an empty set when the
+/// Resolve the child program to a single canonical executable path for the read
+/// and exec allowlists. An absolute command is canonicalized directly; a
+/// relative path-bearing command is canonicalized relative to the sandbox cwd;
+/// a bare name is resolved against [`SAFE_PATH`]. Returns `None` when the
 /// program cannot be resolved; in that case the command simply fails to exec
 /// inside the sandbox.
-///
-/// On macOS, `/bin/sh` may immediately exec the implementation selected by
-/// `/private/var/select/sh` (currently commonly `/bin/bash`). That variant is an
-/// OS-controlled part of launching the declared shell, not agent-chosen
-/// subprocess authority, so it is added when the entry executable is `sh`.
-fn resolve_program_exec_paths(command: &str) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let program = if command.contains('/') {
-        std::fs::canonicalize(command).ok()
+fn resolve_program_path(command: &str, cwd: &Path) -> Option<PathBuf> {
+    let resolved = if command.contains('/') {
+        let path = Path::new(command);
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        std::fs::canonicalize(candidate).ok()
     } else {
         SAFE_PATH
             .split(':')
             .find_map(|dir| std::fs::canonicalize(Path::new(dir).join(command)).ok())
-    };
-    if let Some(program) = program {
-        let is_sh = program
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "sh");
-        paths.push(program);
-        if is_sh && let Ok(selected) = std::fs::canonicalize("/private/var/select/sh") {
-            paths.push(selected);
-        }
+    }?;
+
+    if resolved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "sh")
+        && let Ok(selected) = std::fs::canonicalize("/private/var/select/sh")
+    {
+        return Some(selected);
     }
-    paths.sort();
-    paths.dedup();
-    paths
+
+    Some(resolved)
 }
 
 /// Spawn and supervise the confined child: real OS filesystem confinement
@@ -564,9 +563,14 @@ fn run_confined(request: &SandboxRequest, cwd: &Path) -> SandboxResult<RunResult
         return Err(SandboxError::ConfinementUnavailable);
     }
     let prefixes = canonical_prefixes(&request.path_prefixes)?;
-    let exec_paths = resolve_program_exec_paths(&request.command);
+    let resolved_program = resolve_program_path(&request.command, cwd);
+    let exec_paths: Vec<PathBuf> = resolved_program.iter().cloned().collect();
+    let command_program = resolved_program
+        .as_ref()
+        .and_then(|path| path.to_str())
+        .unwrap_or(&request.command);
     let mut command =
-        confiner.confined_command(&request.command, &request.args, &prefixes, &exec_paths)?;
+        confiner.confined_command(command_program, &request.args, &prefixes, &exec_paths)?;
     command
         .current_dir(cwd)
         // No inherited secrets (§13.8): start from an empty environment and add
@@ -1017,6 +1021,33 @@ mod tests {
             "undeclared subprocess execution must be denied"
         );
         assert!(outcome.diff.is_empty());
+    }
+
+    #[test]
+    fn relative_entry_executable_resolves_against_sandbox_cwd() {
+        let work = TempDir::new("relative-exec");
+        let tool = work.path.join("tool");
+        fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
+        let resolved = resolve_program_path("./tool", &work.path).expect("relative tool resolves");
+        assert_eq!(resolved, fs::canonicalize(tool).unwrap());
+    }
+
+    #[test]
+    fn shell_selector_is_not_extra_exec_authority() {
+        let work = TempDir::new("shell-selector");
+        let program =
+            resolve_program_path("sh", &work.path).expect("sh resolves through SAFE_PATH");
+        let profile = build_seatbelt_profile(&[work.path.clone()], std::slice::from_ref(&program))
+            .expect("profile");
+        if let Ok(selected) = fs::canonicalize("/private/var/select/sh")
+            && selected != program
+        {
+            let selected = selected.to_str().expect("selected shell path is utf-8");
+            assert!(
+                !profile.contains(&format!("(literal \"{}\")", escape_seatbelt(selected))),
+                "shell selector target must not be granted as extra executable authority: {profile}"
+            );
+        }
     }
 
     /// The generated profile must be a deny-default Seatbelt profile that grants
