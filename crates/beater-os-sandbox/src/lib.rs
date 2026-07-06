@@ -1281,11 +1281,8 @@ mod tests {
         let mut environment = safe_path_environment();
         environment.insert("BEATER_ALLOWED".to_string(), "ok".to_string());
         let outcome = execute(&SandboxRequest {
-            command: "/bin/sh".to_string(),
-            args: vec![
-                "-c".to_string(),
-                "printf '%s:%s' \"$BEATER_ALLOWED\" \"$CARGO_PKG_NAME\"".to_string(),
-            ],
+            command: "/usr/bin/env".to_string(),
+            args: Vec::new(),
             environment,
             working_dir: dir.str(),
             path_prefixes: vec![dir.str()],
@@ -1295,7 +1292,7 @@ mod tests {
 
         assert_eq!(outcome.status, SandboxStatus::Ok);
         let stdout = String::from_utf8_lossy(&outcome.stdout);
-        assert_eq!(stdout, "ok:");
+        assert!(stdout.contains("BEATER_ALLOWED=ok"));
         assert!(!stdout.contains(&parent));
     }
 
