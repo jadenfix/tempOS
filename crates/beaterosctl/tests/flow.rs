@@ -29,7 +29,7 @@ impl TempHome {
     fn child_dir(&self, name: &str) -> String {
         let path = self.path.join(name);
         std::fs::create_dir_all(&path).unwrap();
-        path.display().to_string()
+        std::fs::canonicalize(path).unwrap().display().to_string()
     }
 }
 
