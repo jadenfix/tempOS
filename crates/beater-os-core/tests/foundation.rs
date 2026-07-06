@@ -131,9 +131,11 @@ fn policy_allows_action_when_explicit_active_grant_matches() {
     let ctx = admission_context(now, vec![grant_for_file(now)]);
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::Allowed);
-    assert!(decision
-        .matched_rules
-        .contains(&"all_required_capabilities_allow_action".to_string()));
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"all_required_capabilities_allow_action".to_string())
+    );
 }
 
 #[test]
@@ -196,9 +198,11 @@ fn policy_admits_delegated_grant_when_whole_chain_is_live() {
     let ctx = admission_context(now, vec![root_grant(now), delegated_child(now)]);
     let decision = admit(&read_manifest(), &ctx);
     assert_eq!(decision.result, DecisionResult::Allowed);
-    assert!(decision
-        .matched_rules
-        .contains(&"grant_delegation_chain_active".to_string()));
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"grant_delegation_chain_active".to_string())
+    );
 }
 
 #[test]
@@ -509,9 +513,11 @@ fn policy_admits_payment_backed_by_mandate_then_gates_on_simulation() {
     ctx.mandates = vec![mandate_for_spend(now)];
     let decision = admit(&spend_manifest(), &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
-    assert!(decision
-        .matched_rules
-        .contains(&"payment_authorized_by_mandate".to_string()));
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"payment_authorized_by_mandate".to_string())
+    );
 }
 
 #[test]

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use beaterosctl::{run, CliError};
+use beaterosctl::{CliError, run};
 use uuid::Uuid;
 
 /// A temporary store directory that cleans itself up.

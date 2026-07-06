@@ -10,10 +10,10 @@
 use beater_os_core::JournalSnapshot;
 use serde::Serialize;
 
-use crate::events::event_kind;
-use crate::metrics::{compute_metrics, AuditMetrics};
-use crate::verify::{verify_snapshot, AuditReport, GENESIS_HASH};
 use crate::AUDIT_FORMAT_VERSION;
+use crate::events::event_kind;
+use crate::metrics::{AuditMetrics, compute_metrics};
+use crate::verify::{AuditReport, GENESIS_HASH, verify_snapshot};
 
 /// A per-record digest: enough to prove membership and linkage, no payload.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use beaterosctl::{run, CliError};
+use beaterosctl::{CliError, run};
 use uuid::Uuid;
 
 /// A temporary directory (store home or confined workdir) that cleans itself up.
@@ -317,9 +317,11 @@ fn not_admitted_action_does_not_execute_and_leaves_no_receipt() {
     );
     assert!(out.contains("skipped"), "execution must be skipped:\n{out}");
     // No command ran: no file, no receipt.
-    assert!(!PathBuf::from(&workdir)
-        .join("should_not_exist.txt")
-        .exists());
+    assert!(
+        !PathBuf::from(&workdir)
+            .join("should_not_exist.txt")
+            .exists()
+    );
     let show = ok(&h, &["session", "show", "--session", session]);
     assert!(show.contains("receipts:   0"), "no receipt:\n{show}");
     let verify = ok(&h, &["journal", "verify", "--session", session]);

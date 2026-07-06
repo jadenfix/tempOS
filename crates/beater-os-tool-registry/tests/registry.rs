@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 
 use beater_os_core::{RiskClass, ToolManifest};
 use beater_os_tool_registry::{
-    content_digest, RegisteredTool, RegistryError, RegistryPolicy, ResolveRequest, TestStatus,
-    ToolRegistry, ToolSignature, ToolTrust,
+    RegisteredTool, RegistryError, RegistryPolicy, ResolveRequest, TestStatus, ToolRegistry,
+    ToolSignature, ToolTrust, content_digest,
 };
 use chrono::Utc;
 
@@ -93,9 +93,10 @@ fn quarantined_and_revoked_tools_stop_resolving() {
     let mut reg = permissive_registry();
     reg.register(signed_tool("net.fetch", "1.0.0", RiskClass::Medium, false))
         .unwrap();
-    assert!(reg
-        .resolve(&ResolveRequest::new("net.fetch", "1.0.0"))
-        .is_ok());
+    assert!(
+        reg.resolve(&ResolveRequest::new("net.fetch", "1.0.0"))
+            .is_ok()
+    );
 
     reg.quarantine("net.fetch", "1.0.0", "cve-2026-1").unwrap();
     let err = reg
@@ -119,9 +120,10 @@ fn pin_rejects_other_versions() {
         .unwrap();
     reg.pin("fs.read", "1.0.0").unwrap();
 
-    assert!(reg
-        .resolve(&ResolveRequest::new("fs.read", "1.0.0"))
-        .is_ok());
+    assert!(
+        reg.resolve(&ResolveRequest::new("fs.read", "1.0.0"))
+            .is_ok()
+    );
     let err = reg
         .resolve(&ResolveRequest::new("fs.read", "2.0.0"))
         .expect_err("non-pinned version must fail");
@@ -261,9 +263,10 @@ fn workspace_allowlist_scopes_tools() {
     reg.set_workspace_allowlist("ws-secure", ["fs.read".to_string()]);
 
     // fs.read is allowlisted in ws-secure.
-    assert!(reg
-        .resolve(&ResolveRequest::new("fs.read", "1.0.0").in_workspace("ws-secure"))
-        .is_ok());
+    assert!(
+        reg.resolve(&ResolveRequest::new("fs.read", "1.0.0").in_workspace("ws-secure"))
+            .is_ok()
+    );
     // net.fetch is not.
     let err = reg
         .resolve(&ResolveRequest::new("net.fetch", "1.0.0").in_workspace("ws-secure"))
@@ -273,9 +276,10 @@ fn workspace_allowlist_scopes_tools() {
         "{err}"
     );
     // A workspace with no allowlist is unrestricted (any registered tool).
-    assert!(reg
-        .resolve(&ResolveRequest::new("net.fetch", "1.0.0").in_workspace("ws-open"))
-        .is_ok());
+    assert!(
+        reg.resolve(&ResolveRequest::new("net.fetch", "1.0.0").in_workspace("ws-open"))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -304,9 +308,11 @@ fn registry_is_serializable_roundtrip() {
 
     // The restored registry resolves the pinned tool identically and keeps the
     // audit trail (Registered + Pinned).
-    assert!(restored
-        .resolve(&ResolveRequest::new("fs.read", "1.0.0"))
-        .is_ok());
+    assert!(
+        restored
+            .resolve(&ResolveRequest::new("fs.read", "1.0.0"))
+            .is_ok()
+    );
     assert_eq!(restored.events().len(), 2);
 }
 

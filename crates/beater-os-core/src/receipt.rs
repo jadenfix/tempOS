@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::contracts::{CapabilitySelector, SideEffectClass};
 use crate::error::{BeaterOsError, BeaterOsResult};
-use crate::hash::{hash_json, HashValue, GENESIS_HASH};
+use crate::hash::{GENESIS_HASH, HashValue, hash_json};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityReceiptInput {

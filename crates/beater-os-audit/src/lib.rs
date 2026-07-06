@@ -23,10 +23,10 @@ mod metrics;
 mod trace;
 mod verify;
 
-pub use bundle::{build_bundle, bundle_to_json, AuditBundle, RecordDigest};
-pub use metrics::{compute_metrics, AuditMetrics, Coverage};
+pub use bundle::{AuditBundle, RecordDigest, build_bundle, bundle_to_json};
+pub use metrics::{AuditMetrics, Coverage, compute_metrics};
 pub use trace::render_trace;
-pub use verify::{verify_snapshot, AuditReport, CheckOutcome, CheckResult, GENESIS_HASH};
+pub use verify::{AuditReport, CheckOutcome, CheckResult, GENESIS_HASH, verify_snapshot};
 
 /// Version of the audit report/bundle format emitted by this crate.
 pub const AUDIT_FORMAT_VERSION: &str = "0.1.0";

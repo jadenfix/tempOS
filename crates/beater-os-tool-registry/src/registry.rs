@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use beater_os_core::{hash_json, BeaterOsResult, HashValue, RiskClass, ToolManifest};
+use beater_os_core::{BeaterOsResult, HashValue, RiskClass, ToolManifest, hash_json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

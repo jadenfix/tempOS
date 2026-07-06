@@ -10,8 +10,8 @@
 
 use beater_os_core::{DataClass, InMemoryJournal, JournalEvent, JournalSnapshot, MemoryRecord};
 use beater_os_memory::{
-    project, project_with_redactions, JournalRecords, MemoryProjection, ProjectedMemory,
-    RedactionDirective, REDACTION_PLACEHOLDER,
+    JournalRecords, MemoryProjection, ProjectedMemory, REDACTION_PLACEHOLDER, RedactionDirective,
+    project, project_with_redactions,
 };
 use chrono::{DateTime, Utc};
 
