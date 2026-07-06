@@ -390,7 +390,10 @@ impl CapabilityGrant {
         if self.denied_actions.contains(&manifest.action_kind) {
             return false;
         }
-        if !self.scope.allows(scope_selector(manifest), &manifest.action_kind) {
+        if !self
+            .scope
+            .allows(scope_selector(manifest), &manifest.action_kind)
+        {
             return false;
         }
         if let Some(max_risk) = self.constraints.max_risk

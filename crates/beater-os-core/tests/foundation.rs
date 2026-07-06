@@ -514,10 +514,7 @@ fn policy_uses_resolved_file_target_for_concrete_file_grant_authority() {
     });
     let mut grant = grant_for_file(now);
     grant.scope.actions = set([ActionKind::Execute]);
-    let decision = admit(
-        &manifest,
-        &admission_context(now, vec![grant]),
-    );
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
     assert_eq!(decision.result, DecisionResult::Allowed);
 }
 
