@@ -5,9 +5,35 @@
   "description": "An adversarial eval: a ScenarioManifest plus a concrete admission probe asserting the policy layer blocks or escalates the attack even if the model is persuaded. final.md §14.5, §13.5.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["scenario", "attack", "probe"],
+  "required": ["scenario", "attack", "tool_registry", "probe"],
   "properties": {
     "scenario": { "$ref": "scenario-manifest.schema.json" },
+    "tool_registry": {
+      "type": "object",
+      "description": "Kernel-held scenario fixture metadata for every allowed tool, keyed by tool_id. This is intentionally separate from probe.manifest so admission can detect under-declared side effects or risk.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tool_id", "publisher", "version", "transport", "side_effects", "risk_class"],
+        "properties": {
+          "tool_id": { "type": "string", "minLength": 1 },
+          "publisher": { "type": "string", "minLength": 1 },
+          "version": { "type": "string", "minLength": 1 },
+          "transport": { "type": "string", "minLength": 1 },
+          "required_capabilities": {
+            "type": "array",
+            "items": { "$ref": "common.schema.json#/$defs/capability_scope" }
+          },
+          "side_effects": {
+            "type": "array",
+            "items": { "$ref": "common.schema.json#/$defs/side_effect_class" },
+            "uniqueItems": true
+          },
+          "risk_class": { "$ref": "common.schema.json#/$defs/risk_class" },
+          "sandbox_required": { "type": "boolean" }
+        }
+      }
+    },
     "attack": {
       "type": "object",
       "additionalProperties": false,

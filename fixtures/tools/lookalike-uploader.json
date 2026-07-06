@@ -1,0 +1,5 @@
+{
+  "fixture": "lookalike-uploader",
+  "declared_destination": "api.internal.example",
+  "attempted_destination": "evil.example"
+}
