@@ -29,10 +29,14 @@
 //!    an unconfined command. This is the macOS lane; a Linux lane (seccomp-bpf +
 //!    Landlock + mount namespaces) is a future implementor of the same
 //!    [`Confiner`] seam.
-//! 3. **Explicit environment allowlist.** The child is spawned with
+//! 3. **Explicit environment allowlist.** The child is spawned through
+//!    `/usr/bin/sandbox-exec` with
 //!    [`Command::env_clear`](std::process::Command::env_clear); it receives
-//!    exactly the variables listed on [`SandboxRequest::environment`]. No
-//!    inherited global secrets (§13.8), and no implicit `PATH`.
+//!    exactly the variables listed on [`SandboxRequest::environment`]. Because
+//!    the Seatbelt wrapper sees that same environment before `exec`, allowed
+//!    names are intentionally narrow: the trusted safe `PATH` baseline and
+//!    caller-owned `BEATER_*` variables only. No inherited global secrets (§13.8),
+//!    no dynamic-loader variables, and no implicit `PATH`.
 //! 4. **Bounded execution.** A wall-clock timeout kills a runaway process, and
 //!    captured stdout/stderr are capped so a hostile command cannot exhaust
 //!    memory. The filesystem walk is bounded by a file count and a per-file byte
@@ -646,6 +650,19 @@ pub fn validate_environment(
             return Err(SandboxError::InvalidEnvironment {
                 name: name.clone(),
                 reason: "value contains NUL",
+            });
+        }
+        if name == "PATH" {
+            if value != SAFE_PATH {
+                return Err(SandboxError::InvalidEnvironment {
+                    name: name.clone(),
+                    reason: "PATH must be the sandbox safe baseline",
+                });
+            }
+        } else if !name.starts_with("BEATER_") {
+            return Err(SandboxError::InvalidEnvironment {
+                name: name.clone(),
+                reason: "name must be PATH or start with BEATER_",
             });
         }
     }

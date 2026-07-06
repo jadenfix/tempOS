@@ -119,10 +119,11 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    with filesystem writes limited to granted prefixes, network denied by
    default, and process execution limited to the resolved entry executable. It
    also gets an **explicit environment allowlist** (`env_clear` + a CLI-owned
-   safe `PATH` baseline, plus any repeated `--env NAME=VALUE`; no inherited
-   secrets), a **wall-clock timeout**, and **capped** stdout/stderr. Invalid env
-   names, duplicate names, or `PATH` overrides fail closed before the action is
-   journaled. Otherwise the decision is printed and nothing runs.
+   safe `PATH` baseline, plus any repeated `--env BEATER_NAME=VALUE`; no
+   inherited secrets), a **wall-clock timeout**, and **capped** stdout/stderr.
+   Invalid env names, duplicate names, unsafe names outside `BEATER_*`, or
+   `PATH` overrides fail closed before the action is journaled. Otherwise the
+   decision is printed and nothing runs.
 4. **Filesystem-diff receipt.** The confined directory is snapshotted (path ->
    SHA-256) before and after; the created/modified/deleted diff is the observed
    side effect. A `CapabilityReceipt` (input digest = command+args+environment,
@@ -147,10 +148,12 @@ action <id>
   receipt:     <receipt-id> hash=<...>
 ```
 
-Use repeated `--env NAME=VALUE` for the rare action that needs a process
+Use repeated `--env BEATER_NAME=VALUE` for the rare action that needs a process
 variable. The sandbox crate itself does not add implicit variables; the CLI
 passes the safe `PATH` baseline explicitly so ordinary system tools still
-resolve.
+resolve. Environment names are intentionally restricted because macOS Seatbelt
+executes through `/usr/bin/sandbox-exec`, which sees the same environment before
+the confined target starts.
 
 Number of sandbox lanes is a compromise beaterOS accepts (§26); this is the
 macOS local lane. Linux `seccomp`/Landlock/cgroups and container/VM lanes
