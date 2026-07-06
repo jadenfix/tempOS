@@ -258,7 +258,9 @@ def _primary_event_id(record: dict) -> str | None:
     if kind == "receipt_appended":
         return event["receipt"]["receipt_id"]
     if kind == "memory_written":
-        return event["memory"]["memory_id"]
+        # memory_id is a mutable projection key, not an unambiguous event id:
+        # later memory writes may intentionally replace the same memory_id.
+        return None
     if kind == "scenario_evaluated":
         return event["scenario"]["scenario_id"]
     if kind == "incident_annotated":

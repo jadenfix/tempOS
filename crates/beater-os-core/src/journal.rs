@@ -535,7 +535,10 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
-        JournalEvent::MemoryWritten { memory } => Some(memory.memory_id.as_str()),
+        // Memory ids are mutable projection keys: `beater-os-memory` explicitly
+        // supports last-writer-wins rewrites for the same memory_id. They are
+        // therefore not unambiguous journal event ids for provenance.
+        JournalEvent::MemoryWritten { .. } => None,
         JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
         JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
     }

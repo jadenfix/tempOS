@@ -133,7 +133,9 @@ fn check_lifecycle_causality(snapshot: &JournalSnapshot) -> CheckResult {
                 let Some(current) = statuses.get(session_id.as_str()) else {
                     return CheckResult::fail(
                         "lifecycle_causality",
-                        format!("transition {transition_id} references unknown session {session_id}"),
+                        format!(
+                            "transition {transition_id} references unknown session {session_id}"
+                        ),
                     );
                 };
                 if *current != from {
@@ -575,7 +577,10 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
-        JournalEvent::MemoryWritten { memory } => Some(memory.memory_id.as_str()),
+        // Memory ids are mutable projection keys: the memory projection allows
+        // later writes to replace the same memory_id, so they cannot be used as
+        // globally unique journal event ids.
+        JournalEvent::MemoryWritten { .. } => None,
         JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
         JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
     }
