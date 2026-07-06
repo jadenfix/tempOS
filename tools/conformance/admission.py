@@ -154,6 +154,38 @@ def grant_is_active_at(grant: dict, now: datetime) -> bool:
     return not grant.get("revoked", False) and _ts(grant["expires_at"]) > now
 
 
+def grant_chain_effectively_active(
+    grant: dict, ctx: dict, grants_by_id: dict[str, dict], now: datetime
+) -> bool:
+    """Return whether a grant and all delegation ancestors are live.
+
+    This mirrors Rust `grant_chain_effectively_active`: missing, revoked,
+    expired, registry-revoked, or cyclic delegation chains are not live
+    authority and therefore hard-deny before any narrowing/approval path.
+    """
+    current = grant
+    visited: set[str] = set()
+    revoked_handles = set(ctx.get("revoked_handles", []))
+    while True:
+        grant_id = current["grant_id"]
+        if grant_id in visited:
+            return False
+        visited.add(grant_id)
+
+        if not grant_is_active_at(current, now):
+            return False
+        if current.get("revocation_handle") in revoked_handles:
+            return False
+
+        parent_id = current.get("parent_grant_id")
+        if parent_id is None:
+            return True
+        parent = grants_by_id.get(parent_id)
+        if parent is None:
+            return False
+        current = parent
+
+
 def grant_allows_manifest(grant: dict, manifest: dict, now: datetime, actor_id: str) -> bool:
     if not grant_is_active_at(grant, now):
         return False
@@ -458,6 +490,11 @@ def admit(manifest: dict, ctx: dict) -> dict:
     if len(matching) != len(required):
         return deny("one or more required grants are missing from the admission context")
     matched.append("required_grants_available")
+
+    grants_by_id = {g["grant_id"]: g for g in ctx.get("grants", [])}
+    if not all(grant_chain_effectively_active(g, ctx, grants_by_id, now) for g in matching):
+        return deny("a required grant or one of its delegation ancestors is revoked, expired, or missing")
+    matched.append("grant_delegation_chain_active")
 
     actor_id = ctx["actor_id"]
     if not all(grant_allows_manifest(g, manifest, now, actor_id) for g in matching):
