@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot,
+    CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot, SessionStatus,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -93,6 +93,8 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
         check_sequence_contiguous(snapshot),
         check_hash_linkage(snapshot),
         check_receipt_causality(snapshot),
+        check_lifecycle_causality(snapshot),
+        check_memory_provenance(snapshot),
         // Novel gap-fillers — invariants the core journal verifier does NOT check.
         check_referential_sessions(snapshot),
         check_grant_references(snapshot),
@@ -105,6 +107,93 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
         ok,
         checks,
     }
+}
+
+fn check_lifecycle_causality(snapshot: &JournalSnapshot) -> CheckResult {
+    let mut statuses: BTreeMap<&str, &SessionStatus> = BTreeMap::new();
+    for record in &snapshot.records {
+        match &record.event {
+            JournalEvent::SessionCreated { session } => {
+                if statuses
+                    .insert(session.session_id.as_str(), &session.status)
+                    .is_some()
+                {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!("session {} was created more than once", session.session_id),
+                    );
+                }
+            }
+            JournalEvent::SessionStatusChanged {
+                transition_id,
+                session_id,
+                from,
+                to,
+            } => {
+                let Some(current) = statuses.get(session_id.as_str()) else {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!("transition {transition_id} references unknown session {session_id}"),
+                    );
+                };
+                if *current != from {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!(
+                            "transition {transition_id} from {from:?} does not match current status {current:?}"
+                        ),
+                    );
+                }
+                if !valid_session_transition(from, to) {
+                    return CheckResult::fail(
+                        "lifecycle_causality",
+                        format!("illegal session transition {transition_id}: {from:?} -> {to:?}"),
+                    );
+                }
+                statuses.insert(session_id.as_str(), to);
+            }
+            _ => {}
+        }
+    }
+    CheckResult::pass(
+        "lifecycle_causality",
+        "session status transitions follow the legal state machine",
+    )
+}
+
+fn check_memory_provenance(snapshot: &JournalSnapshot) -> CheckResult {
+    let mut event_ids: BTreeSet<&str> = BTreeSet::new();
+    for record in &snapshot.records {
+        if let JournalEvent::MemoryWritten { memory } = &record.event {
+            if memory.source_event_id.trim().is_empty() {
+                return CheckResult::fail(
+                    "memory_provenance",
+                    format!("memory {} has an empty source_event_id", memory.memory_id),
+                );
+            }
+            if !event_ids.contains(memory.source_event_id.as_str()) {
+                return CheckResult::fail(
+                    "memory_provenance",
+                    format!(
+                        "memory {} references unknown source event {}",
+                        memory.memory_id, memory.source_event_id
+                    ),
+                );
+            }
+        }
+        if let Some(event_id) = primary_event_id(record) {
+            if !event_ids.insert(event_id) {
+                return CheckResult::fail(
+                    "memory_provenance",
+                    format!("journal event id {event_id} appears more than once"),
+                );
+            }
+        }
+    }
+    CheckResult::pass(
+        "memory_provenance",
+        "memory records reference prior unambiguous journal events",
+    )
 }
 
 /// Canonical hash pre-image for a journal record.
@@ -465,6 +554,33 @@ fn check_denial_explained(snapshot: &JournalSnapshot) -> CheckResult {
     )
 }
 
+fn valid_session_transition(from: &SessionStatus, to: &SessionStatus) -> bool {
+    matches!(
+        (from, to),
+        (SessionStatus::Running, SessionStatus::Paused)
+            | (SessionStatus::Paused, SessionStatus::Running)
+            | (SessionStatus::Running, SessionStatus::Canceled)
+            | (SessionStatus::Paused, SessionStatus::Canceled)
+    )
+}
+
+fn primary_event_id(record: &JournalRecord) -> Option<&str> {
+    match &record.event {
+        JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
+        JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
+        JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
+        JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
+        JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
+        JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
+        JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
+        JournalEvent::MemoryWritten { memory } => Some(memory.memory_id.as_str()),
+        JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
+        JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,7 +592,7 @@ mod tests {
         let report = verify_snapshot(&snapshot);
         assert_eq!(report.records, 0);
         assert!(report.ok, "empty journal should pass: {:?}", report.checks);
-        assert_eq!(report.checks.len(), 8);
+        assert_eq!(report.checks.len(), 10);
         assert_eq!(report.failures().count(), 0);
     }
 }

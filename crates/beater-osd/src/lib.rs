@@ -244,6 +244,8 @@ impl Store {
             if self.session_exists_unlocked(&session.session_id)? {
                 return Err(DaemonError::SessionExists(session.session_id.clone()));
             }
+            let mut session = session.clone();
+            session.status = SessionStatus::Running;
             fs::create_dir_all(self.session_dir(&session.session_id)?)?;
             File::create(self.journal_path(&session.session_id)?)?;
             File::create(self.receipts_path(&session.session_id)?)?;
@@ -730,12 +732,32 @@ impl Store {
         for record in journal.records() {
             match &record.event {
                 JournalEvent::SessionCreated { session: created } => {
+                    if created.session_id != session_id {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains SessionCreated for {}",
+                            created.session_id
+                        )));
+                    }
+                    if session.is_some() {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains more than one SessionCreated event"
+                        )));
+                    }
                     session = Some(created.clone());
                 }
-                JournalEvent::SessionStatusChanged { session_id, to, .. } => {
+                JournalEvent::SessionStatusChanged {
+                    session_id: event_session_id,
+                    to,
+                    ..
+                } => {
+                    if event_session_id != session_id {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains status transition for {event_session_id}"
+                        )));
+                    }
                     let Some(projected) = session.as_mut() else {
                         return Err(DaemonError::Refused(format!(
-                            "session transition for {session_id} appears before SessionCreated"
+                            "session transition for {event_session_id} appears before SessionCreated"
                         )));
                     };
                     projected.status = to.clone();
@@ -936,12 +958,32 @@ fn admission_state_from_journal(
     for record in journal.records() {
         match &record.event {
             JournalEvent::SessionCreated { session: created } => {
+                if created.session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains SessionCreated for {}",
+                        created.session_id
+                    )));
+                }
+                if session.is_some() {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains more than one SessionCreated event"
+                    )));
+                }
                 session = Some(created.clone());
             }
-            JournalEvent::SessionStatusChanged { session_id, to, .. } => {
+            JournalEvent::SessionStatusChanged {
+                session_id: event_session_id,
+                to,
+                ..
+            } => {
+                if event_session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains status transition for {event_session_id}"
+                    )));
+                }
                 let Some(projected) = session.as_mut() else {
                     return Err(DaemonError::Refused(format!(
-                        "session transition for {session_id} appears before SessionCreated"
+                        "session transition for {event_session_id} appears before SessionCreated"
                     )));
                 };
                 projected.status = to.clone();

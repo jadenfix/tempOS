@@ -343,6 +343,25 @@ fn registered_tool(
 }
 
 #[test]
+fn create_session_normalizes_genesis_status_to_running() {
+    let root = TempDir::new("session-genesis-status");
+    let store = Store::open(&root.path).unwrap();
+    let session_id = "sess_genesis_status";
+    let mut caller_session = session(&root, session_id);
+    caller_session.status = SessionStatus::Canceled;
+
+    store.create_session(&caller_session).unwrap();
+
+    let projected = store.project(session_id).unwrap();
+    assert_eq!(projected.session.status, SessionStatus::Running);
+    let journal = store.load_journal(session_id).unwrap();
+    assert!(matches!(
+        &journal.records()[0].event,
+        JournalEvent::SessionCreated { session } if session.status == SessionStatus::Running
+    ));
+}
+
+#[test]
 fn admit_action_appends_proposal_and_decision() {
     let (_root, store) = create_store_with_session("admit-allowed", "sess_admit");
     let session_id = "sess_admit";
@@ -882,6 +901,37 @@ fn tampered_lifecycle_event_cannot_skip_legal_transition() {
 
     assert!(
         matches!(result, Err(DaemonError::Core(beater_os_core::BeaterOsError::JournalCausality { reason, .. })) if reason.contains("illegal session transition"))
+    );
+}
+
+#[test]
+fn tampered_journal_cannot_project_second_session_created_event() {
+    let (root, store) = create_store_with_initial("session-extra-genesis-tamper", "sess_real", []);
+    let session_id = "sess_real";
+    let mut journal = store.load_journal(session_id).unwrap();
+    let other_session = session(&root, "sess_other");
+    let record = journal
+        .append(
+            JournalEvent::SessionCreated {
+                session: other_session,
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    journal.verify_chain().unwrap();
+    let journal_path = root
+        .path
+        .join("sessions")
+        .join(session_id)
+        .join("journal.jsonl");
+    let mut file = OpenOptions::new().append(true).open(journal_path).unwrap();
+    writeln!(file, "{}", serde_json::to_string(&record).unwrap()).unwrap();
+
+    let result = store.project(session_id);
+
+    assert!(
+        matches!(result, Err(DaemonError::Refused(message)) if message.contains("SessionCreated for sess_other")),
+        "{result:?}"
     );
 }
 
