@@ -1,0 +1,13 @@
+{
+  "memory_id": "mem-001",
+  "source_event_id": "",
+  "source_digest": "sha256:source",
+  "writer": "agent:beater-os",
+  "created_at": "2026-07-03T12:00:00Z",
+  "kind": "semantic",
+  "content_ref": "memory://mem-001",
+  "summary": "Memory without provenance must be rejected.",
+  "confidence_basis_points": 9000,
+  "sensitivity": "internal",
+  "access_policy": "session"
+}

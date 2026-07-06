@@ -8,7 +8,9 @@
 //! The workspace denies `unwrap`/`expect`, so these tests unwrap through small
 //! panic-on-`None` helpers instead.
 
-use beater_os_core::{DataClass, InMemoryJournal, JournalEvent, JournalSnapshot, MemoryRecord};
+use beater_os_core::{
+    BeaterOsError, DataClass, InMemoryJournal, JournalEvent, JournalSnapshot, MemoryRecord,
+};
 use beater_os_memory::{
     JournalRecords, MemoryProjection, ProjectedMemory, REDACTION_PLACEHOLDER, RedactionDirective,
     project, project_with_redactions,
@@ -66,6 +68,18 @@ fn journal_with(memories: Vec<MemoryRecord>) -> InMemoryJournal {
     for (idx, mem) in memories.into_iter().enumerate() {
         if journal
             .append(
+                JournalEvent::IncidentAnnotated {
+                    incident_id: mem.source_event_id.clone(),
+                    note: format!("source for {}", mem.memory_id),
+                },
+                ts(750 + idx as i64),
+            )
+            .is_err()
+        {
+            panic!("append memory source failed");
+        }
+        if journal
+            .append(
                 JournalEvent::MemoryWritten { memory: mem },
                 ts(1_000 + idx as i64),
             )
@@ -88,6 +102,25 @@ fn empty_journal_projects_to_empty() {
     assert!(projection.all_traceable()); // vacuously true
     assert!(projection.provenance("missing").is_none());
     assert!(projection.get("missing").is_none());
+}
+
+#[test]
+fn journal_rejects_unprovenanced_memory_before_projection() {
+    let mut journal = InMemoryJournal::new();
+    let err = journal
+        .append(
+            JournalEvent::MemoryWritten {
+                memory: memory("m-a", "", None),
+            },
+            ts(1_000),
+        )
+        .err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected journal causality error");
+    };
+    assert!(reason.contains("empty source_event_id"));
+    let projection = project(&journal, ts(5_000));
+    assert!(projection.is_empty());
 }
 
 #[test]
@@ -222,6 +255,27 @@ fn last_writer_wins_on_rewritten_memory_id() {
         panic!("journal has no records");
     };
     assert_eq!(winner.provenance().journal_seq, last.seq);
+}
+
+#[test]
+fn last_writer_wins_by_seq_even_for_out_of_order_record_vectors() {
+    let mut updated = memory("m-a", "e-2", None);
+    updated.summary = "updated summary".to_string();
+    updated.content_ref = "content://m-a/v2".to_string();
+
+    let journal = journal_with(vec![
+        memory("m-a", "e-1", None), // lower seq
+        updated,                    // higher seq
+    ]);
+    let mut records = journal.records().to_vec();
+    records.reverse();
+
+    let projection = project(&records, ts(5_000));
+
+    assert_eq!(projection.len(), 1);
+    let winner = memory_of(&projection, "m-a");
+    assert_eq!(winner.record().summary, "updated summary");
+    assert_eq!(winner.provenance().source_event_id, "e-2");
 }
 
 #[test]

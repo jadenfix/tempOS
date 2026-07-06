@@ -2,13 +2,14 @@ use std::collections::BTreeSet;
 
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
-    ApprovalRequirement, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
-    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
-    GrantConstraints, InMemoryJournal, JournalEvent, PaymentIntent, PaymentMandate, PolicyDecision,
-    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SideEffectClass, SimulationEvidence,
-    TaintLabel,
+    ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant, CapabilityReceipt,
+    CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
+    DelegationMode, GrantConstraints, HashValue, InMemoryJournal, JournalEvent, MemoryRecord,
+    PaymentIntent, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind,
+    RiskClass, SideEffectClass, SimulationEvidence, TaintLabel, hash_json,
 };
 use chrono::{Duration, TimeZone, Utc};
+use serde::Serialize;
 
 fn fixed_time() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 7, 3, 12, 0, 0)
@@ -1078,6 +1079,35 @@ fn receipt_for_manifest(
         .unwrap_or_else(|err| panic!("receipt fixture should be valid: {err}"))
 }
 
+fn memory_record(
+    memory_id: &str,
+    source_event_id: &str,
+    now: chrono::DateTime<Utc>,
+) -> MemoryRecord {
+    MemoryRecord {
+        memory_id: memory_id.to_string(),
+        source_event_id: source_event_id.to_string(),
+        source_digest: format!("sha256:{source_event_id}"),
+        writer: "agent:beater-os".to_string(),
+        created_at: now,
+        kind: "summary".to_string(),
+        content_ref: format!("memory://{memory_id}"),
+        summary: "derived from a journaled source".to_string(),
+        confidence_basis_points: 9_000,
+        sensitivity: DataClass::Internal,
+        expires_at: None,
+        access_policy: "session".to_string(),
+    }
+}
+
+#[derive(Serialize)]
+struct TestJournalHashView<'a> {
+    seq: u64,
+    created_at: &'a chrono::DateTime<Utc>,
+    event: &'a JournalEvent,
+    prev_hash: &'a HashValue,
+}
+
 #[test]
 fn journal_rejects_receipt_without_prior_allowed_decision() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -1181,6 +1211,113 @@ fn journal_rejects_receipt_that_does_not_match_manifest() -> Result<(), Box<dyn 
     )?;
     journal.append(JournalEvent::ReceiptAppended { receipt }, now)?;
     assert!(journal.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_memory_without_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    let err = journal
+        .append(
+            JournalEvent::MemoryWritten {
+                memory: memory_record("mem-1", "", now),
+            },
+            now,
+        )
+        .err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected journal causality error");
+    };
+    assert!(reason.contains("empty source_event_id"));
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_memory_with_unknown_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::IncidentAnnotated {
+            incident_id: "source-1".to_string(),
+            note: "source event".to_string(),
+        },
+        now,
+    )?;
+    let err = journal
+        .append(
+            JournalEvent::MemoryWritten {
+                memory: memory_record("mem-1", "missing-source", now),
+            },
+            now,
+        )
+        .err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected journal causality error");
+    };
+    assert!(reason.contains("unknown source event"));
+    Ok(())
+}
+
+#[test]
+fn journal_accepts_memory_with_prior_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::IncidentAnnotated {
+            incident_id: "source-1".to_string(),
+            note: "source event".to_string(),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::MemoryWritten {
+            memory: memory_record("mem-1", "source-1", now),
+        },
+        now,
+    )?;
+    assert!(journal.verify_chain().is_ok());
+    Ok(())
+}
+
+#[test]
+fn journal_verify_rejects_tampered_memory_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::IncidentAnnotated {
+            incident_id: "source-1".to_string(),
+            note: "source event".to_string(),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::MemoryWritten {
+            memory: memory_record("mem-1", "source-1", now),
+        },
+        now,
+    )?;
+
+    let mut records = journal.snapshot().records;
+    if let JournalEvent::MemoryWritten { memory } = &mut records[1].event {
+        memory.source_event_id = "missing-source".to_string();
+        memory.source_digest = "sha256:missing-source".to_string();
+    } else {
+        panic!("memory record missing");
+    }
+    records[1].hash = hash_json(&TestJournalHashView {
+        seq: records[1].seq,
+        created_at: &records[1].created_at,
+        event: &records[1].event,
+        prev_hash: &records[1].prev_hash,
+    })?;
+
+    let tampered = InMemoryJournal::from_records(records);
+    let err = tampered.verify_chain().err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected journal causality error");
+    };
+    assert!(reason.contains("unknown source event"));
     Ok(())
 }
 

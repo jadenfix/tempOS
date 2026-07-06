@@ -8,7 +8,7 @@
   "required": ["memory_id", "source_event_id", "source_digest", "writer", "created_at", "kind", "content_ref", "summary", "confidence_basis_points", "sensitivity", "access_policy"],
   "properties": {
     "memory_id": { "type": "string", "minLength": 1 },
-    "source_event_id": { "type": "string" },
+    "source_event_id": { "type": "string", "minLength": 1 },
     "source_digest": { "type": "string" },
     "writer": { "type": "string" },
     "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
