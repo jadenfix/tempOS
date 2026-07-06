@@ -91,6 +91,14 @@ fn summarize_event(event: &JournalEvent) -> String {
             "decision={} action={} result={:?} why={:?}",
             decision.decision_id, decision.action_id, decision.result, decision.explanation
         ),
+        JournalEvent::ApprovalRecorded { approval } => format!(
+            "approval={} action={} grant={} reviewer={}",
+            approval.review_id, approval.action_id, approval.grant_id, approval.reviewer_id
+        ),
+        JournalEvent::SimulationRecorded { simulation } => format!(
+            "simulation={} action={} scenario={}",
+            simulation.simulation_id, simulation.action_id, simulation.scenario_id
+        ),
         JournalEvent::ReceiptAppended { receipt } => format!(
             "receipt={} action={} status={} effects={:?}",
             receipt.receipt_id, receipt.action_id, receipt.status, receipt.side_effects

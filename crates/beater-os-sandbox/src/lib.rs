@@ -22,9 +22,11 @@
 //!    *deny-default* profile: it may WRITE only within the grant-derived
 //!    canonical prefixes (plus `/dev/null`), may READ system paths (to load a
 //!    shell/binary and the dynamic loader's shared cache) plus those prefixes,
-//!    and is DENIED every other read of user data and every write. If the
-//!    enforcer is unavailable, the lane **fails closed** — it never runs an
-//!    unconfined command. This is the macOS lane; a Linux lane (seccomp-bpf +
+//!    and is DENIED every other read of user data and every write. Process
+//!    execution is also deny-default: only the resolved entry executable is
+//!    allowed, so a shell script cannot pivot into arbitrary system binaries.
+//!    If the enforcer is unavailable, the lane **fails closed** — it never runs
+//!    an unconfined command. This is the macOS lane; a Linux lane (seccomp-bpf +
 //!    Landlock + mount namespaces) is a future implementor of the same
 //!    [`Confiner`] seam.
 //! 3. **Scrubbed environment.** The child is spawned with
@@ -380,16 +382,17 @@ trait Confiner {
     fn enforces(&self) -> bool;
 
     /// Build a ready-to-spawn command that runs `program` + `args` confined so
-    /// it may WRITE only within `prefixes` (canonical realpaths) plus
-    /// `/dev/null`, and may READ system paths plus those prefixes (and
-    /// `program_path`, if resolved). All other reads of user data and all writes
-    /// are denied. cwd/env/stdio are applied by the caller.
+    /// it may EXEC only the resolved entry executable, may WRITE only within
+    /// `prefixes` (canonical realpaths) plus `/dev/null`, and may READ system
+    /// paths plus those prefixes (and `exec_paths`, if resolved). All other
+    /// execution, reads of user data, and writes are denied. cwd/env/stdio are
+    /// applied by the caller.
     fn confined_command(
         &self,
         program: &str,
         args: &[String],
         prefixes: &[PathBuf],
-        program_path: Option<&Path>,
+        exec_paths: &[PathBuf],
     ) -> SandboxResult<Command>;
 }
 
@@ -407,9 +410,9 @@ impl Confiner for SeatbeltConfiner {
         program: &str,
         args: &[String],
         prefixes: &[PathBuf],
-        program_path: Option<&Path>,
+        exec_paths: &[PathBuf],
     ) -> SandboxResult<Command> {
-        let profile = build_seatbelt_profile(prefixes, program_path)?;
+        let profile = build_seatbelt_profile(prefixes, exec_paths)?;
         let mut command = Command::new(SANDBOX_EXEC);
         command
             .arg("-p")
@@ -449,8 +452,9 @@ fn path_to_profile_str(path: &Path) -> SandboxResult<String> {
 /// Build the deny-default Seatbelt profile confining the child to `prefixes`.
 ///
 /// The child may READ system paths (so a shell/binary and the dyld shared cache
-/// load) plus each granted prefix, and may WRITE only within the prefixes and
-/// `/dev/null`. Every other read of user data and every write is denied.
+/// load) plus each granted prefix, may WRITE only within the prefixes and
+/// `/dev/null`, and may EXEC only the resolved entry executable. Every other
+/// read of user data, write, and process execution is denied.
 ///
 /// `(literal "/")` grants read of the root directory *node* itself — dyld's
 /// `CacheFinder` stats `/` on startup and aborts (SIGABRT) without it — but does
@@ -459,18 +463,24 @@ fn path_to_profile_str(path: &Path) -> SandboxResult<String> {
 /// size, never file contents (the read-secret exploit reads *contents* and stays
 /// denied). Every embedded path is a canonical realpath, escaped against
 /// injection.
-fn build_seatbelt_profile(
-    prefixes: &[PathBuf],
-    program_path: Option<&Path>,
-) -> SandboxResult<String> {
+fn build_seatbelt_profile(prefixes: &[PathBuf], exec_paths: &[PathBuf]) -> SandboxResult<String> {
     let mut reads = String::from("(literal \"/\")");
     for sys in SYSTEM_READ_SUBPATHS {
         // Compile-time constants: no untrusted input, no escaping needed.
         reads.push_str(&format!(" (subpath \"{sys}\")"));
     }
-    if let Some(program) = program_path {
+    for program in exec_paths {
         reads.push_str(&format!(" (subpath \"{}\")", path_to_profile_str(program)?));
     }
+    let exec_rule = if exec_paths.is_empty() {
+        String::new()
+    } else {
+        let mut filters = String::new();
+        for program in exec_paths {
+            filters.push_str(&format!(" (literal \"{}\")", path_to_profile_str(program)?));
+        }
+        format!("(allow process-exec{filters})\n")
+    };
 
     let mut writes = String::from("(literal \"/dev/null\")");
     for prefix in prefixes {
@@ -482,7 +492,7 @@ fn build_seatbelt_profile(
     Ok(format!(
         "(version 1)\n\
          (deny default)\n\
-         (allow process-exec*)\n\
+         {exec_rule}\
          (allow process-fork)\n\
          (allow signal (target self))\n\
          (allow sysctl-read)\n\
@@ -509,18 +519,38 @@ fn canonical_prefixes(prefixes: &[String]) -> SandboxResult<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Resolve the child program to a canonical path for the read allowlist. An
-/// absolute or path-bearing command is canonicalized directly; a bare name is
-/// resolved against [`SAFE_PATH`]. Returns `None` when it cannot be resolved —
-/// standard tools are already covered by the system read subpaths, and a program
-/// that cannot be found simply fails to exec inside the sandbox (fail-closed).
-fn resolve_program_path(command: &str) -> Option<PathBuf> {
-    if command.contains('/') {
-        return std::fs::canonicalize(command).ok();
+/// Resolve the child program to a single canonical executable path for the read
+/// and exec allowlists. An absolute command is canonicalized directly; a
+/// relative path-bearing command is canonicalized relative to the sandbox cwd;
+/// a bare name is resolved against [`SAFE_PATH`]. Returns `None` when the
+/// program cannot be resolved; in that case the command simply fails to exec
+/// inside the sandbox.
+fn resolve_program_path(command: &str, cwd: &Path) -> Option<PathBuf> {
+    let resolved = if command.contains('/') {
+        let path = Path::new(command);
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        std::fs::canonicalize(candidate).ok()
+    } else {
+        SAFE_PATH
+            .split(':')
+            .find_map(|dir| std::fs::canonicalize(Path::new(dir).join(command)).ok())
+    }?;
+
+    if command == "sh"
+        && resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "sh")
+        && let Ok(selected) = std::fs::canonicalize("/private/var/select/sh")
+    {
+        return Some(selected);
     }
-    SAFE_PATH
-        .split(':')
-        .find_map(|dir| std::fs::canonicalize(Path::new(dir).join(command)).ok())
+
+    Some(resolved)
 }
 
 /// Spawn and supervise the confined child: real OS filesystem confinement
@@ -534,13 +564,14 @@ fn run_confined(request: &SandboxRequest, cwd: &Path) -> SandboxResult<RunResult
         return Err(SandboxError::ConfinementUnavailable);
     }
     let prefixes = canonical_prefixes(&request.path_prefixes)?;
-    let program_path = resolve_program_path(&request.command);
-    let mut command = confiner.confined_command(
-        &request.command,
-        &request.args,
-        &prefixes,
-        program_path.as_deref(),
-    )?;
+    let resolved_program = resolve_program_path(&request.command, cwd);
+    let exec_paths: Vec<PathBuf> = resolved_program.iter().cloned().collect();
+    let command_program = resolved_program
+        .as_ref()
+        .and_then(|path| path.to_str())
+        .unwrap_or(&request.command);
+    let mut command =
+        confiner.confined_command(command_program, &request.args, &prefixes, &exec_paths)?;
     command
         .current_dir(cwd)
         // No inherited secrets (§13.8): start from an empty environment and add
@@ -791,11 +822,10 @@ mod tests {
     }
 
     #[test]
-    fn detects_modified_and_deleted() {
+    fn detects_modified() {
         let dir = TempDir::new("modify");
         fs::write(dir.path.join("keep.txt"), b"one").unwrap();
-        fs::write(dir.path.join("gone.txt"), b"bye").unwrap();
-        let (command, args) = sh("printf two > keep.txt; rm gone.txt");
+        let (command, args) = sh("printf two > keep.txt");
         let outcome = execute(&SandboxRequest {
             command,
             args,
@@ -808,11 +838,29 @@ mod tests {
             outcome.diff.modified,
             vec![dir.path.join("keep.txt").display().to_string()]
         );
+        assert!(outcome.diff.created.is_empty());
+        assert!(outcome.diff.deleted.is_empty());
+    }
+
+    #[test]
+    fn direct_declared_binary_can_delete_inside_prefix() {
+        let dir = TempDir::new("delete");
+        fs::write(dir.path.join("gone.txt"), b"bye").unwrap();
+        let outcome = execute(&SandboxRequest {
+            command: "rm".to_string(),
+            args: vec!["gone.txt".to_string()],
+            working_dir: dir.str(),
+            path_prefixes: vec![dir.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute");
+        assert_eq!(outcome.status, SandboxStatus::Ok);
         assert_eq!(
             outcome.diff.deleted,
             vec![dir.path.join("gone.txt").display().to_string()]
         );
         assert!(outcome.diff.created.is_empty());
+        assert!(outcome.diff.modified.is_empty());
     }
 
     #[test]
@@ -956,15 +1004,78 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shell_cannot_exec_undeclared_subprocess() {
+        let work = TempDir::new("exec-deny");
+        let (command, args) = sh("/bin/ls >/dev/null");
+        let outcome = execute(&SandboxRequest {
+            command,
+            args,
+            working_dir: work.str(),
+            path_prefixes: vec![work.str()],
+            limits: SandboxLimits::default(),
+        })
+        .expect("execute");
+        assert_ne!(
+            outcome.status,
+            SandboxStatus::Ok,
+            "undeclared subprocess execution must be denied"
+        );
+        assert!(outcome.diff.is_empty());
+    }
+
+    #[test]
+    fn relative_entry_executable_resolves_against_sandbox_cwd() {
+        let work = TempDir::new("relative-exec");
+        let tool = work.path.join("tool");
+        fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
+        let resolved = resolve_program_path("./tool", &work.path).expect("relative tool resolves");
+        assert_eq!(resolved, fs::canonicalize(tool).unwrap());
+    }
+
+    #[test]
+    fn path_bearing_sh_is_not_rewritten_to_system_shell_selector() {
+        let work = TempDir::new("relative-sh");
+        let tool = work.path.join("sh");
+        fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
+        let resolved = resolve_program_path("./sh", &work.path).expect("relative sh resolves");
+        assert_eq!(resolved, fs::canonicalize(tool).unwrap());
+    }
+
+    #[test]
+    fn shell_selector_is_not_extra_exec_authority() {
+        let work = TempDir::new("shell-selector");
+        let program =
+            resolve_program_path("sh", &work.path).expect("sh resolves through SAFE_PATH");
+        let profile = build_seatbelt_profile(
+            std::slice::from_ref(&work.path),
+            std::slice::from_ref(&program),
+        )
+        .expect("profile");
+        if let Ok(selected) = fs::canonicalize("/private/var/select/sh")
+            && selected != program
+        {
+            let selected = selected.to_str().expect("selected shell path is utf-8");
+            assert!(
+                !profile.contains(&format!("(literal \"{}\")", escape_seatbelt(selected))),
+                "shell selector target must not be granted as extra executable authority: {profile}"
+            );
+        }
+    }
+
     /// The generated profile must be a deny-default Seatbelt profile that grants
     /// writes only within each (escaped) prefix, and a crafted prefix cannot
     /// inject profile syntax.
     #[test]
     fn seatbelt_profile_is_deny_default_and_injection_safe() {
         let prefix = PathBuf::from("/tmp/a\"b\\c");
-        let profile = build_seatbelt_profile(&[prefix], None).expect("profile");
+        let program = PathBuf::from("/bin/sh");
+        let profile = build_seatbelt_profile(&[prefix], &[program]).expect("profile");
         assert!(profile.starts_with("(version 1)\n(deny default)\n"));
         assert!(profile.contains("(allow file-write*"));
+        assert!(profile.contains("(allow process-exec (literal \"/bin/sh\"))"));
+        assert!(!profile.contains("process-exec*"));
+        assert!(!profile.contains("network"));
         // The embedded quote/backslash are escaped, so the string literal is not
         // terminated early: the escaped form appears verbatim.
         assert!(
@@ -1019,7 +1130,7 @@ mod tests {
     fn output_is_capped_not_unbounded() {
         let dir = TempDir::new("cap");
         // Emit far more than the cap; capture must be bounded and flagged.
-        let (command, args) = sh("head -c 200000 /dev/zero | tr '\\0' 'a'");
+        let (command, args) = sh("i=0; while [ $i -lt 20000 ]; do printf a; i=$((i+1)); done");
         let limits = SandboxLimits {
             max_output_bytes: 4096,
             ..SandboxLimits::default()
@@ -1039,7 +1150,7 @@ mod tests {
     #[test]
     fn timeout_kills_a_runaway() {
         let dir = TempDir::new("timeout");
-        let (command, args) = sh("sleep 30");
+        let (command, args) = sh("while :; do :; done");
         let limits = SandboxLimits {
             timeout: Duration::from_millis(300),
             ..SandboxLimits::default()

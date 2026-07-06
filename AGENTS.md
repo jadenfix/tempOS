@@ -43,6 +43,9 @@ boundary.
 - `crates/beater-os-sandbox` is the scoped local execution lane: canonicalized
   filesystem confinement, scrubbed environment, bounded execution, and
   filesystem-diff receipts (final.md §8, §13.8).
+- `crates/beater-os-tool-gateway` is the runtime mediation layer that resolves
+  registered tools, derives manifests, asks `beater-osd` for admission, executes
+  admitted local shell tools through the sandbox, and records receipts.
 - `docs/implementation-backlog.md` maps `final.md` into PR-sized slices and
   review rules.
 - `docs/sota-systems-engineering.md` is the performance, language, security, and
@@ -53,6 +56,8 @@ boundary.
   benchmark/trace evidence.
 - `.codex/skills/beateros-systems-engineering/SKILL.md` packages that doctrine
   as a reusable Codex skill.
+- `.codex/skills/beateros-pr-review/SKILL.md` packages review and repo-governance
+  tasks for non-author review and repetitive infra/docs obligations.
 - `CLAUDE.md` and `.cursor/rules/beateros.mdc` keep equivalent guidance close to
   Claude Code and Cursor.
 

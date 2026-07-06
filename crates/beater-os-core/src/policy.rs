@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::contracts::{
     ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DataClass,
     DecisionResult, PaymentMandate, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence,
-    TaintLabel,
+    TaintLabel, ToolManifest,
 };
 use crate::error::BeaterOsResult;
 use crate::hash::HashValue;
@@ -31,6 +31,23 @@ pub struct AdmissionContext {
     /// own `revoked` flag is set *or* its handle is in this set, and a grant is
     /// only exercisable while its whole delegation chain is unrevoked.
     pub revoked_handles: BTreeSet<String>,
+    /// Kernel-held ground truth about registered tools, keyed by `tool_id`.
+    /// This metadata is installed out of band, never supplied by the agent's
+    /// per-action manifest. Admission uses it as a stricter risk/side-effect
+    /// floor so a tool cannot be laundered by under-declared manifest fields.
+    pub tool_registry: BTreeMap<String, ToolManifest>,
+    /// When true, an action whose `tool_id` is absent from `tool_registry` is
+    /// denied. Current legacy callers may set this false while registry wiring
+    /// lands, but the compatibility mode is explicit and auditable.
+    pub require_registered_tools: bool,
+}
+
+#[derive(Clone, Debug)]
+struct EffectivePolicy {
+    side_effects: BTreeSet<SideEffectClass>,
+    derived_floor: RiskClass,
+    risk: RiskClass,
+    registry_grounded: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -49,20 +66,6 @@ impl PolicyEngine {
         let mut matched_rules = Vec::new();
         let manifest_hash = manifest.digest()?;
 
-        // §7.4/§12.3/§26: risk can be raised by policy from kernel-derived fields,
-        // never lowered by the agent. The agent-asserted `risk_class` may only
-        // RAISE the effective risk above this kernel-derived floor.
-        let derived_floor = derived_risk_floor(
-            &manifest.action_kind,
-            &manifest.expected_side_effects,
-            &manifest.data_classes,
-        );
-        let effective_risk = manifest.risk_class.max(derived_floor);
-        matched_rules.push(format!(
-            "kernel_derived_risk_floor={derived_floor:?};declared_risk={:?};effective_risk={effective_risk:?}",
-            manifest.risk_class
-        ));
-
         if manifest.session_id != ctx.session_id {
             return Ok(decision(
                 manifest,
@@ -75,6 +78,100 @@ impl PolicyEngine {
             ));
         }
         matched_rules.push("manifest_bound_to_context_session".to_string());
+
+        let Some(tool) = ctx.tool_registry.get(&manifest.tool_id) else {
+            if ctx.require_registered_tools {
+                return Ok(decision(
+                    manifest,
+                    manifest_hash,
+                    ctx,
+                    DecisionResult::Denied,
+                    matched_rules,
+                    "tool is not registered in the admission context",
+                    DecisionFollowup::none(),
+                ));
+            }
+            matched_rules
+                .push("tool_registry_lookup=missing;require_registered_tools=false".to_string());
+            let effective_side_effects = manifest.expected_side_effects.clone();
+            let derived_floor = derived_risk_floor(
+                &manifest.action_kind,
+                &effective_side_effects,
+                &manifest.data_classes,
+            );
+            let effective_risk = manifest.risk_class.max(derived_floor);
+            return self.admit_with_effective_policy(
+                manifest,
+                manifest_hash,
+                ctx,
+                matched_rules,
+                EffectivePolicy {
+                    side_effects: effective_side_effects,
+                    derived_floor,
+                    risk: effective_risk,
+                    registry_grounded: false,
+                },
+            );
+        };
+
+        let mut effective_side_effects = manifest.expected_side_effects.clone();
+        effective_side_effects.extend(tool.side_effects.iter().copied());
+        let derived_floor = derived_risk_floor(
+            &manifest.action_kind,
+            &effective_side_effects,
+            &manifest.data_classes,
+        );
+        let effective_risk = manifest.risk_class.max(derived_floor).max(tool.risk_class);
+        matched_rules.push(format!(
+            "registered_tool_grounding=present;tool_id={};tool_version={};tool_publisher={};tool_risk={:?};declared_risk={:?};kernel_derived_risk_floor={derived_floor:?};effective_risk={effective_risk:?}",
+            manifest.tool_id, tool.version, tool.publisher, tool.risk_class, manifest.risk_class
+        ));
+        if tool.side_effects.iter().any(|effect| {
+            *effect != SideEffectClass::None && !manifest.expected_side_effects.contains(effect)
+        }) {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                "manifest omits a side effect the registered tool is known to produce",
+                DecisionFollowup::none(),
+            ));
+        }
+
+        self.admit_with_effective_policy(
+            manifest,
+            manifest_hash,
+            ctx,
+            matched_rules,
+            EffectivePolicy {
+                side_effects: effective_side_effects,
+                derived_floor,
+                risk: effective_risk,
+                registry_grounded: true,
+            },
+        )
+    }
+
+    fn admit_with_effective_policy(
+        &self,
+        manifest: &ActionManifest,
+        manifest_hash: HashValue,
+        ctx: &AdmissionContext,
+        mut matched_rules: Vec<String>,
+        effective: EffectivePolicy,
+    ) -> BeaterOsResult<PolicyDecision> {
+        // §7.4/§12.3/§26: risk can be raised by policy from kernel-derived and
+        // registry-derived fields, never lowered by the agent.
+        if !effective.registry_grounded {
+            let derived_floor = effective.derived_floor;
+            let effective_risk = effective.risk;
+            matched_rules.push(format!(
+                "kernel_derived_risk_floor={derived_floor:?};declared_risk={:?};effective_risk={effective_risk:?}",
+                manifest.risk_class
+            ));
+        }
 
         if manifest.required_grants.is_empty() {
             return Ok(decision(
@@ -89,7 +186,9 @@ impl PolicyEngine {
         }
         matched_rules.push("required_grants_present".to_string());
 
-        if manifest.has_external_side_effect() && manifest.idempotency_key.is_none() {
+        if side_effects_have_external_effect(&effective.side_effects)
+            && manifest.idempotency_key.is_none()
+        {
             return Ok(decision(
                 manifest,
                 manifest_hash,
@@ -102,9 +201,21 @@ impl PolicyEngine {
         }
         matched_rules.push("external_side_effect_idempotency".to_string());
 
-        if manifest
-            .expected_side_effects
-            .contains(&SideEffectClass::Payment)
+        if let Some(reason) =
+            side_effect_action_violation(&manifest.action_kind, &effective.side_effects)
+        {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                reason,
+                DecisionFollowup::none(),
+            ));
+        }
+
+        if effective.side_effects.contains(&SideEffectClass::Payment)
             && manifest.action_kind != ActionKind::Spend
         {
             return Ok(decision(
@@ -118,20 +229,19 @@ impl PolicyEngine {
             ));
         }
 
-        if is_payment_action(manifest)
-            && let Err(reason) = payment_authorized_by_mandate(manifest, ctx)
-        {
-            return Ok(decision(
-                manifest,
-                manifest_hash,
-                ctx,
-                DecisionResult::Denied,
-                matched_rules,
-                reason.as_str(),
-                DecisionFollowup::none(),
-            ));
-        }
-        if is_payment_action(manifest) {
+        let payment_action = is_payment_action(manifest, &effective.side_effects);
+        if payment_action {
+            if let Err(reason) = payment_authorized_by_mandate(manifest, ctx) {
+                return Ok(decision(
+                    manifest,
+                    manifest_hash,
+                    ctx,
+                    DecisionResult::Denied,
+                    matched_rules,
+                    &reason,
+                    DecisionFollowup::none(),
+                ));
+            }
             matched_rules.push("payment_authorized_by_mandate".to_string());
         }
 
@@ -176,7 +286,7 @@ impl PolicyEngine {
 
         let allowed = matching_grants
             .iter()
-            .all(|grant| grant.allows_manifest(manifest, effective_risk, ctx.now, &ctx.actor_id));
+            .all(|grant| grant.allows_manifest(manifest, effective.risk, ctx.now, &ctx.actor_id));
         if !allowed {
             return Ok(decision(
                 manifest,
@@ -217,7 +327,7 @@ impl PolicyEngine {
             .iter()
             .filter(|grant| {
                 grant.approval.mode != ApprovalMode::None
-                    && effective_risk >= grant.approval.threshold_risk
+                    && effective.risk >= grant.approval.threshold_risk
             })
             .any(|grant| !has_approval_for_grant(grant, manifest, &manifest_hash, ctx))
         {
@@ -236,9 +346,14 @@ impl PolicyEngine {
         }
         matched_rules.push("grant_approval_policy_checked".to_string());
 
-        if effective_risk >= RiskClass::High
-            && manifest.has_external_side_effect()
-            && !has_passed_simulation_for_action(manifest, &manifest_hash, ctx)
+        if effective.risk >= RiskClass::High
+            && side_effects_have_external_effect(&effective.side_effects)
+            && !has_passed_simulation_for_action(
+                manifest,
+                &manifest_hash,
+                ctx,
+                &required_simulation_id(manifest),
+            )
         {
             return Ok(decision(
                 manifest,
@@ -247,10 +362,7 @@ impl PolicyEngine {
                 DecisionResult::NeedsSimulation,
                 matched_rules,
                 "high-risk external side effects require a passed simulation before execution",
-                DecisionFollowup::simulation(format!(
-                    "action:{}:high-risk-side-effect-simulation",
-                    manifest.action_id
-                )),
+                DecisionFollowup::simulation(required_simulation_id(manifest)),
             ));
         }
 
@@ -322,11 +434,44 @@ pub fn derived_risk_floor(
 /// verb. Both are treated as payments so a spend cannot dodge mandate review by
 /// omitting the `Payment` side-effect label (the same anti-laundering stance as
 /// issues #46 and #8).
-fn is_payment_action(manifest: &ActionManifest) -> bool {
-    manifest
-        .expected_side_effects
-        .contains(&SideEffectClass::Payment)
-        || manifest.action_kind == ActionKind::Spend
+fn is_payment_action(manifest: &ActionManifest, side_effects: &BTreeSet<SideEffectClass>) -> bool {
+    side_effects.contains(&SideEffectClass::Payment) || manifest.action_kind == ActionKind::Spend
+}
+
+fn side_effects_have_external_effect(side_effects: &BTreeSet<SideEffectClass>) -> bool {
+    side_effects.iter().any(|effect| {
+        !matches!(
+            effect,
+            SideEffectClass::None | SideEffectClass::MemoryWrite | SideEffectClass::LocalWrite
+        )
+    })
+}
+
+fn side_effect_action_violation(
+    action_kind: &ActionKind,
+    side_effects: &BTreeSet<SideEffectClass>,
+) -> Option<&'static str> {
+    for effect in side_effects {
+        let violation = match effect {
+            SideEffectClass::Payment if *action_kind != ActionKind::Spend => {
+                Some("payment side effects must use the spend action kind")
+            }
+            SideEffectClass::CloudMutation if *action_kind != ActionKind::Deploy => {
+                Some("cloud mutation side effects must use the deploy action kind")
+            }
+            SideEffectClass::Deployment if *action_kind != ActionKind::Deploy => {
+                Some("deployment side effects must use the deploy action kind")
+            }
+            SideEffectClass::Delegation if *action_kind != ActionKind::Delegate => {
+                Some("delegation side effects must use the delegate action kind")
+            }
+            _ => None,
+        };
+        if violation.is_some() {
+            return violation;
+        }
+    }
+    None
 }
 
 /// Enforce `final.md` §12.7 "no payment without a mandate" (issue #73). Grants
@@ -576,13 +721,22 @@ fn has_passed_simulation_for_action(
     manifest: &ActionManifest,
     manifest_hash: &HashValue,
     ctx: &AdmissionContext,
+    required_simulation: &str,
 ) -> bool {
     ctx.simulations.iter().any(|simulation| {
         simulation.passed_at <= ctx.now
             && simulation.action_id == manifest.action_id
             && simulation.manifest_hash == *manifest_hash
             && simulation.policy_version == ctx.policy_version
+            && simulation.scenario_id == required_simulation
     })
+}
+
+fn required_simulation_id(manifest: &ActionManifest) -> String {
+    format!(
+        "action:{}:high-risk-side-effect-simulation",
+        manifest.action_id
+    )
 }
 
 fn decision(

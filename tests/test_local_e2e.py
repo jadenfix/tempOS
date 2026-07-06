@@ -35,6 +35,26 @@ class PlanTest(unittest.TestCase):
                         "docs/governance/coordination-ledger.md",
                     ),
                 ),
+                (
+                    "beater-osd-runtime-smoke",
+                    ("python3", "scripts/run-beater-osd-runtime-smoke.py", "--json"),
+                ),
+                (
+                    "bare-metal-readiness",
+                    (
+                        "python3",
+                        "scripts/check-bare-metal-readiness.py",
+                        "--check-host",
+                        "--require-control-plane-lane",
+                        "--require-workload-class",
+                        "policy-admission",
+                        "--require-workload-route",
+                        "policy-admission=portable-control-plane",
+                        "--require-migration-phase",
+                        "runtime",
+                    ),
+                ),
+                ("bare-metal-e2e-matrix", ("python3", "scripts/run-bare-metal-e2e-matrix.py")),
                 ("python-unit-tests", ("python3", "-m", "unittest", "discover", "-s", "tests")),
                 ("spec-conformance", ("python3", "spec/conformance/validate.py", "--quiet")),
                 ("conformance-selftest", ("python3", "tools/conformance/selftest.py")),
@@ -61,6 +81,14 @@ class PlanTest(unittest.TestCase):
             ],
         )
 
+    def test_plan_includes_host_profile(self) -> None:
+        profile_path = Path("/tmp/beateros-host-profile.json")
+        plan = local_e2e.build_plan("python3", branch_base_available=True, host_profile=profile_path)
+        bare_metal = next(gate for gate in plan if gate.name == "bare-metal-readiness")
+        self.assertEqual(
+            bare_metal.command[-3:],
+            ("--strict-host-context", "--host-profile", str(profile_path)),
+        )
 
     def test_branch_whitespace_uses_origin_main_when_available(self) -> None:
         plan = local_e2e.build_plan("python3", branch_base_available=True)

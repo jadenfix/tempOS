@@ -10,6 +10,7 @@ description = "Durable single-writer runtime store for the beaterOS local daemon
 [dependencies]
 beater-os-core = { path = "../beater-os-core" }
 chrono.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 

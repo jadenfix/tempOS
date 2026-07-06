@@ -424,6 +424,55 @@ fn not_admitted_action_does_not_execute_and_leaves_no_receipt() {
     assert!(verify.contains("journal OK"), "{verify}");
 }
 
+#[test]
+fn execute_with_unregistered_tool_is_denied_before_process_spawn() {
+    let home = TempDir::new("home");
+    let work = TempDir::new("work");
+    let h = home.canonical();
+    let workdir = work.canonical();
+    let session = "sess-exec-tool-registry";
+
+    create_session(&h, session);
+    let grant_id = issue_grant(
+        &h,
+        session,
+        &["--actions", "execute", "--path-prefix", &workdir],
+    );
+
+    let out = ok(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "unknown-shell",
+            "--command",
+            "sh",
+            "--arg",
+            "-c",
+            "--arg",
+            "touch should_not_exist.txt",
+            "--cwd",
+            &workdir,
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-unknown-tool",
+        ],
+    );
+
+    assert!(out.contains("Denied"), "{out}");
+    assert!(out.contains("not registered"), "{out}");
+    assert!(out.contains("skipped"), "{out}");
+    assert!(
+        !PathBuf::from(&workdir)
+            .join("should_not_exist.txt")
+            .exists()
+    );
+}
+
 /// Drive an `action execute` and return the CLI output.
 fn execute_script(
     h: &str,
@@ -589,6 +638,42 @@ fn exploit_read_secret_outside_prefix_is_denied() {
         !out.contains("execution:   ok"),
         "a denied read must surface a non-zero child status:\n{out}"
     );
+}
+
+#[test]
+fn undeclared_subprocess_exec_is_denied() {
+    let home = TempDir::new("home");
+    let work = TempDir::new("work");
+    let h = home.canonical();
+    let workdir = work.canonical();
+    let session = "sess-exec-deny";
+
+    create_session(&h, session);
+    let grant_id = issue_grant(
+        &h,
+        session,
+        &["--actions", "execute", "--path-prefix", &workdir],
+    );
+
+    let out = execute_script(
+        &h,
+        session,
+        &grant_id,
+        &workdir,
+        "act-exec-deny",
+        "/bin/ls >/dev/null",
+    );
+
+    assert!(
+        !out.contains("execution:   ok"),
+        "shell must not be able to pivot into undeclared binaries:\n{out}"
+    );
+    assert!(
+        out.contains("execution:   failed") || out.contains("execution:   signaled"),
+        "denied exec must surface as an unsuccessful child status:\n{out}"
+    );
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
 }
 
 /// A legitimate in-prefix write still succeeds and the receipt truthfully

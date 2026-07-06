@@ -323,6 +323,15 @@ impl ToolRegistry {
             .insert(workspace_id.to_string(), set);
     }
 
+    /// Return whether a workspace has an explicit allowlist configured.
+    ///
+    /// `resolve` intentionally preserves an unrestricted global registry view
+    /// for non-runtime callers. Runtime boundaries that execute tools should
+    /// use this to require explicit workspace scoping before resolving.
+    pub fn has_workspace_allowlist(&self, workspace_id: &str) -> bool {
+        self.workspace_allowlists.contains_key(workspace_id)
+    }
+
     /// Look up a registered tool without applying resolution policy.
     pub fn get(&self, tool_id: &str, version: &str) -> RegistryResult<&RegisteredTool> {
         self.tools

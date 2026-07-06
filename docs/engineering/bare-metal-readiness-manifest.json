@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-06",
+  "profiles": [
+    {
+      "name": "portable-host-control-plane",
+      "scope": "compatibility",
+      "stability_tier": "stable",
+      "target_os": ["linux", "darwin", "windows"],
+      "target_arch": ["x86_64", "arm64", "aarch64"],
+      "resource_contract": {
+        "min_cpu_cores": 2,
+        "min_memory_gib": 4,
+        "min_storage_iops": 2000,
+        "max_residual_latency_ms": 500
+      },
+      "accelerators": [
+        {
+          "kind": "cpu",
+          "required": true,
+          "fallback_strategy": "default-host-execution",
+          "reason": "portable compatibility and baseline e2e support"
+        }
+      ],
+      "optimization_targets": {
+        "class": "control-plane",
+        "max_syscalls_p95": 650,
+        "max_copy_gib_p95": 0.2,
+        "deadline_ms_p95": 1800
+      }
+    },
+    {
+      "name": "apple-silicon-benchmark-host",
+      "scope": "metal-lane-experimental",
+      "stability_tier": "experimental",
+      "target_os": ["darwin"],
+      "target_arch": ["arm64", "aarch64"],
+      "resource_contract": {
+        "min_cpu_cores": 4,
+        "min_memory_gib": 8,
+        "min_memory_bandwidth_gbps": 40,
+        "max_gpu_tolerance_temp_c": 85
+      },
+      "accelerators": [
+        {
+          "kind": "apple_gpu",
+          "required": false,
+          "fallback_strategy": "cpu",
+          "reason": "first-party optimization lane for unified-memory and ANE-like paths"
+        },
+        {
+          "kind": "secure_enclave",
+          "required": false,
+          "fallback_strategy": "software-policy-only",
+          "reason": "macOS key custody and future hardware-backed authority experiments"
+        }
+      ],
+      "optimization_targets": {
+        "class": "accelerator-aware",
+        "max_queue_delay_ms_p95": 35,
+        "max_host_device_copy_ms_p95": 12,
+        "max_thermal_throttle_duration_ms": 60000
+      }
+    },
+    {
+      "name": "linux-cuda-scored-host",
+      "scope": "metal-lane-experimental",
+      "stability_tier": "beta",
+      "target_os": ["linux"],
+      "target_arch": ["x86_64", "amd64"],
+      "resource_contract": {
+        "min_cpu_cores": 8,
+        "min_memory_gib": 16,
+        "min_gpu_mem_gib": 6,
+        "min_pcie_bwl_gbps": 16
+      },
+      "accelerators": [
+        {
+          "kind": "cuda",
+          "required": false,
+          "fallback_strategy": "cpu-or-microvm",
+          "reason": "first-class accelerator-lane target for policy-heavy tool/model workloads"
+        },
+        {
+          "kind": "cpu",
+          "required": true,
+          "fallback_strategy": "cpu-only-core-path",
+          "reason": "control-plane cannot depend on GPU being present"
+        }
+      ],
+      "optimization_targets": {
+        "class": "batching",
+        "max_copy_gb_per_job_p95": 2,
+        "max_batch_wait_ms_p95": 28,
+        "max_queue_depth": 24
+      }
+    }
+  ],
+  "architecture": {
+    "control_plane_lane": "portable-control-plane",
+    "migration_order": [
+      "portable-control-plane",
+      "apple-metal-lane",
+      "linux-cuda-lane"
+    ],
+    "lanes": [
+      {
+        "name": "portable-control-plane",
+        "profile": "portable-host-control-plane",
+        "mandatory": true,
+        "required_stability_tier": "stable",
+        "workload_classes": [
+          "control-plane",
+          "policy-admission",
+          "journaling",
+          "tool-gateway"
+        ],
+        "fallback_chain": ["portable-host-control-plane"]
+      },
+      {
+        "name": "apple-metal-lane",
+        "profile": "apple-silicon-benchmark-host",
+        "mandatory": false,
+        "depends_on": ["portable-control-plane"],
+        "required_stability_tier": "experimental",
+        "workload_classes": [
+          "benchmarks",
+          "media",
+          "apple-metal-integration"
+        ],
+        "fallback_chain": ["portable-host-control-plane"]
+      },
+      {
+        "name": "linux-cuda-lane",
+        "profile": "linux-cuda-scored-host",
+        "mandatory": false,
+        "depends_on": ["portable-control-plane"],
+        "required_stability_tier": "beta",
+        "workload_classes": [
+          "batch-policy",
+          "tooling",
+          "cuda-scoring"
+        ],
+        "fallback_chain": ["portable-host-control-plane"]
+      }
+    ]
+  }
+}

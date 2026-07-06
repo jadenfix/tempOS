@@ -2,25 +2,24 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, AgentSession, Budget, CapabilityGrant,
-    CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
-    GrantConstraints, JournalEvent, PolicyEngine, ResourceKind, RiskClass, SessionStatus,
-    SideEffectClass, hash_json,
+    ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
+    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, GrantConstraints, ResourceKind,
+    RiskClass, SessionStatus, SideEffectClass, hash_json,
 };
 use beater_os_sandbox::{
     SandboxLimits, SandboxRequest, command_digest, execute as sandbox_execute,
 };
+use beater_osd::{DAEMON_POLICY_VERSION, SessionTransition, Store};
 use chrono::{DateTime, TimeDelta, Utc};
 use uuid::Uuid;
 
 use crate::args::{self, ParsedArgs};
 use crate::error::{CliError, CliResult};
-use crate::store::Store;
 
 /// The policy version this CLI stamps onto grants and admission contexts.
 /// Kept as a single constant so grants, approvals, and decisions stay
 /// consistent, mirroring the invariants the core policy engine checks.
-pub const POLICY_VERSION: &str = "beateros-policy-v0";
+pub const POLICY_VERSION: &str = DAEMON_POLICY_VERSION;
 
 const DEFAULT_GRANT_TTL_SECS: u64 = 3600;
 
@@ -32,6 +31,9 @@ pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         ("session", "create") => session_create(store, args),
         ("session", "list") => session_list(store, args),
         ("session", "show") => session_show(store, args),
+        ("session", "pause") => session_transition(store, args, SessionTransition::Pause),
+        ("session", "resume") => session_transition(store, args, SessionTransition::Resume),
+        ("session", "cancel") => session_transition(store, args, SessionTransition::Cancel),
         ("grant", "issue") => grant_issue(store, args),
         ("action", "propose") => action_propose(store, args),
         ("action", "execute") => action_execute(store, args),
@@ -48,10 +50,19 @@ fn session_create(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let now = Utc::now();
     let agent_id = args.require("agent")?.to_string();
     let created_by = args.get_or("created-by", &agent_id).to_string();
+    let session_id = args
+        .get_or("session", &Uuid::new_v4().to_string())
+        .to_string();
+    let initial_capability_ids: BTreeSet<String> = {
+        let provided = args.csv("initial-capability-id");
+        if provided.is_empty() {
+            BTreeSet::from([default_root_grant_id(&session_id)])
+        } else {
+            provided.into_iter().collect()
+        }
+    };
     let session = AgentSession {
-        session_id: args
-            .get_or("session", &Uuid::new_v4().to_string())
-            .to_string(),
+        session_id,
         created_at: now,
         created_by,
         agent_id,
@@ -59,12 +70,12 @@ fn session_create(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         goal: args.require("goal")?.to_string(),
         constraints: args.csv("constraint"),
         policy_profile: args.get_or("policy-profile", "default").to_string(),
-        initial_capability_ids: BTreeSet::new(),
+        initial_capability_ids,
         budget: Budget::default(),
         model_policy: Default::default(),
         memory_scope: args.get("memory-scope").map(str::to_string),
         journal_root: store.root().display().to_string(),
-        status: SessionStatus::Created,
+        status: SessionStatus::Running,
     };
     store.create_session(&session)?;
     Ok(format!(
@@ -108,6 +119,20 @@ fn session_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         projection.manifests.len(),
         projection.decisions.len(),
         projection.receipts.len(),
+    ))
+}
+
+fn session_transition(
+    store: &Store,
+    args: &ParsedArgs,
+    transition: SessionTransition,
+) -> CliResult<String> {
+    let session_id = require_session(store, args)?;
+    let record = store.transition_session(&session_id, transition, Utc::now())?;
+    let projection = store.project(&session_id)?;
+    Ok(format!(
+        "session {} {:?}\n  status: {:?}\n  journal seq: {}",
+        session_id, transition, projection.session.status, record.seq
     ))
 }
 
@@ -159,10 +184,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         )
         .ok_or_else(|| CliError::invalid("expires-in-secs", ttl.to_string()))?;
 
+    let grant_id = args
+        .get("grant-id")
+        .map(str::to_string)
+        .unwrap_or_else(|| default_root_grant_id(&session_id));
     let grant = CapabilityGrant {
-        grant_id: args
-            .get_or("grant-id", &Uuid::new_v4().to_string())
-            .to_string(),
+        grant_id,
         issuer: projection.session.created_by.clone(),
         holder: projection.session.agent_id.clone(),
         session_id: session_id.clone(),
@@ -185,13 +212,7 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         revoked: false,
     };
 
-    store.append_event(
-        &session_id,
-        JournalEvent::CapabilityGranted {
-            grant: grant.clone(),
-        },
-        now,
-    )?;
+    store.issue_grant(&session_id, grant.clone(), now)?;
 
     Ok(format!(
         "issued grant {}\n  holder:  {}\n  scope:   {:?} {} -> {:?}\n  expires: {}",
@@ -205,7 +226,6 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
 }
 
 fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
-    let now = Utc::now();
     let session_id = require_session(store, args)?;
     let projection = store.project(&session_id)?;
 
@@ -296,37 +316,7 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             .to_string(),
     };
 
-    // Journal the proposal before admission so the decision has a cause.
-    store.append_event(
-        &session_id,
-        JournalEvent::ActionProposed {
-            manifest: Box::new(manifest.clone()),
-        },
-        now,
-    )?;
-
-    let ctx = AdmissionContext {
-        now,
-        actor_id: projection.session.agent_id.clone(),
-        session_id: session_id.clone(),
-        policy_version: POLICY_VERSION.to_string(),
-        grants: projection.active_grants(now),
-        approvals: Vec::new(),
-        simulations: Vec::new(),
-        mandates: projection.mandates.clone(),
-        revoked_handles: std::collections::BTreeSet::new(),
-    };
-    // `admit` is fallible because it digests the manifest; propagate any
-    // hashing error rather than pretending a decision was reached.
-    let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
-
-    store.append_event(
-        &session_id,
-        JournalEvent::PolicyDecided {
-            decision: decision.clone(),
-        },
-        now,
-    )?;
+    let decision = store.admit_action(&session_id, manifest.clone())?.decision;
 
     let mut out = vec![
         format!("action {}", manifest.action_id),
@@ -361,9 +351,9 @@ const DEFAULT_EXECUTE_TIMEOUT_SECS: u64 = 30;
 ///    filesystem authority, yielding the kernel-derived `resolved_target`
 ///    (§7.4). A symlink escape or missing confinement aborts before anything is
 ///    journaled or executed.
-/// 2. Build the `ActionManifest` (`action_kind = Execute`) and run
-///    [`PolicyEngine::admit`] — no admission logic lives in the CLI.
-/// 3. Journal `ActionProposed` + `PolicyDecided`.
+/// 2. Build the `ActionManifest` (`action_kind = Execute`) and ask the daemon
+///    store to admit it — no admission logic lives in the CLI.
+/// 3. The daemon journals `ActionProposed` + `PolicyDecided`.
 /// 4. **Only if `Allowed`**, execute in the sandbox, build a `CapabilityReceipt`
 ///    (input digest = command+args, output digest = captured stdout, side-effect
 ///    summary = the filesystem diff), journal `ReceiptAppended`, and persist it.
@@ -475,34 +465,9 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             .to_string(),
     };
 
-    // (3) Journal the proposal before admission so the decision has a cause.
-    store.append_event(
-        &session_id,
-        JournalEvent::ActionProposed {
-            manifest: Box::new(manifest.clone()),
-        },
-        now,
-    )?;
-
-    let ctx = AdmissionContext {
-        now,
-        actor_id: projection.session.agent_id.clone(),
-        session_id: session_id.clone(),
-        policy_version: POLICY_VERSION.to_string(),
-        grants: active_grants,
-        approvals: Vec::new(),
-        simulations: Vec::new(),
-        mandates: projection.mandates.clone(),
-        revoked_handles: std::collections::BTreeSet::new(),
-    };
-    let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
-    store.append_event(
-        &session_id,
-        JournalEvent::PolicyDecided {
-            decision: decision.clone(),
-        },
-        now,
-    )?;
+    // (3) The daemon store journals the proposal and policy decision under the
+    // same single-writer runtime lock.
+    let decision = store.admit_action(&session_id, manifest.clone())?.decision;
 
     let mut out = vec![
         format!("action {}", manifest.action_id),
@@ -600,7 +565,7 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         .cloned()
         .collect();
 
-    let receipt = store.stage_receipt(
+    let receipt = store.append_receipt(
         &session_id,
         CapabilityReceiptInput {
             receipt_id: args.get("receipt-id").map(str::to_string),
@@ -620,16 +585,8 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             external_ids: Vec::new(),
             artifact_refs,
         },
-    )?;
-
-    store.append_event(
-        &session_id,
-        JournalEvent::ReceiptAppended {
-            receipt: receipt.clone(),
-        },
         now,
     )?;
-    store.persist_receipt(&session_id, &receipt)?;
 
     out.push(format!("  execution:   {}", outcome.status_str()));
     out.push(format!("  exit_code:   {:?}", outcome.exit_code));
@@ -781,11 +738,9 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         None => now,
     };
 
-    // Compute the chained receipt without touching disk, journal it (the
-    // journal is the source of truth the trace is projected from), then persist
-    // the derived ledger line. If a crash interleaves, the journal still holds
-    // the receipt and the ledger can be rebuilt from it.
-    let receipt = store.stage_receipt(
+    // The daemon store computes the chained receipt and appends its journal
+    // event under the same runtime writer lock.
+    let receipt = store.append_receipt(
         &session_id,
         CapabilityReceiptInput {
             receipt_id: args.get("receipt-id").map(str::to_string),
@@ -805,16 +760,8 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             external_ids: args.csv("external-id"),
             artifact_refs: args.csv("artifact"),
         },
-    )?;
-
-    store.append_event(
-        &session_id,
-        JournalEvent::ReceiptAppended {
-            receipt: receipt.clone(),
-        },
         now,
     )?;
-    store.persist_receipt(&session_id, &receipt)?;
 
     Ok(format!(
         "recorded receipt {} for action {}\n  status:  {}\n  effects: {:?}\n  hash:    {}",
@@ -917,10 +864,14 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
 /// Resolve the `--session` flag, verifying the session exists.
 fn require_session(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let session_id = args.require("session")?.to_string();
-    if !store.session_exists(&session_id) {
+    if !store.session_exists(&session_id)? {
         return Err(CliError::SessionNotFound(session_id));
     }
     Ok(session_id)
+}
+
+fn default_root_grant_id(session_id: &str) -> String {
+    format!("{session_id}-root-grant")
 }
 
 /// The default declared side effect for an action kind, if any.

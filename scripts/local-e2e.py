@@ -67,10 +67,15 @@ def branch_whitespace_gate(python: str, *, available: bool) -> Gate:
     return Gate("branch-whitespace", (python, "-c", f"print({note!r})"))
 
 
-def build_plan(python: str = "python3", *, branch_base_available: bool | None = None) -> list[Gate]:
+def build_plan(
+    python: str = "python3",
+    *,
+    branch_base_available: bool | None = None,
+    host_profile: Path | None = None,
+) -> list[Gate]:
     if branch_base_available is None:
         branch_base_available = origin_main_available()
-    return [
+    gates = [
         Gate("worktree-whitespace", ("git", "diff", "HEAD", "--check")),
         branch_whitespace_gate(python, available=branch_base_available),
         Gate("final-integrity", (python, "scripts/check-final-integrity.py")),
@@ -78,6 +83,33 @@ def build_plan(python: str = "python3", *, branch_base_available: bool | None = 
             "governance-ledger",
             (python, "scripts/check-governance.py", "docs/governance/coordination-ledger.md"),
         ),
+    ]
+    gates.append(
+        Gate("beater-osd-runtime-smoke", (python, "scripts/run-beater-osd-runtime-smoke.py", "--json"))
+    )
+    bare_metal_readiness = [
+        python,
+        "scripts/check-bare-metal-readiness.py",
+        "--check-host",
+        "--require-control-plane-lane",
+        "--require-workload-class",
+        "policy-admission",
+        "--require-workload-route",
+        "policy-admission=portable-control-plane",
+        "--require-migration-phase",
+        "runtime",
+    ]
+    if host_profile is not None:
+        bare_metal_readiness.extend(["--strict-host-context", "--host-profile", str(host_profile)])
+    gates.append(
+        Gate(
+            "bare-metal-readiness",
+            tuple(bare_metal_readiness),
+        )
+    )
+    gates.append(Gate("bare-metal-e2e-matrix", (python, "scripts/run-bare-metal-e2e-matrix.py")))
+    gates.extend(
+        [
         Gate("python-unit-tests", (python, "-m", "unittest", "discover", "-s", "tests")),
         Gate("spec-conformance", (python, "spec/conformance/validate.py", "--quiet")),
         Gate("conformance-selftest", (python, "tools/conformance/selftest.py")),
@@ -92,7 +124,9 @@ def build_plan(python: str = "python3", *, branch_base_available: bool | None = 
             "rust-clippy",
             ("cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"),
         ),
-    ]
+        ]
+    )
+    return gates
 
 
 def format_command(command: Sequence[str]) -> str:
@@ -145,10 +179,15 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="run every gate even after a failure",
     )
+    parser.add_argument(
+        "--host-profile",
+        type=Path,
+        help="optional host snapshot path passed to bare-metal-readiness",
+    )
     parser.add_argument("--list", action="store_true", help="print the gate plan and exit")
     args = parser.parse_args(argv)
 
-    plan = build_plan()
+    plan = build_plan(host_profile=args.host_profile)
     if args.list:
         for gate in plan:
             print(f"{gate.name}: {format_command(gate.command)}")

@@ -41,7 +41,10 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
    - Use C for ABI, boot/platform, driver, hypervisor, sandbox, existing C
      library, or measured hot-path interop needs.
    - Use assembly only for unavoidable hardware boundaries.
-   - Wrap unsafe/C/assembly in small safe Rust APIs with explicit invariants.
+- Wrap unsafe/C/assembly in small safe Rust APIs with explicit invariants.
+
+This skill is paired with `beateros-pr-review`, which handles the reviewer-facing
+contract and non-author merge process.
 
 4. Bound all resources.
    - CPU, memory, IO, queue length, model calls, tool calls, browser contexts,
@@ -98,8 +101,9 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
 
 ## References
 
-- `references/review-checklist.md`: use for PR review and design review.
+- `docs/governance/review-checklist.md`: use for PR review and design review.
 - Repository `docs/sota-systems-engineering.md`: full doctrine.
 - Repository `docs/optimization-agent-playbook.md`: optimization workflow,
   bottleneck taxonomy, language/toolchain discipline, and accelerator review
   packet.
+- Repository `docs/governance/coordination-ledger.md`: reviewer and merge evidence.
