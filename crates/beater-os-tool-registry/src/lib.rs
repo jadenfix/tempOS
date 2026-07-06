@@ -10,11 +10,12 @@
 //! `beater-os-core` and adds the registry metadata and admission logic needed to
 //! make tool selection safe:
 //!
-//! - **Signed manifests** — a tool must carry a signature from a trusted
-//!   publisher whose signed digest matches the tool's actual content digest
-//!   (§6.9, §13.10). Cryptographic signature *bytes* are verified by a separate
-//!   crypto layer; this crate owns the trust policy over identity and digest, and
-//!   deliberately invents no cryptography (§22.7).
+//! - **Signed manifests** — a tool must carry a verified signature from a
+//!   trusted publisher whose signed digest binds the tool schema/artifact digest
+//!   and the manifest security fields (§6.9, §13.10). Cryptographic signature
+//!   *bytes* are verified by a separate crypto layer; this crate owns the trust
+//!   policy over identity and digest, and deliberately invents no cryptography
+//!   (§22.7).
 //! - **Version + schema pinning** — a pinned tool resolves only at its pinned
 //!   version and content digest, giving rollback and schema-pinning (§13.6,
 //!   §13.10).
@@ -32,7 +33,7 @@
 //! use beater_os_core::{RiskClass, ToolManifest};
 //! use beater_os_tool_registry::{
 //!     content_digest, RegisteredTool, RegistryPolicy, ResolveRequest, TestStatus, ToolRegistry,
-//!     ToolSignature, ToolTrust,
+//!     ToolSignature, ToolTrust, tool_signature_digest,
 //! };
 //! use chrono::Utc;
 //! use std::collections::BTreeSet;
@@ -54,14 +55,16 @@
 //!     risk_class: RiskClass::Low,
 //!     sandbox_required: false,
 //! };
+//! let signed_digest = tool_signature_digest(&manifest, &digest).unwrap();
 //! registry.register(RegisteredTool {
 //!     manifest,
 //!     content_digest: digest.clone(),
 //!     signature: Some(ToolSignature {
 //!         publisher: "beater.tools".into(),
 //!         key_id: "k1".into(),
-//!         content_digest: digest.clone(),
+//!         content_digest: signed_digest,
 //!         signature: "sig".into(),
+//!         verified: true,
 //!     }),
 //!     test_status: TestStatus::Passing,
 //!     trust: ToolTrust::Trusted,
@@ -79,5 +82,5 @@ mod registry;
 pub use error::{RegistryError, RegistryResult};
 pub use registry::{
     RegisteredTool, RegistryEvent, RegistryPolicy, ResolveRequest, TestStatus, ToolPin,
-    ToolRegistry, ToolSignature, ToolTrust, content_digest,
+    ToolRegistry, ToolSignature, ToolTrust, content_digest, tool_signature_digest,
 };

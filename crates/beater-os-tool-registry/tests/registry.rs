@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use beater_os_core::{RiskClass, ToolManifest};
 use beater_os_tool_registry::{
     RegisteredTool, RegistryError, RegistryPolicy, ResolveRequest, TestStatus, ToolRegistry,
-    ToolSignature, ToolTrust, content_digest,
+    ToolSignature, ToolTrust, content_digest, tool_signature_digest,
 };
 use chrono::Utc;
 
@@ -30,14 +30,17 @@ fn manifest(tool_id: &str, version: &str, risk: RiskClass, sandbox: bool) -> Too
 /// A registered tool, signed by the trusted publisher, tests passing, trusted.
 fn signed_tool(tool_id: &str, version: &str, risk: RiskClass, sandbox: bool) -> RegisteredTool {
     let digest = content_digest(&format!("{tool_id}@{version}")).expect("digest");
+    let manifest = manifest(tool_id, version, risk, sandbox);
+    let signed_digest = tool_signature_digest(&manifest, &digest).expect("signature digest");
     RegisteredTool {
-        manifest: manifest(tool_id, version, risk, sandbox),
+        manifest,
         content_digest: digest.clone(),
         signature: Some(ToolSignature {
             publisher: PUBLISHER.to_string(),
             key_id: "k1".to_string(),
-            content_digest: digest,
+            content_digest: signed_digest,
             signature: "sig".to_string(),
+            verified: true,
         }),
         test_status: TestStatus::Passing,
         trust: ToolTrust::Trusted,
@@ -189,6 +192,65 @@ fn signature_over_wrong_digest_is_rejected() {
 }
 
 #[test]
+fn unverified_signature_is_rejected() {
+    let mut reg = permissive_registry();
+    let mut tool = signed_tool("fs.read", "1.0.0", RiskClass::Low, false);
+    if let Some(sig) = tool.signature.as_mut() {
+        sig.verified = false;
+    }
+    let err = reg
+        .register(tool)
+        .expect_err("unverified signature rejected");
+    assert!(
+        matches!(err, RegistryError::UnverifiedSignature { .. }),
+        "{err}"
+    );
+}
+
+#[test]
+fn legacy_signature_without_verified_defaults_to_fail_closed() {
+    let mut tool = signed_tool("fs.read", "1.0.0", RiskClass::Low, false);
+    let signature = tool.signature.take().expect("signature fixture");
+    let legacy_signature_json = serde_json::json!({
+        "publisher": signature.publisher,
+        "key_id": signature.key_id,
+        "content_digest": signature.content_digest,
+        "signature": signature.signature
+    });
+    let legacy_signature: ToolSignature =
+        serde_json::from_value(legacy_signature_json).expect("legacy signature deserializes");
+    assert!(
+        !legacy_signature.verified,
+        "missing verified field must not deserialize as trusted"
+    );
+    tool.signature = Some(legacy_signature);
+
+    let mut reg = permissive_registry();
+    let err = reg
+        .register(tool)
+        .expect_err("legacy unverified signature rejected");
+    assert!(
+        matches!(err, RegistryError::UnverifiedSignature { .. }),
+        "{err}"
+    );
+}
+
+#[test]
+fn signature_binds_manifest_security_metadata() {
+    let mut reg = permissive_registry();
+    let mut tool = signed_tool("fs.read", "1.0.0", RiskClass::Low, false);
+    tool.manifest.risk_class = RiskClass::Medium;
+
+    let err = reg
+        .register(tool)
+        .expect_err("manifest mutation after signing must be rejected");
+    assert!(
+        matches!(err, RegistryError::SignatureDigestMismatch { .. }),
+        "{err}"
+    );
+}
+
+#[test]
 fn risk_ceiling_is_enforced() {
     let policy = RegistryPolicy {
         trusted_publishers: BTreeSet::from([PUBLISHER.to_string()]),
@@ -247,6 +309,29 @@ fn passing_tests_can_be_required() {
     let err = reg
         .resolve(&ResolveRequest::new("fs.read", "1.0.0"))
         .expect_err("failing tests must block resolution");
+    assert!(
+        matches!(err, RegistryError::TestsNotPassing { .. }),
+        "{err}"
+    );
+}
+
+#[test]
+fn untested_tools_are_blocked_when_passing_tests_are_required() {
+    let policy = RegistryPolicy {
+        trusted_publishers: BTreeSet::from([PUBLISHER.to_string()]),
+        require_signature: true,
+        require_passing_tests: true,
+        max_risk: Some(RiskClass::Critical),
+        require_sandbox_at_or_above: None,
+    };
+    let mut reg = ToolRegistry::new(policy);
+    let mut tool = signed_tool("fs.read", "1.0.0", RiskClass::Low, false);
+    tool.test_status = TestStatus::Untested;
+    reg.register(tool)
+        .expect("register (test gate is at resolve)");
+    let err = reg
+        .resolve(&ResolveRequest::new("fs.read", "1.0.0"))
+        .expect_err("untested tools must block resolution");
     assert!(
         matches!(err, RegistryError::TestsNotPassing { .. }),
         "{err}"
@@ -389,4 +474,26 @@ fn mutations_emit_audit_events() {
     reg.quarantine("fs.read", "1.0.0", "audit").unwrap();
     // Registered, Pinned, Quarantined.
     assert_eq!(reg.events().len(), 3);
+}
+
+#[test]
+fn registration_audit_event_uses_signature_publisher() {
+    let mut reg = permissive_registry();
+    let mut tool = signed_tool("fs.read", "1.0.0", RiskClass::Low, false);
+    tool.manifest.publisher = "spoofed.example".to_string();
+    if let Some(sig) = tool.signature.as_mut() {
+        sig.content_digest =
+            tool_signature_digest(&tool.manifest, &tool.content_digest).expect("signature digest");
+    }
+
+    reg.register(tool).expect("register");
+    let event = reg.events().last().expect("registered event");
+    assert!(
+        matches!(
+            event,
+            beater_os_tool_registry::RegistryEvent::Registered { publisher, .. }
+                if publisher == PUBLISHER
+        ),
+        "registered event must record the authoritative signature publisher: {event:?}"
+    );
 }

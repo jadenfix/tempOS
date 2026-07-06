@@ -63,6 +63,20 @@ pub enum RegistryError {
         actual: String,
     },
 
+    #[error("signature for {tool_id}@{version} has not been verified with key {key_id}")]
+    UnverifiedSignature {
+        tool_id: String,
+        version: String,
+        key_id: String,
+    },
+
+    #[error("could not compute signed preimage digest for {tool_id}@{version}: {reason}")]
+    SignaturePreimageDigestFailed {
+        tool_id: String,
+        version: String,
+        reason: String,
+    },
+
     #[error("tool {tool_id}@{version} is not marked test-passing but the registry requires it")]
     TestsNotPassing { tool_id: String, version: String },
 
