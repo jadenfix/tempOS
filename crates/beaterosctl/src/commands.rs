@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::{Component, Path};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, AgentSession, Budget, CapabilityGrant,
@@ -116,7 +117,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let projection = store.project(&session_id)?;
 
     let resource_kind: ResourceKind = args::require_enum(args, "resource-kind")?;
-    let resource_id = args.require("resource-id")?.to_string();
+    let raw_resource_id = args.require("resource-id")?;
+    let resource_id = if resource_kind == ResourceKind::FilePath && raw_resource_id != "*" {
+        canonicalize_file_authority("resource-id", raw_resource_id)?
+    } else {
+        raw_resource_id.to_string()
+    };
 
     let mut actions = BTreeSet::new();
     for token in args.csv("actions") {
@@ -137,7 +143,9 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             Some(args::parse_enum::<DataClass>("max-data-class", max_data)?);
     }
     for prefix in args.csv("path-prefix") {
-        constraints.path_prefixes.insert(prefix);
+        constraints
+            .path_prefixes
+            .insert(canonicalize_file_authority("path-prefix", &prefix)?);
     }
     for host in args.csv("network-allow") {
         constraints.network_allowlist.insert(host);
@@ -404,11 +412,14 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let resolved = beater_os_sandbox::resolve_confined(&cwd, &confinement_prefixes)?;
     let resolved_str = resolved.display().to_string();
 
-    // (2) Build the manifest. `target` is the requested cwd; `resolved_target` is
-    // the canonical path (kernel-derived, §7.4). inputs_digest binds command+args.
+    // (2) Build the manifest. This command is itself the mediation point, so
+    // the file-path target is the canonical path it just resolved. Keeping
+    // `target` and `resolved_target` in the same realpath namespace prevents a
+    // macOS `/var` -> `/private/var` grant alias from being misread as an escape
+    // by core's deterministic path-prefix policy.
     let target = CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
-        resource_id: cwd.clone(),
+        resource_id: resolved_str.clone(),
     };
     let resolved_target = Some(CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
@@ -660,6 +671,53 @@ fn confinement_prefixes(
         }
     }
     prefixes.into_iter().collect()
+}
+
+/// Canonicalize file-path authority before it is written into a grant.
+///
+/// The sandbox resolves working directories and prefixes with `realpath`.
+/// Storing grant authority in the same namespace avoids false denials on macOS
+/// aliases such as `/var` -> `/private/var`, while still failing closed for
+/// relative paths or `..` components. Missing leaf paths are handled by
+/// canonicalizing the longest existing ancestor and appending the remaining
+/// components lexically, so grants can still name future files/directories
+/// without widening to the ancestor.
+fn canonicalize_file_authority(field: &str, value: &str) -> CliResult<String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(CliError::invalid(field, value));
+    }
+
+    let mut cursor = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(cursor) {
+            Ok(mut canonical) => {
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical.display().to_string());
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = cursor.file_name() else {
+                    return Err(CliError::Io(err));
+                };
+                missing.push(name.to_os_string());
+                let Some(parent) = cursor.parent() else {
+                    return Err(CliError::Io(err));
+                };
+                cursor = parent;
+            }
+            Err(err) => return Err(CliError::Io(err)),
+        }
+    }
 }
 
 fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
