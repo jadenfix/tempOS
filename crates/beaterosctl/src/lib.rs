@@ -87,6 +87,7 @@ pub fn help_text() -> String {
          \x20                 [--idempotency-key <k>] [--summary <text>]\n\
          \x20 action execute  --session <id> --tool <id> --command <cmd> [--arg <a>]...\n\
          \x20                 --cwd <dir> --grants <g1,g2> [--risk <r>]\n\
+         \x20                 [--tool-version <v>] [--tool-digest <sha256>]\n\
          \x20                 [--side-effects <s,..>] [--revoked-handle <h>]...\n\
          \x20                 [--idempotency-key <k>]\n\
          \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\

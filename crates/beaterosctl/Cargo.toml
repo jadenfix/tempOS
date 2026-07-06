@@ -19,6 +19,8 @@ path = "src/lib.rs"
 beater-os-core = { path = "../beater-os-core" }
 beater-osd = { path = "../beater-osd" }
 beater-os-sandbox = { path = "../beater-os-sandbox" }
+beater-os-tool-gateway = { path = "../beater-os-tool-gateway" }
+beater-os-tool-registry = { path = "../beater-os-tool-registry" }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true

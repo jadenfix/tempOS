@@ -24,7 +24,7 @@ use beater_os_core::{
 };
 use beater_os_sandbox::{
     SandboxLimits, SandboxOutcome, SandboxRequest, SandboxStatus, execute as sandbox_execute,
-    resolve_confined, safe_path_environment,
+    resolve_confined, safe_path_environment, validate_environment,
 };
 use beater_os_tool_registry::{ResolveRequest, ToolRegistry};
 use beater_osd::{DaemonError, Store};
@@ -50,6 +50,17 @@ pub fn local_shell_tool_digest(
     command: &str,
     args: &[String],
 ) -> GatewayResult<String> {
+    local_shell_tool_digest_with_environment(cwd, command, args, &local_shell_environment())
+}
+
+/// Canonical digest for a registered `local_shell` executable, arguments, and
+/// explicit environment allowlist.
+pub fn local_shell_tool_digest_with_environment(
+    cwd: impl AsRef<Path>,
+    command: &str,
+    args: &[String],
+    environment: &BTreeMap<String, String>,
+) -> GatewayResult<String> {
     let executable = resolve_executable_path(cwd.as_ref(), command)?;
     let executable_bytes = fs::read(&executable).map_err(|source| GatewayError::ToolDigestIo {
         command: command.to_string(),
@@ -67,7 +78,6 @@ pub fn local_shell_tool_digest(
         digest.update(arg.as_bytes());
         digest.update([0]);
     }
-    let environment = local_shell_environment();
     digest.update((environment.len() as u64).to_le_bytes());
     for (name, value) in environment {
         digest.update(name.as_bytes());
@@ -132,13 +142,17 @@ pub struct LocalToolInvocation {
     pub command: String,
     pub args: Vec<String>,
     pub cwd: String,
+    pub environment: BTreeMap<String, String>,
     pub required_grants: BTreeSet<String>,
+    pub revoked_handles: BTreeSet<String>,
     pub action_id: String,
     pub risk_class: RiskClass,
     pub expected_side_effects: BTreeSet<SideEffectClass>,
     pub data_classes: BTreeSet<DataClass>,
     pub taint: BTreeSet<TaintLabel>,
     pub idempotency_key: Option<String>,
+    pub compensation_plan: Option<String>,
+    pub receipt_id: Option<String>,
     pub human_explanation: String,
     pub limits: SandboxLimits,
 }
@@ -161,9 +175,13 @@ pub fn execute_local_tool(
     if invocation.required_grants.is_empty() {
         return Err(GatewayError::MissingGrant);
     }
-    let environment = local_shell_environment();
-    let inputs_digest =
-        local_shell_tool_digest(&invocation.cwd, &invocation.command, &invocation.args)?;
+    validate_environment(&invocation.environment, &invocation.limits)?;
+    let inputs_digest = local_shell_tool_digest_with_environment(
+        &invocation.cwd,
+        &invocation.command,
+        &invocation.args,
+        &invocation.environment,
+    )?;
     match &invocation.expected_tool_digest {
         Some(expected) if expected == &inputs_digest => {}
         Some(_) => return Err(GatewayError::ToolDigestMismatch),
@@ -202,11 +220,21 @@ pub fn execute_local_tool(
     }
 
     let resolved = resolve_confined(&invocation.cwd, &confinement_prefixes)?;
-    let inputs_summary = if invocation.args.is_empty() {
+    let resolved_target = resolved.display().to_string();
+    let mut inputs_summary = if invocation.args.is_empty() {
         invocation.command.clone()
     } else {
         format!("{} {}", invocation.command, invocation.args.join(" "))
     };
+    if invocation.environment.len() > 1 {
+        let names = invocation
+            .environment
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        inputs_summary = format!("{inputs_summary} env=[{names}]");
+    }
     let mut expected_side_effects = invocation
         .expected_side_effects
         .union(&tool.manifest.side_effects)
@@ -220,15 +248,15 @@ pub fn execute_local_tool(
     let manifest = ActionManifest {
         action_id: invocation.action_id.clone(),
         session_id: invocation.session_id.clone(),
-        tool_id: tool_ref.clone(),
+        tool_id: tool.manifest.tool_id.clone(),
         action_kind: ActionKind::Execute,
         target: CapabilitySelector {
             resource_kind: ResourceKind::FilePath,
-            resource_id: invocation.cwd.clone(),
+            resource_id: resolved_target.clone(),
         },
         resolved_target: Some(CapabilitySelector {
             resource_kind: ResourceKind::FilePath,
-            resource_id: resolved.display().to_string(),
+            resource_id: resolved_target,
         }),
         inputs_digest: inputs_digest.clone(),
         inputs_summary,
@@ -241,12 +269,16 @@ pub fn execute_local_tool(
         taint: invocation.taint.clone(),
         idempotency_key: invocation.idempotency_key.clone(),
         payment_intent: None,
-        compensation_plan: None,
+        compensation_plan: invocation.compensation_plan.clone(),
         human_explanation: invocation.human_explanation.clone(),
     };
 
     let decision = store
-        .admit_action(&invocation.session_id, manifest.clone())?
+        .admit_action_with_revoked_handles(
+            &invocation.session_id,
+            manifest.clone(),
+            invocation.revoked_handles.clone(),
+        )?
         .decision;
     if decision.result != DecisionResult::Allowed {
         return Ok(GatewayOutcome {
@@ -257,15 +289,25 @@ pub fn execute_local_tool(
         });
     }
 
+    let command = invocation.command.clone();
+    let args = invocation.args.clone();
+    let environment = invocation.environment.clone();
+    let limits = invocation.limits.clone();
+    let action_id = invocation.action_id.clone();
+    let receipt_id = invocation.receipt_id.clone();
+    let receipt_tool_id = manifest.tool_id.clone();
+    let receipt_target = manifest.resolved_target.clone();
+    let receipt_input_digest = inputs_digest.clone();
+    let receipt_tool_ref = tool_ref.clone();
     let (receipt, execution) =
         store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |_| {
             let execution = sandbox_execute(&SandboxRequest {
-                command: invocation.command.clone(),
-                args: invocation.args.clone(),
-                environment: environment.clone(),
+                command,
+                args,
+                environment,
                 working_dir: resolved.display().to_string(),
                 path_prefixes: confinement_prefixes,
-                limits: invocation.limits.clone(),
+                limits,
             })?;
 
             let observed_effects: BTreeSet<SideEffectClass> = if execution.diff.is_empty() {
@@ -273,12 +315,7 @@ pub fn execute_local_tool(
             } else {
                 BTreeSet::from([SideEffectClass::LocalWrite])
             };
-            let observed_undeclared: Vec<SideEffectClass> = observed_effects
-                .iter()
-                .filter(|effect| expected_side_effects.contains(effect))
-                .cloned()
-                .collect();
-            if observed_undeclared.len() != observed_effects.len() {
+            if !observed_effects.is_subset(&expected_side_effects) {
                 return Err(GatewayError::ObservedUndeclaredSideEffect);
             }
             let certified_effects: Vec<SideEffectClass> =
@@ -294,12 +331,10 @@ pub fn execute_local_tool(
                 .collect();
             Ok((
                 CapabilityReceiptInput {
-                    receipt_id: None,
-                    action_id: invocation.action_id,
-                    tool_id: tool_ref,
-                    target: manifest
-                        .resolved_target
-                        .clone()
+                    receipt_id,
+                    action_id,
+                    tool_id: receipt_tool_id,
+                    target: receipt_target
                         .map(|mut target| {
                             target.resource_id = execution.resolved_target.display().to_string();
                             target
@@ -311,11 +346,11 @@ pub fn execute_local_tool(
                     started_at: now,
                     finished_at: Utc::now(),
                     status: execution.status_str().to_string(),
-                    input_digest: inputs_digest,
+                    input_digest: receipt_input_digest,
                     output_digest: execution.stdout_digest(),
                     side_effect_summary,
                     side_effects: certified_effects,
-                    external_ids: Vec::new(),
+                    external_ids: vec![format!("tool_ref={receipt_tool_ref}")],
                     artifact_refs,
                 },
                 execution,

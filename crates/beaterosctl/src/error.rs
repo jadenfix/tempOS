@@ -21,6 +21,12 @@ pub enum CliError {
     /// The sandbox execution lane refused or failed (fail closed).
     #[error("sandbox error: {0}")]
     Sandbox(#[from] beater_os_sandbox::SandboxError),
+    /// The tool gateway refused or failed (fail closed).
+    #[error("gateway error: {0}")]
+    Gateway(#[from] beater_os_tool_gateway::GatewayError),
+    /// The trustworthy tool registry refused or failed (fail closed).
+    #[error("registry error: {0}")]
+    Registry(#[from] beater_os_tool_registry::RegistryError),
     /// The command line could not be understood.
     #[error("usage: {0}")]
     Usage(String),

@@ -9,7 +9,7 @@ use beater_os_core::{
     DataClass, DelegationMode, GrantConstraints, ResourceKind, RiskClass, SessionStatus,
     SideEffectClass, ToolManifest,
 };
-use beater_os_sandbox::SandboxLimits;
+use beater_os_sandbox::{SandboxLimits, safe_path_environment};
 use beater_os_tool_gateway::{
     GatewayError, LocalToolInvocation, execute_local_tool, local_shell_tool_digest,
 };
@@ -134,19 +134,17 @@ fn registry(workdir: &str) -> ToolRegistry {
 
 fn daemon_store_with_registered_shell(
     home: &TempDir,
-    workdir: &str,
-    command: &str,
-    args: &[String],
+    _workdir: &str,
+    _command: &str,
+    _args: &[String],
 ) -> Store {
-    let digest = local_shell_tool_digest(workdir, command, args).unwrap();
-    let tool_ref = format!("tool:shell@1.0.0#{digest}");
     Store::open_with_options(
         &home.path,
         StoreOptions {
             tool_registry: [(
-                tool_ref.clone(),
+                "tool:shell".to_string(),
                 ToolManifest {
-                    tool_id: tool_ref,
+                    tool_id: "tool:shell".to_string(),
                     publisher: "beater.tools".to_string(),
                     version: "1.0.0".to_string(),
                     transport: "local_shell".to_string(),
@@ -202,13 +200,17 @@ fn invocation(session_id: &str, workdir: &str, action_id: &str) -> LocalToolInvo
         command: "sh".to_string(),
         args,
         cwd: workdir.to_string(),
+        environment: safe_path_environment(),
         required_grants: BTreeSet::from(["grant-exec".to_string()]),
+        revoked_handles: BTreeSet::new(),
         action_id: action_id.to_string(),
         risk_class: RiskClass::Low,
         expected_side_effects: BTreeSet::new(),
         data_classes: BTreeSet::from([DataClass::Code]),
         taint: BTreeSet::new(),
         idempotency_key: None,
+        compensation_plan: None,
+        receipt_id: None,
         human_explanation: "gateway local shell test".to_string(),
         limits: SandboxLimits::default(),
     }
@@ -255,7 +257,13 @@ fn gateway_executes_registered_local_shell_tool_and_records_receipt() {
     );
     assert!(outcome.execution.is_some());
     let receipt = outcome.receipt.as_ref().expect("receipt");
-    assert!(receipt.tool_id.starts_with("tool:shell@1.0.0#"));
+    assert_eq!(receipt.tool_id, "tool:shell");
+    assert!(
+        receipt
+            .external_ids
+            .iter()
+            .any(|id| id.starts_with("tool_ref=tool:shell@1.0.0#"))
+    );
     assert_eq!(receipt.target.resource_id, workdir);
     assert_eq!(receipt.side_effects, vec![SideEffectClass::LocalWrite]);
     assert_eq!(

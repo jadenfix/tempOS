@@ -124,6 +124,8 @@ version = "0.1.0"
 dependencies = [
  "beater-os-core",
  "beater-os-sandbox",
+ "beater-os-tool-gateway",
+ "beater-os-tool-registry",
  "beater-osd",
  "chrono",
  "serde",

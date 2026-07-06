@@ -45,7 +45,7 @@ receipt ledger.
 | `grant issue` | Issue a scoped `CapabilityGrant` and journal `CapabilityGranted`. |
 | `grant revoke` | Resolve an issued grant's stored revocation handle and journal `CapabilityRevoked`. |
 | `action propose` | Journal an `ActionProposed`, run policy admission, journal `PolicyDecided`. |
-| `action execute` | Run a scoped shell action through the **sandbox execution lane**: canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
+| `action execute` | Run a scoped shell action through the **tool gateway lane**: resolve a registered local shell tool, canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
 | `receipt record` | Record a `CapabilityReceipt` for an **admitted** action (fails closed otherwise). |
 | `journal verify` | Verify the journal and receipt hash chains and causality. |
 | `trace show` | Render the full trace: session, grants, actions, decisions, receipts. |
@@ -107,15 +107,23 @@ $ beaterosctl trace show --session demo
 ...
 ```
 
-## Sandbox execution lane
+## Tool gateway execution lane
 
 `action execute` is the mediation point that actually **runs** an admitted
-action, confined and fail-closed, via the `beater-os-sandbox` crate (final.md §8,
-§10.6, §13.8). Where `action propose` only journals a policy decision,
-`action execute` turns an `Allowed` decision into a real OS process and emits a
+action, confined and fail-closed, via `beater-os-tool-gateway`,
+`beater-os-tool-registry`, and `beater-os-sandbox` (final.md §8, §10.6, §13.8,
+§10.14). Where `action propose` only journals a policy decision, `action
+execute` turns an `Allowed` decision into a real OS process and emits a
 filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
 
-1. **Canonicalize + confine.** The sandbox resolves `--cwd` with realpath
+1. **Resolve a pinned local shell tool.** The CLI constructs an
+   invocation-scoped local registry entry for `--tool`, `--tool-version`, and the
+   exact local shell digest. Operators can pass `--tool-digest <sha256>` to pin
+   the expected executable+args+environment digest explicitly; otherwise the CLI
+   computes the digest for compatibility. The gateway recomputes the digest and
+   resolves the tool through `ToolRegistry` with an explicit workspace allowlist
+   before any action is admitted.
+2. **Canonicalize + confine.** The sandbox resolves `--cwd` with realpath
    (`std::fs::canonicalize`, following every symlink) and rejects it if it
    escapes the confinement prefix. The confinement prefix is derived from the
    **named grants' authority** (their `path_prefixes` plus any concrete file-path
@@ -123,10 +131,11 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    sandbox. The canonical path becomes the kernel-derived `resolved_target`
    (§7.4). A symlink escape or a grant with no filesystem confinement aborts
    before anything is journaled or executed.
-2. **Admit.** An `ActionManifest` (`action_kind = execute`, kernel-derived
-   `resolved_target`) is admitted by `PolicyEngine` — no admission logic in the
-   CLI. `ActionProposed` and `PolicyDecided` are journaled.
-3. **Execute only if `Allowed`.** The confined child runs under macOS Seatbelt
+3. **Admit.** The gateway derives the `ActionManifest` (`action_kind = execute`,
+   kernel-derived `resolved_target`) and asks the daemon store to admit it,
+   including durable revocation overlays. No admission logic lives in the CLI.
+   `ActionProposed` and `PolicyDecided` are journaled.
+4. **Execute only if `Allowed`.** The confined child runs under macOS Seatbelt
    with filesystem writes limited to granted prefixes, network denied by
    default, and process execution limited to the resolved entry executable. It
    also gets an **explicit environment allowlist** (`env_clear` + a CLI-owned
@@ -135,7 +144,7 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    Invalid env names, duplicate names, unsafe names outside `BEATER_*`, or
    `PATH` overrides fail closed before the action is journaled. Otherwise the
    decision is printed and nothing runs.
-4. **Filesystem-diff receipt.** The confined directory is snapshotted (path ->
+5. **Filesystem-diff receipt.** The confined directory is snapshotted (path ->
    SHA-256) before and after; the created/modified/deleted diff is the observed
    side effect. A `CapabilityReceipt` (input digest = command+args+environment,
    output digest = captured stdout, side-effect summary = the diff) is journaled as
@@ -188,10 +197,10 @@ macOS local lane. Linux `seccomp`/Landlock/cgroups and container/VM lanes
 
 ## Scope boundary
 
-This crate deliberately does **not** implement tool registration. That is a
-separate backlog slice (`tool-registry`). The scoped shell **sandbox lane** is
-now implemented (`action execute`, via `beater-os-sandbox`); richer lanes
-(network, container/VM, browser) remain future targets. The current CLI opens
-the `beater-osd` store in-process; the next runtime step is exposing the same
-store through a long-running local daemon API without changing the authority
-contract.
+This crate deliberately does **not** implement a persistent daemon-owned tool
+registry yet. `action execute` now routes through the gateway and registry
+contracts using an invocation-scoped local registry entry; the durable registry
+service is a separate backlog slice. Richer lanes (network, container/VM,
+browser) remain future targets. The current CLI opens the `beater-osd` store
+in-process; the next runtime step is exposing the same store through a
+long-running local daemon API without changing the authority contract.
