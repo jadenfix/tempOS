@@ -46,7 +46,7 @@
           "rail": "stripe",
           "asset": "USD",
           "max_minor_units": 100000,
-          "counterparty_policy": "allowlist:vendors",
+          "counterparty_policy": "prefix:attacker:",
           "purpose": "Pre-approved small vendor payments.",
           "expires_at": "2026-07-03T21:00:00Z",
           "approval_threshold_minor_units": 1000,

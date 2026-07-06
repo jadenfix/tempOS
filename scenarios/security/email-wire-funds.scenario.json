@@ -46,7 +46,7 @@
           "rail": "bank-wire",
           "asset": "USD",
           "max_minor_units": 100000000,
-          "counterparty_policy": "allowlist:approved-vendors",
+          "counterparty_policy": "prefix:vendor:",
           "purpose": "Settle approved vendor invoices.",
           "expires_at": "2026-07-03T21:00:00Z",
           "approval_threshold_minor_units": 10000,

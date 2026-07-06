@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionManifest, AdmissionContext, AgentSession, CapabilityGrant, CapabilityReceipt,
     CapabilityReceiptInput, CapabilityScope, DelegationMode, InMemoryJournal, JournalEvent,
-    JournalRecord, PolicyDecision, PolicyEngine, ReceiptLedger,
+    JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger,
 };
 use chrono::{DateTime, Utc};
 
@@ -66,6 +66,7 @@ pub struct Store {
 pub struct SessionProjection {
     pub session: AgentSession,
     pub grants: Vec<CapabilityGrant>,
+    pub mandates: Vec<PaymentMandate>,
     pub manifests: Vec<ActionManifest>,
     pub receipts: Vec<CapabilityReceipt>,
 }
@@ -139,6 +140,12 @@ impl Store {
                     "CapabilityGranted must be written through issue_grant".to_string(),
                 ));
             }
+            JournalEvent::PaymentMandateIssued { .. } => {
+                return Err(DaemonError::Refused(
+                    "PaymentMandateIssued must be written through issue_payment_mandate"
+                        .to_string(),
+                ));
+            }
             JournalEvent::ActionProposed { .. } => {
                 return Err(DaemonError::Refused(
                     "ActionProposed must be written through admit_action".to_string(),
@@ -203,6 +210,43 @@ impl Store {
         })
     }
 
+    /// Issue bounded economic authority through the daemon-owned payment boundary.
+    pub fn issue_payment_mandate(
+        &self,
+        session_id: &str,
+        mandate: PaymentMandate,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        validate_session_id(session_id)?;
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            if mandate.session_id != session_id {
+                return Err(DaemonError::Refused(format!(
+                    "payment mandate {} is bound to session {}, not {session_id}",
+                    mandate.mandate_id, mandate.session_id
+                )));
+            }
+            if mandate.holder != admission_state.session.agent_id {
+                return Err(DaemonError::Refused(format!(
+                    "payment mandate {} holder {} does not match session agent {}",
+                    mandate.mandate_id, mandate.holder, admission_state.session.agent_id
+                )));
+            }
+            if admission_state.mandates.contains_key(&mandate.mandate_id) {
+                return Err(DaemonError::Refused(format!(
+                    "payment mandate {} was already issued",
+                    mandate.mandate_id
+                )));
+            }
+            let record =
+                journal.append(JournalEvent::PaymentMandateIssued { mandate }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
     /// Admit an action through the daemon-owned policy path and append the
     /// proposal plus policy decision under one per-session writer lock.
     pub fn admit_action(
@@ -248,7 +292,7 @@ impl Store {
                 grants: admission_state.grants.into_values().collect(),
                 approvals: Vec::new(),
                 simulations: Vec::new(),
-                mandates: Vec::new(),
+                mandates: admission_state.mandates.into_values().collect(),
                 revoked_handles: BTreeSet::new(),
             };
             let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
@@ -405,6 +449,7 @@ impl Store {
         let journal = self.load_journal_unlocked(session_id)?;
         let mut session = None;
         let mut grants = Vec::new();
+        let mut mandates = Vec::new();
         let mut manifests = Vec::new();
         let mut receipts = Vec::new();
         for record in journal.records() {
@@ -413,6 +458,7 @@ impl Store {
                     session = Some(created.clone());
                 }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
+                JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
                 JournalEvent::ActionProposed { manifest } => {
                     manifests.push(manifest.as_ref().clone())
                 }
@@ -431,6 +477,7 @@ impl Store {
         Ok(SessionProjection {
             session,
             grants,
+            mandates,
             manifests,
             receipts,
         })
@@ -546,6 +593,7 @@ fn ensure_genesis(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<(
 struct AdmissionState {
     session: AgentSession,
     grants: BTreeMap<String, CapabilityGrant>,
+    mandates: BTreeMap<String, PaymentMandate>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
 }
@@ -561,6 +609,7 @@ fn admission_state_from_journal(
 ) -> DaemonResult<AdmissionState> {
     let mut session = None;
     let mut grants = BTreeMap::new();
+    let mut mandates = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     for record in journal.records() {
@@ -570,6 +619,9 @@ fn admission_state_from_journal(
             }
             JournalEvent::CapabilityGranted { grant } => {
                 grants.insert(grant.grant_id.clone(), grant.clone());
+            }
+            JournalEvent::PaymentMandateIssued { mandate } => {
+                mandates.insert(mandate.mandate_id.clone(), mandate.clone());
             }
             JournalEvent::ActionProposed { manifest } => {
                 proposals.insert(
@@ -597,6 +649,7 @@ fn admission_state_from_journal(
     Ok(AdmissionState {
         session,
         grants,
+        mandates,
         proposals,
         latest_decisions,
     })

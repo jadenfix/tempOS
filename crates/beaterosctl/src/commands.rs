@@ -305,7 +305,7 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         grants: projection.active_grants(now),
         approvals: Vec::new(),
         simulations: Vec::new(),
-        mandates: Vec::new(),
+        mandates: projection.mandates.clone(),
         revoked_handles: std::collections::BTreeSet::new(),
     };
     // `admit` is fallible because it digests the manifest; propagate any
@@ -483,7 +483,7 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         grants: active_grants,
         approvals: Vec::new(),
         simulations: Vec::new(),
-        mandates: Vec::new(),
+        mandates: projection.mandates.clone(),
         revoked_handles: std::collections::BTreeSet::new(),
     };
     let decision = PolicyEngine::new().admit(&manifest, &ctx)?;

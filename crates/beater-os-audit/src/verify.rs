@@ -257,6 +257,11 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
             JournalEvent::CapabilityGranted { grant } => {
                 Some(("grant", grant.grant_id.as_str(), grant.session_id.as_str()))
             }
+            JournalEvent::PaymentMandateIssued { mandate } => Some((
+                "payment mandate",
+                mandate.mandate_id.as_str(),
+                mandate.session_id.as_str(),
+            )),
             JournalEvent::ActionProposed { manifest } => Some((
                 "action",
                 manifest.action_id.as_str(),

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use beater_os_core::{
     ActionManifest, AgentSession, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
-    InMemoryJournal, JournalEvent, JournalRecord, PolicyDecision, ReceiptLedger,
+    InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, ReceiptLedger,
 };
 use chrono::{DateTime, Utc};
 
@@ -41,6 +41,7 @@ pub struct Store {
 pub struct SessionProjection {
     pub session: AgentSession,
     pub grants: Vec<CapabilityGrant>,
+    pub mandates: Vec<PaymentMandate>,
     pub manifests: Vec<ActionManifest>,
     pub decisions: Vec<PolicyDecision>,
     pub receipts: Vec<CapabilityReceipt>,
@@ -246,6 +247,7 @@ impl Store {
         let journal = self.load_journal(session_id)?;
         let mut session: Option<AgentSession> = None;
         let mut grants = Vec::new();
+        let mut mandates = Vec::new();
         let mut manifests = Vec::new();
         let mut decisions = Vec::new();
         let mut receipts = Vec::new();
@@ -255,6 +257,7 @@ impl Store {
                     session = Some(created.clone());
                 }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
+                JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
                 JournalEvent::ActionProposed { manifest } => {
                     manifests.push(manifest.as_ref().clone())
                 }
@@ -273,6 +276,7 @@ impl Store {
         Ok(SessionProjection {
             session,
             grants,
+            mandates,
             manifests,
             decisions,
             receipts,

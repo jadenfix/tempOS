@@ -425,6 +425,13 @@ fn payment_authorized_by_mandate(
     if intent.purpose != mandate.purpose {
         return Err("payment intent purpose does not match mandate purpose".to_string());
     }
+    if !counterparty_policy_allows(
+        &mandate.counterparty_policy,
+        &intent.counterparty_ref,
+        &intent.counterparty_binding_hash,
+    ) {
+        return Err("payment intent counterparty is not allowed by mandate".to_string());
+    }
     if intent.payment_idempotency_key != mandate.idempotency_key {
         return Err("payment intent idempotency key does not match mandate".to_string());
     }
@@ -442,6 +449,25 @@ fn payment_authorized_by_mandate(
     }
 
     Ok(())
+}
+
+fn counterparty_policy_allows(policy: &str, counterparty_ref: &str, binding_hash: &str) -> bool {
+    if policy == "any" {
+        return true;
+    }
+    let Some((kind, value)) = policy.split_once(':') else {
+        return false;
+    };
+    match kind {
+        "exact" => counterparty_ref == value,
+        "prefix" => counterparty_ref.starts_with(value),
+        "hash" => binding_hash == value,
+        "allowlist" => value
+            .split(',')
+            .map(str::trim)
+            .any(|allowed| !allowed.is_empty() && counterparty_ref == allowed),
+        _ => false,
+    }
 }
 
 fn is_hex_64(value: &str) -> bool {

@@ -9,8 +9,9 @@ use std::thread;
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityScope,
-    CapabilitySelector, DecisionResult, DelegationMode, GrantConstraints, JournalEvent,
-    PolicyDecision, ResourceKind, RiskClass, SessionStatus,
+    CapabilitySelector, DataClass, DecisionResult, DelegationMode, GrantConstraints, JournalEvent,
+    PaymentIntent, PaymentMandate, PolicyDecision, ResourceKind, RiskClass, SessionStatus,
+    SideEffectClass,
 };
 use beater_osd::{DaemonError, Store};
 use chrono::{TimeDelta, Utc};
@@ -88,6 +89,71 @@ fn grant(session_id: &str) -> CapabilityGrant {
         reason: "test grant".to_string(),
         revoked: false,
     }
+}
+
+fn payment_grant(session_id: &str) -> CapabilityGrant {
+    let mut grant = grant(session_id);
+    grant.grant_id = "grant-spend".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::PaymentRail;
+    grant.scope.selector.resource_id = "stablecoin:x402".to_string();
+    grant.scope.actions = BTreeSet::from([ActionKind::Spend]);
+    grant.constraints.max_risk = Some(RiskClass::Critical);
+    grant.constraints.max_data_class = Some(DataClass::Financial);
+    grant.constraints.budget.max_payment_minor_units = Some(100);
+    grant.revocation_handle = "revoke-spend".to_string();
+    grant
+}
+
+fn payment_mandate(session_id: &str) -> PaymentMandate {
+    PaymentMandate {
+        mandate_id: "mandate-spend".to_string(),
+        issuer: "human:owner".to_string(),
+        holder: "agent:runtime".to_string(),
+        session_id: session_id.to_string(),
+        rail: "stablecoin:x402".to_string(),
+        asset: "USDC".to_string(),
+        max_minor_units: 100,
+        counterparty_policy: "prefix:vendor:".to_string(),
+        purpose: "vendor payment".to_string(),
+        expires_at: Utc::now() + TimeDelta::hours(1),
+        approval_threshold_minor_units: 10_000,
+        idempotency_key: "pay-once".to_string(),
+        receipt_requirement: "required".to_string(),
+        allowed_adapter_ids: BTreeSet::from(["x402".to_string()]),
+        allowed_envelope_formats: BTreeSet::from(["x402-payment-v1".to_string()]),
+    }
+}
+
+fn payment_manifest(session_id: &str, action_id: &str) -> ActionManifest {
+    let mut manifest = manifest(session_id, action_id);
+    manifest.action_kind = ActionKind::Spend;
+    manifest.target.resource_kind = ResourceKind::PaymentRail;
+    manifest.target.resource_id = "stablecoin:x402".to_string();
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = BTreeSet::from([SideEffectClass::Payment]);
+    manifest.required_grants = BTreeSet::from(["grant-spend".to_string()]);
+    manifest.requested_budget.max_payment_minor_units = Some(100);
+    manifest.risk_class = RiskClass::Critical;
+    manifest.data_classes = BTreeSet::from([DataClass::Financial]);
+    manifest.idempotency_key = Some("pay-once".to_string());
+    manifest.payment_intent = Some(PaymentIntent {
+        mandate_id: "mandate-spend".to_string(),
+        rail: "stablecoin:x402".to_string(),
+        adapter_id: "x402".to_string(),
+        adapter_version: Some("v1".to_string()),
+        asset: "USDC".to_string(),
+        amount_minor_units: 100,
+        counterparty_ref: "vendor:runtime".to_string(),
+        counterparty_binding_hash:
+            "2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+        purpose: "vendor payment".to_string(),
+        payment_idempotency_key: "pay-once".to_string(),
+        envelope_format: "x402-payment-v1".to_string(),
+        envelope_hash: "3333333333333333333333333333333333333333333333333333333333333333"
+            .to_string(),
+        envelope_expires_at: None,
+    });
+    manifest
 }
 
 fn parent_grant(session_id: &str) -> CapabilityGrant {
@@ -278,6 +344,33 @@ fn missing_grant_denies_without_execution_authority() {
 }
 
 #[test]
+fn issued_payment_mandate_is_projected_into_admission() {
+    let (_root, store) =
+        create_store_with_initial("payment-mandate-admission", "sess_payment", ["grant-spend"]);
+    let session_id = "sess_payment";
+    store
+        .issue_grant(session_id, payment_grant(session_id), Utc::now())
+        .unwrap();
+    store
+        .issue_payment_mandate(session_id, payment_mandate(session_id), Utc::now())
+        .unwrap();
+
+    let projection = store.project(session_id).unwrap();
+    assert_eq!(projection.mandates.len(), 1);
+
+    let outcome = store
+        .admit_action(session_id, payment_manifest(session_id, "act-pay"))
+        .unwrap();
+    assert_ne!(outcome.decision.result, DecisionResult::Denied);
+    assert!(
+        outcome
+            .decision
+            .matched_rules
+            .contains(&"payment_authorized_by_mandate".to_string())
+    );
+}
+
+#[test]
 fn expired_grant_denies_without_execution_authority() {
     let (_root, store) = create_store_with_session("admit-expired", "sess_expired");
     let session_id = "sess_expired";
@@ -379,6 +472,17 @@ fn raw_grants_and_proposals_are_refused_by_public_append_event() {
     );
     assert!(
         matches!(raw_proposal, Err(DaemonError::Refused(message)) if message.contains("admit_action"))
+    );
+
+    let raw_mandate = store.append_event(
+        session_id,
+        JournalEvent::PaymentMandateIssued {
+            mandate: payment_mandate(session_id),
+        },
+        Utc::now(),
+    );
+    assert!(
+        matches!(raw_mandate, Err(DaemonError::Refused(message)) if message.contains("issue_payment_mandate"))
     );
     assert_eq!(store.load_journal(session_id).unwrap().records().len(), 1);
 }

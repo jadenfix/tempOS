@@ -218,7 +218,7 @@ def build_payment_bundle() -> dict:
         "rail": "stripe",
         "asset": "USD",
         "max_minor_units": 100000,
-        "counterparty_policy": "allowlist:approved-vendors",
+        "counterparty_policy": "prefix:vendor:",
         "purpose": "Settle approved vendor invoices.",
         "expires_at": "2026-07-03T12:00:00Z",
         "approval_threshold_minor_units": 5000,

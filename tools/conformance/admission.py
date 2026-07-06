@@ -324,6 +324,23 @@ def _is_payment_action(manifest: dict) -> bool:
     return "payment" in manifest.get("expected_side_effects", []) or manifest["action_kind"] == "spend"
 
 
+def _counterparty_policy_allows(policy: str, counterparty_ref: str, binding_hash: str) -> bool:
+    if policy == "any":
+        return True
+    if ":" not in policy:
+        return False
+    kind, value = policy.split(":", 1)
+    if kind == "exact":
+        return counterparty_ref == value
+    if kind == "prefix":
+        return counterparty_ref.startswith(value)
+    if kind == "hash":
+        return binding_hash == value
+    if kind == "allowlist":
+        return counterparty_ref in {item.strip() for item in value.split(",") if item.strip()}
+    return False
+
+
 def _payment_authorized_by_mandate(manifest: dict, ctx: dict, now: datetime) -> str | None:
     amount = (manifest.get("requested_budget") or {}).get("max_payment_minor_units")
     if amount is None:
@@ -385,6 +402,12 @@ def _payment_authorized_by_mandate(manifest: dict, ctx: dict, now: datetime) -> 
         return "payment intent amount exceeds mandate ceiling"
     if intent["purpose"] != mandate.get("purpose"):
         return "payment intent purpose does not match mandate purpose"
+    if not _counterparty_policy_allows(
+        mandate.get("counterparty_policy", ""),
+        intent["counterparty_ref"],
+        intent["counterparty_binding_hash"],
+    ):
+        return "payment intent counterparty is not allowed by mandate"
     if intent["payment_idempotency_key"] != mandate.get("idempotency_key"):
         return "payment intent idempotency key does not match mandate"
     allowed_adapters = mandate.get("allowed_adapter_ids") or []

@@ -53,6 +53,17 @@ fn summarize_event(event: &JournalEvent) -> String {
             grant.scope.actions,
             grant.expires_at.to_rfc3339(),
         ),
+        JournalEvent::PaymentMandateIssued { mandate } => format!(
+            "mandate={} holder={} rail={} asset={} max={} adapters={:?} formats={:?} expires={}",
+            mandate.mandate_id,
+            mandate.holder,
+            mandate.rail,
+            mandate.asset,
+            mandate.max_minor_units,
+            mandate.allowed_adapter_ids,
+            mandate.allowed_envelope_formats,
+            mandate.expires_at.to_rfc3339(),
+        ),
         JournalEvent::ActionProposed { manifest } => format!(
             "action={} tool={} kind={:?} target={:?}:{} risk={:?} grants={:?}",
             manifest.action_id,

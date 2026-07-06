@@ -6,7 +6,7 @@
   "rail": "aether:aic",
   "asset": "AIC",
   "max_minor_units": 5000,
-  "counterparty_policy": "allowlist:aether-providers",
+  "counterparty_policy": "prefix:aether:provider:",
   "purpose": "Pay an Aether-settled agent service invoice",
   "expires_at": "2026-07-10T00:00:00Z",
   "approval_threshold_minor_units": 2000,

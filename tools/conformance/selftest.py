@@ -49,7 +49,7 @@ def _payment_mandate() -> dict:
         "rail": "r",
         "asset": "USD",
         "max_minor_units": 1000,
-        "counterparty_policy": "allowlist:test",
+        "counterparty_policy": "prefix:vendor:",
         "purpose": "test payment",
         "expires_at": "2026-07-03T01:00:00Z",
         "approval_threshold_minor_units": 100,

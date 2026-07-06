@@ -6,7 +6,7 @@
   "rail": "fake-usd-testrail",
   "asset": "USD",
   "max_minor_units": 50.5,
-  "counterparty_policy": "allowlist:vendors",
+  "counterparty_policy": "prefix:vendor:",
   "purpose": "Renew CI minutes",
   "expires_at": "2026-07-10T00:00:00Z",
   "approval_threshold_minor_units": 2000,

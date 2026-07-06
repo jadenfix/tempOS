@@ -87,7 +87,7 @@ fn mandate_for_spend(now: chrono::DateTime<Utc>) -> PaymentMandate {
         rail: "stablecoin:x402".to_string(),
         asset: "USDC".to_string(),
         max_minor_units: 1_000,
-        counterparty_policy: "allowlist:vendors".to_string(),
+        counterparty_policy: "prefix:vendor:".to_string(),
         purpose: "vendor payment".to_string(),
         expires_at: now + Duration::hours(1),
         approval_threshold_minor_units: 10_000,
@@ -102,6 +102,7 @@ fn aether_mandate_for_spend(now: chrono::DateTime<Utc>) -> PaymentMandate {
     let mut mandate = mandate_for_spend(now);
     mandate.rail = "aether:aic".to_string();
     mandate.asset = "AIC".to_string();
+    mandate.counterparty_policy = "prefix:aether:provider:".to_string();
     mandate.allowed_adapter_ids = set(["aether".to_string()]);
     mandate.allowed_envelope_formats = set(["aether-agent-payment-v1".to_string()]);
     mandate
@@ -559,6 +560,18 @@ fn policy_denies_payment_exceeding_the_mandate_ceiling() {
     let decision = admit(&spend_manifest(), &ctx);
     assert_eq!(decision.result, DecisionResult::Denied);
     assert!(decision.explanation.contains("exceeds mandate ceiling"));
+}
+
+#[test]
+fn policy_denies_payment_when_counterparty_policy_does_not_match() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.counterparty_policy = "exact:vendor:other".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+    let decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("counterparty"));
 }
 
 #[test]
