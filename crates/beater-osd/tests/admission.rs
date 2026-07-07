@@ -13,9 +13,8 @@ use beater_os_core::{
     BeaterOsError, Budget, CapabilityGrant, CapabilityReceiptInput, CapabilityScope,
     CapabilitySelector, DataClass, DecisionResult, DelegationMode, ExecutionLease,
     ExecutionLeaseReconciliation, ExecutionLeaseResolution, GrantConstraints, JournalEvent,
-    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus,
-    PolicyDecision, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
-    ToolManifest,
+    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus, PolicyDecision,
+    ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_osd::{DaemonError, SessionTransition, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
@@ -858,8 +857,7 @@ fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecut
     let admission = store
         .admit_action(session_id, execute_manifest.clone())
         .unwrap();
-    let mut lease =
-        execution_lease_for(&execute_manifest, &admission.decision, "lease-reconcile");
+    let mut lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-reconcile");
     lease.expires_at = lease.leased_at + TimeDelta::milliseconds(1);
 
     let failed = store.execute_and_append_receipt(

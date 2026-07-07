@@ -956,7 +956,10 @@ fn validate_execution_lease_reconciliation(
     state: &CausalityState,
 ) -> BeaterOsResult<()> {
     for (field, value) in [
-        ("reconciliation_id", reconciliation.reconciliation_id.as_str()),
+        (
+            "reconciliation_id",
+            reconciliation.reconciliation_id.as_str(),
+        ),
         ("lease_id", reconciliation.lease_id.as_str()),
         ("session_id", reconciliation.session_id.as_str()),
         ("action_id", reconciliation.action_id.as_str()),

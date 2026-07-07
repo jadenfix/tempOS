@@ -1658,7 +1658,9 @@ fn admission_state_from_journal(
                 if open_lease.lease_id != reconciliation.lease_id {
                     return Err(DaemonError::Refused(format!(
                         "execution lease reconciliation {} targets {}, but open lease is {}",
-                        reconciliation.reconciliation_id, reconciliation.lease_id, open_lease.lease_id
+                        reconciliation.reconciliation_id,
+                        reconciliation.lease_id,
+                        open_lease.lease_id
                     )));
                 }
                 open_execution_leases.remove(&reconciliation.action_id);
