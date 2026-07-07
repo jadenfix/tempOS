@@ -426,6 +426,11 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
                 lease.lease_id.as_str(),
                 lease.session_id.as_str(),
             )),
+            JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => Some((
+                "execution lease heartbeat",
+                heartbeat.heartbeat_id.as_str(),
+                heartbeat.session_id.as_str(),
+            )),
             JournalEvent::ExecutionLeaseReconciled { reconciliation } => Some((
                 "execution lease reconciliation",
                 reconciliation.reconciliation_id.as_str(),
@@ -618,6 +623,7 @@ fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
                 }
             }
             JournalEvent::ExecutionLeaseIssued { .. } => {}
+            JournalEvent::ExecutionLeaseHeartbeated { .. } => {}
             JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
                 reconciled.insert(
                     reconciliation.action_id.as_str(),
@@ -771,6 +777,9 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
         JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
+        JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => {
+            Some(heartbeat.heartbeat_id.as_str())
+        }
         JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
             Some(reconciliation.reconciliation_id.as_str())
         }

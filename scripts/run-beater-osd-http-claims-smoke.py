@@ -305,6 +305,7 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
         "expected_tool_version": tool_version,
         "expected_tool_digest": tool_digest,
         "lease_id": LEASE_ID,
+        "initial_lease_ms": 500,
     }
     claim_status, claim = one_shot_request(root, token_file, claim_path, claim_body, token=TOKEN)
     if claim_status != 201:
@@ -315,6 +316,25 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
         raise RuntimeError(f"claim response did not return derived grants: {claim}")
     if claim.get("requested_budget", {}).get("max_wall_ms") != 30000:
         raise RuntimeError(f"claim response did not return derived wall budget: {claim}")
+    original_claim_expires_at = claim["expires_at"]
+
+    heartbeat_path = f"/v1/sessions/{SESSION_ID}/actions/{CLAIM_ACTION_ID}/claims/{LEASE_ID}/heartbeat"
+    heartbeat_body = {
+        "heartbeat_id": "heartbeat-http-claims-worker",
+        "worker_id": "worker:http-claims-smoke",
+        "expected_manifest_hash": manifest_hash,
+        "expected_decision_id": decision_id,
+        "previous_expires_at": original_claim_expires_at,
+        "extend_ms": 5000,
+        "evidence_refs": ["smoke:worker-process-live"],
+    }
+    heartbeat_status, heartbeat = one_shot_request(root, token_file, heartbeat_path, heartbeat_body, token=TOKEN)
+    if heartbeat_status != 200:
+        raise RuntimeError(f"expected 200 from heartbeat route, got {heartbeat_status}: {heartbeat}")
+    if heartbeat.get("lease_id") != LEASE_ID or heartbeat.get("previous_expires_at") != original_claim_expires_at:
+        raise RuntimeError(f"heartbeat response mismatch: {heartbeat}")
+    if heartbeat.get("renewed_until", "") <= original_claim_expires_at:
+        raise RuntimeError(f"heartbeat did not renew the lease expiry: {heartbeat}")
 
     receipt_body = {
         "receipt_id": "receipt-http-claims-worker",
@@ -336,12 +356,28 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
     if wrong_status != 403:
         raise RuntimeError(f"expected 403 for wrong lease id, got {wrong_status}: {wrong_payload}")
 
+    wait_until_rfc3339(original_claim_expires_at)
     complete_path = f"/v1/sessions/{SESSION_ID}/actions/{CLAIM_ACTION_ID}/claims/{LEASE_ID}/complete"
     complete_status, complete = one_shot_request(root, token_file, complete_path, receipt_body, token=TOKEN)
     if complete_status != 200:
         raise RuntimeError(f"expected 200 from complete route, got {complete_status}: {complete}")
     if complete.get("lease_id") != LEASE_ID or complete.get("receipt_id") != receipt_body["receipt_id"]:
         raise RuntimeError(f"completion response mismatch: {complete}")
+    stale_heartbeat_status, stale_heartbeat = one_shot_request(
+        root,
+        token_file,
+        heartbeat_path,
+        {
+            **heartbeat_body,
+            "heartbeat_id": "heartbeat-after-complete",
+            "previous_expires_at": heartbeat["renewed_until"],
+        },
+        token=TOKEN,
+    )
+    if stale_heartbeat_status != 403:
+        raise RuntimeError(
+            f"expected 403 for heartbeat after completion, got {stale_heartbeat_status}: {stale_heartbeat}"
+        )
 
     reconcile_decision_id, reconcile_manifest_hash = propose_claimable_action(
         root,
@@ -382,6 +418,28 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
     if early_status != 403:
         raise RuntimeError(f"expected 403 for live lease reconcile, got {early_status}: {early_payload}")
     wait_until_rfc3339(reconcile_claim["expires_at"])
+    expired_heartbeat_path = (
+        f"/v1/sessions/{SESSION_ID}/actions/{RECONCILE_ACTION_ID}"
+        f"/claims/{RECONCILE_LEASE_ID}/heartbeat"
+    )
+    expired_heartbeat_status, expired_heartbeat = one_shot_request(
+        root,
+        token_file,
+        expired_heartbeat_path,
+        {
+            "heartbeat_id": "heartbeat-expired-http-claims-worker",
+            "worker_id": "worker:http-claims-smoke",
+            "expected_manifest_hash": reconcile_manifest_hash,
+            "expected_decision_id": reconcile_decision_id,
+            "previous_expires_at": reconcile_claim["expires_at"],
+            "extend_ms": 1000,
+        },
+        token=TOKEN,
+    )
+    if expired_heartbeat_status != 403:
+        raise RuntimeError(
+            f"expected 403 for expired lease heartbeat, got {expired_heartbeat_status}: {expired_heartbeat}"
+        )
     reconcile_status, reconcile = one_shot_request(
         root, token_file, reconcile_path, reconcile_body, token=TOKEN
     )
@@ -412,6 +470,9 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
         "claim_action_id": CLAIM_ACTION_ID,
         "lease_id": LEASE_ID,
         "lease_hash": claim["lease_hash"],
+        "heartbeat_id": heartbeat["heartbeat_id"],
+        "heartbeat_hash": heartbeat["heartbeat_hash"],
+        "renewed_until": heartbeat["renewed_until"],
         "receipt_id": complete["receipt_id"],
         "receipt_hash": complete["receipt_hash"],
         "reconciled_action_id": RECONCILE_ACTION_ID,

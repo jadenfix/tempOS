@@ -118,6 +118,15 @@ fn summarize_event(event: &JournalEvent) -> String {
             lease.target.resource_id,
             lease.expires_at.to_rfc3339()
         ),
+        JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => format!(
+            "heartbeat={} lease={} action={} previous_expires={} renewed_until={} by={}",
+            heartbeat.heartbeat_id,
+            heartbeat.lease_id,
+            heartbeat.action_id,
+            heartbeat.previous_expires_at.to_rfc3339(),
+            heartbeat.extended_expires_at.to_rfc3339(),
+            heartbeat.observed_by
+        ),
         JournalEvent::ExecutionLeaseReconciled { reconciliation } => format!(
             "reconciliation={} lease={} action={} resolution={:?} by={} reason={:?}",
             reconciliation.reconciliation_id,

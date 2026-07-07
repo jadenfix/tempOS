@@ -122,6 +122,21 @@ The response includes `pending_allowed_action_ids`,
 `action_id`, `lease_id`, `expires_at`, and `status` (`live_open` or
 `expired_recoverable`).
 
+Scheduler claim routes also support bounded worker heartbeats:
+
+```text
+POST /v1/sessions/<session-id>/actions/<action-id>/claims/<lease-id>/heartbeat
+```
+
+The heartbeat body supplies `heartbeat_id`, `worker_id`,
+`expected_manifest_hash`, `expected_decision_id`, `previous_expires_at`,
+`extend_ms`, and optional `evidence_refs`. It can only renew a still-live open
+lease whose manifest, decision, and current expiry match the request. It cannot
+revive expired leases, complete actions, reconcile outcomes, append receipts, or
+admit new work. Renewal is capped by the original action wall-clock budget plus
+daemon grace; claims may opt into a shorter `initial_lease_ms` so long-running
+workers prove liveness periodically without gaining unbounded execution time.
+
 ## Store layout
 
 The store root is chosen by, in order of precedence: the `--home` flag, the

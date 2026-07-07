@@ -586,6 +586,22 @@ pub struct ExecutionLease {
     pub expires_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionLeaseHeartbeat {
+    pub heartbeat_id: String,
+    pub lease_id: String,
+    pub session_id: String,
+    pub action_id: String,
+    pub manifest_hash: HashValue,
+    pub decision_id: String,
+    pub previous_expires_at: DateTime<Utc>,
+    pub extended_expires_at: DateTime<Utc>,
+    pub observed_by: String,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub heartbeat_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionLeaseResolution {

@@ -24,10 +24,10 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, Budget,
     CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult,
-    DelegationMode, ExecutionLease, ExecutionLeaseReconciliation, HashValue, InMemoryJournal,
-    JournalEvent, JournalRecord, JournalSnapshot, PaymentMandate, PolicyDecision, PolicyEngine,
-    ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
-    ToolManifest,
+    DelegationMode, ExecutionLease, ExecutionLeaseHeartbeat, ExecutionLeaseReconciliation,
+    HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot, PaymentMandate,
+    PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus,
+    SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, ResolveRequest, TestStatus, ToolRegistry, ToolTrust,
@@ -44,6 +44,7 @@ const TOOL_REGISTRY_FILE: &str = "tool-registry.json";
 const TOOL_REGISTRY_LOCK: &str = "tool-registry.lock";
 const LOCK_SUFFIX: &str = ".lock";
 const EXECUTION_LEASE_OVERHEAD_GRACE_MS: u64 = 2_000;
+const EXECUTION_LEASE_HEARTBEAT_WINDOW_MS: u64 = 5_000;
 /// Policy contract version enforced by daemon-owned authority writes.
 pub const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
 
@@ -158,6 +159,7 @@ pub struct SessionProjection {
     pub manifests: Vec<ActionManifest>,
     pub decisions: Vec<PolicyDecision>,
     pub execution_leases: Vec<ExecutionLease>,
+    pub execution_lease_heartbeats: Vec<ExecutionLeaseHeartbeat>,
     pub execution_reconciliations: Vec<ExecutionLeaseReconciliation>,
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
@@ -375,6 +377,26 @@ pub struct ExecutionLeaseClaimRequest {
     pub expected_decision_id: String,
     pub expected_tool_version: String,
     pub expected_tool_digest: HashValue,
+    pub initial_lease_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionLeaseHeartbeatRequest {
+    pub heartbeat_id: String,
+    pub lease_id: String,
+    pub action_id: String,
+    pub expected_manifest_hash: HashValue,
+    pub expected_decision_id: String,
+    pub previous_expires_at: DateTime<Utc>,
+    pub extend_by_ms: u64,
+    pub observed_by: Option<String>,
+    pub evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionLeaseHeartbeatOutcome {
+    pub heartbeat_record: JournalRecord,
+    pub heartbeat: ExecutionLeaseHeartbeat,
 }
 
 /// Store-owned projection of an admitted execute action that is currently
@@ -645,6 +667,12 @@ impl Store {
             JournalEvent::ExecutionLeaseIssued { .. } => {
                 return Err(DaemonError::Refused(
                     "ExecutionLeaseIssued must be written through execute_and_append_receipt"
+                        .to_string(),
+                ));
+            }
+            JournalEvent::ExecutionLeaseHeartbeated { .. } => {
+                return Err(DaemonError::Refused(
+                    "ExecutionLeaseHeartbeated must be written through heartbeat_execution_lease"
                         .to_string(),
                 ));
             }
@@ -1239,9 +1267,23 @@ impl Store {
                     ))
                 })?;
             let lease_issued_at = Utc::now();
+            let initial_lease_wall_ms = match request.initial_lease_ms {
+                Some(0) => {
+                    return Err(DaemonError::Refused(
+                        "initial_lease_ms must be greater than zero".to_string(),
+                    ));
+                }
+                Some(initial_lease_ms) if initial_lease_ms > lease_wall_ms => {
+                    return Err(DaemonError::Refused(format!(
+                        "initial_lease_ms must be at most the action wall budget plus daemon grace ({lease_wall_ms} ms)"
+                    )));
+                }
+                Some(initial_lease_ms) => initial_lease_ms,
+                None => lease_wall_ms,
+            };
             let lease_expires_at = lease_issued_at
                 .checked_add_signed(TimeDelta::milliseconds(
-                    i64::try_from(lease_wall_ms).map_err(|_| {
+                    i64::try_from(initial_lease_wall_ms).map_err(|_| {
                         DaemonError::Refused(format!(
                             "action {} execution lease duration cannot fit signed milliseconds",
                             request.action_id
@@ -1289,6 +1331,169 @@ impl Store {
                 expires_at: lease_expires_at,
             };
             self.append_execution_lease_claim_unlocked(session_id, &mut journal, lease)
+        })
+    }
+
+    /// Journal a live worker heartbeat and extend the open lease by a bounded
+    /// window, never beyond the original action wall-clock budget plus daemon
+    /// grace. Heartbeats are liveness evidence only: they do not complete the
+    /// action, create receipts, or make expired leases recoverable again.
+    pub fn heartbeat_execution_lease(
+        &self,
+        session_id: &str,
+        request: ExecutionLeaseHeartbeatRequest,
+        _created_at: DateTime<Utc>,
+    ) -> DaemonResult<ExecutionLeaseHeartbeatOutcome> {
+        self.with_session_lock(session_id, || {
+            if request.heartbeat_id.trim().is_empty() {
+                return Err(DaemonError::invalid("heartbeat_id", request.heartbeat_id));
+            }
+            if request.lease_id.trim().is_empty() {
+                return Err(DaemonError::invalid("lease_id", request.lease_id));
+            }
+            if request.action_id.trim().is_empty() {
+                return Err(DaemonError::invalid("action_id", request.action_id));
+            }
+            if request.extend_by_ms == 0
+                || request.extend_by_ms > EXECUTION_LEASE_HEARTBEAT_WINDOW_MS
+            {
+                return Err(DaemonError::Refused(format!(
+                    "extend_by_ms must be between 1 and {EXECUTION_LEASE_HEARTBEAT_WINDOW_MS}"
+                )));
+            }
+            if request
+                .evidence_refs
+                .iter()
+                .any(|reference| reference.trim().is_empty())
+            {
+                return Err(DaemonError::Refused(
+                    "heartbeat evidence_refs must not contain empty references".to_string(),
+                ));
+            }
+            let journal = self.load_journal_unlocked(session_id)?;
+            let projection = project_journal(session_id, &journal)?;
+            ensure_session_running(&projection.session)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let open_lease = admission_state
+                .open_execution_leases
+                .get(&request.action_id)
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "action {} has no open execution lease",
+                        request.action_id
+                    ))
+                })?;
+            if open_lease.lease_id != request.lease_id {
+                return Err(DaemonError::Refused(format!(
+                    "heartbeat lease {} does not match open lease {} for action {}",
+                    request.lease_id, open_lease.lease_id, request.action_id
+                )));
+            }
+            if open_lease.manifest_hash != request.expected_manifest_hash {
+                return Err(DaemonError::Refused(format!(
+                    "heartbeat manifest hash does not match open lease {}",
+                    open_lease.lease_id
+                )));
+            }
+            if open_lease.decision_id != request.expected_decision_id {
+                return Err(DaemonError::Refused(format!(
+                    "heartbeat decision id does not match open lease {}",
+                    open_lease.lease_id
+                )));
+            }
+            if open_lease.expires_at != request.previous_expires_at {
+                return Err(DaemonError::Refused(format!(
+                    "heartbeat previous_expires_at {} does not match open lease {} expiration {}",
+                    request.previous_expires_at, open_lease.lease_id, open_lease.expires_at
+                )));
+            }
+            let now = Utc::now();
+            if now >= open_lease.expires_at {
+                return Err(DaemonError::Refused(format!(
+                    "execution lease {} expired at {} and cannot be heartbeated",
+                    open_lease.lease_id, open_lease.expires_at
+                )));
+            }
+            let requested_wall_ms = open_lease.requested_budget.max_wall_ms.ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "execution lease {} has no finite wall budget for heartbeat renewal",
+                    open_lease.lease_id
+                ))
+            })?;
+            let max_wall_ms = requested_wall_ms
+                .checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS)
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "execution lease {} heartbeat budget overflowed",
+                        open_lease.lease_id
+                    ))
+                })?;
+            let max_expires_at = open_lease
+                .leased_at
+                .checked_add_signed(TimeDelta::milliseconds(
+                    i64::try_from(max_wall_ms).map_err(|_| {
+                        DaemonError::Refused(format!(
+                            "execution lease {} heartbeat budget cannot fit signed milliseconds",
+                            open_lease.lease_id
+                        ))
+                    })?,
+                ))
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "execution lease {} heartbeat maximum expiration overflowed daemon time",
+                        open_lease.lease_id
+                    ))
+                })?;
+            let requested_expires_at = now
+                .checked_add_signed(TimeDelta::milliseconds(
+                    i64::try_from(request.extend_by_ms).map_err(|_| {
+                        DaemonError::Refused(format!(
+                            "execution lease {} heartbeat extension cannot fit signed milliseconds",
+                            open_lease.lease_id
+                        ))
+                    })?,
+                ))
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "execution lease {} heartbeat expiration overflowed daemon time",
+                        open_lease.lease_id
+                    ))
+                })?;
+            let extended_expires_at = requested_expires_at.min(max_expires_at);
+            if extended_expires_at <= open_lease.expires_at {
+                return Err(DaemonError::Refused(format!(
+                    "execution lease {} heartbeat would not extend the current expiration",
+                    open_lease.lease_id
+                )));
+            }
+            let observed_by = request
+                .observed_by
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| projection.session.created_by.clone());
+            let heartbeat = ExecutionLeaseHeartbeat {
+                heartbeat_id: request.heartbeat_id,
+                lease_id: open_lease.lease_id.clone(),
+                session_id: session_id.to_string(),
+                action_id: open_lease.action_id.clone(),
+                manifest_hash: open_lease.manifest_hash.clone(),
+                decision_id: open_lease.decision_id.clone(),
+                previous_expires_at: open_lease.expires_at,
+                extended_expires_at,
+                observed_by,
+                evidence_refs: request.evidence_refs,
+                heartbeat_at: now,
+            };
+            let heartbeat_record = self.append_event_unlocked(
+                session_id,
+                JournalEvent::ExecutionLeaseHeartbeated {
+                    heartbeat: heartbeat.clone(),
+                },
+                now,
+            )?;
+            Ok(ExecutionLeaseHeartbeatOutcome {
+                heartbeat_record,
+                heartbeat,
+            })
         })
     }
 
@@ -1962,6 +2167,7 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
     let mut manifests = Vec::new();
     let mut decisions = Vec::new();
     let mut execution_leases = Vec::new();
+    let mut execution_lease_heartbeats = Vec::new();
     let mut execution_reconciliations = Vec::new();
     let mut approvals = Vec::new();
     let mut simulations = Vec::new();
@@ -2011,6 +2217,16 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
             }
             JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
             JournalEvent::ExecutionLeaseIssued { lease } => execution_leases.push(lease.clone()),
+            JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => {
+                if let Some(lease) = execution_leases
+                    .iter_mut()
+                    .rev()
+                    .find(|lease| lease.action_id == heartbeat.action_id)
+                {
+                    lease.expires_at = heartbeat.extended_expires_at;
+                }
+                execution_lease_heartbeats.push(heartbeat.clone());
+            }
             JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
                 execution_reconciliations.push(reconciliation.clone());
             }
@@ -2035,6 +2251,7 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
         manifests,
         decisions,
         execution_leases,
+        execution_lease_heartbeats,
         execution_reconciliations,
         approvals,
         simulations,
@@ -2262,6 +2479,21 @@ fn admission_state_from_journal(
                         lease.action_id
                     )));
                 }
+            }
+            JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => {
+                let Some(open_lease) = open_execution_leases.get_mut(&heartbeat.action_id) else {
+                    return Err(DaemonError::Refused(format!(
+                        "execution lease heartbeat {} references action {} without an open execution lease",
+                        heartbeat.heartbeat_id, heartbeat.action_id
+                    )));
+                };
+                if open_lease.lease_id != heartbeat.lease_id {
+                    return Err(DaemonError::Refused(format!(
+                        "execution lease heartbeat {} targets {}, but open lease is {}",
+                        heartbeat.heartbeat_id, heartbeat.lease_id, open_lease.lease_id
+                    )));
+                }
+                open_lease.expires_at = heartbeat.extended_expires_at;
             }
             JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
                 let Some(open_lease) = open_execution_leases.get(&reconciliation.action_id) else {
@@ -2537,6 +2769,9 @@ fn journal_event_id(event: &JournalEvent) -> Option<&str> {
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
         JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
+        JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => {
+            Some(heartbeat.heartbeat_id.as_str())
+        }
         JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
             Some(reconciliation.reconciliation_id.as_str())
         }

@@ -89,6 +89,14 @@
         },
         {
           "additionalProperties": false,
+          "required": ["kind", "heartbeat"],
+          "properties": {
+            "kind": { "const": "execution_lease_heartbeated" },
+            "heartbeat": { "$ref": "common.schema.json#/$defs/execution_lease_heartbeat" }
+          }
+        },
+        {
+          "additionalProperties": false,
           "required": ["kind", "reconciliation"],
           "properties": {
             "kind": { "const": "execution_lease_reconciled" },

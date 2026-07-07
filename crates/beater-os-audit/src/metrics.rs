@@ -113,6 +113,7 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
                 allowed_actions.remove(reconciliation.action_id.as_str());
                 receipted_actions.remove(reconciliation.action_id.as_str());
             }
+            JournalEvent::ExecutionLeaseHeartbeated { .. } => {}
             _ => {}
         }
     }
