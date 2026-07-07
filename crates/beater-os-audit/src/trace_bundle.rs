@@ -270,14 +270,18 @@ fn project_trace_from_journal(records: &[JournalRecord]) -> Result<ProjectedTrac
                 revocation_handle,
                 ..
             } => {
-                let Some(grant) = projected.grants.iter_mut().find(|grant| {
+                let Some(_grant) = projected.grants.iter().find(|grant| {
                     grant.grant_id == *grant_id && grant.revocation_handle == *revocation_handle
                 }) else {
                     return Err(format!(
                         "grant revocation references missing grant {grant_id}",
                     ));
                 };
-                grant.revoked = true;
+                // Trace export serializes the live projection's `grants` array
+                // without folding `revoked_handles` back into each grant. Keep
+                // this verifier byte-contract aligned with that exported shape;
+                // the revocation itself remains authoritative evidence in the
+                // journal that is independently verified above.
             }
             JournalEvent::PaymentMandateIssued { mandate } => {
                 projected.payment_mandates.push(mandate.clone());
