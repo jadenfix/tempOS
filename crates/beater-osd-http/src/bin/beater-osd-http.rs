@@ -28,6 +28,7 @@ use beater_os_core::{
     GrantConstraints, PolicyDecision, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
     TaintLabel,
 };
+use beater_os_runtime::{AgentRuntime, RuntimeBundle, RuntimeError};
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
     GatewayError, LocalToolInvocation, execute_local_tool, local_shell_tool_digest_with_environment,
@@ -570,6 +571,7 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
             Ok(sessions) => (200, serde_json::json!({ "sessions": sessions }).to_string()),
             Err(err) => (500, json_error("store_error", &err.to_string())),
         },
+        ("POST", "/v1/runtime/bundles") => runtime_bundle_route(store, request),
         ("GET", path) if path.starts_with("/v1/sessions/") => {
             let session_id = path.trim_start_matches("/v1/sessions/");
             if session_id.contains('/') {
@@ -614,6 +616,38 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
             405,
             json_error("method_not_allowed", "unsupported method for route"),
         ),
+    }
+}
+
+fn runtime_bundle_route(store: &Store, request: &ControlRequest) -> (u16, String) {
+    if !request.headers.contains_key("content-length") {
+        return (
+            400,
+            json_error("missing_content_length", "POST requires Content-Length"),
+        );
+    }
+    let bundle = match serde_json::from_slice::<RuntimeBundle>(&request.body) {
+        Ok(bundle) => bundle,
+        Err(err) => return (400, json_error("bad_json", &err.to_string())),
+    };
+    let runtime = AgentRuntime::from_store(store.clone());
+    match runtime.run_bundle(bundle) {
+        Ok(outcome) => (
+            200,
+            serde_json::to_string(&outcome).unwrap_or_else(|err| {
+                json_error(
+                    "serialize_error",
+                    &format!("could not serialize response: {err}"),
+                )
+            }),
+        ),
+        Err(RuntimeError::Refused(message)) => (403, json_error("refused", &message)),
+        Err(RuntimeError::InvalidTtl(ttl)) => (
+            400,
+            json_error("bad_request", &format!("invalid ttl seconds: {ttl}")),
+        ),
+        Err(RuntimeError::Daemon(err)) => (500, json_error("store_error", &err.to_string())),
+        Err(RuntimeError::Core(err)) => (500, json_error("core_error", &err.to_string())),
     }
 }
 
