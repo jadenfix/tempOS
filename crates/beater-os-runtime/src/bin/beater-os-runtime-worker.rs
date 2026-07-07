@@ -83,6 +83,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         println!("  runnable: {}", report.runnable_pending_actions);
         println!("  open leases: {}", report.open_execution_leases);
     }
+    report.ensure_complete()?;
     Ok(())
 }
 
@@ -376,6 +377,12 @@ impl SupervisorConfig {
         if recovery_reason.trim().is_empty() {
             return Err("recovery-reason must not be empty".to_string());
         }
+        if reconciled_by
+            .as_ref()
+            .is_some_and(|actor| actor.trim().is_empty())
+        {
+            return Err("reconciled-by must not be empty".to_string());
+        }
         if heartbeat_evidence_refs
             .iter()
             .chain(recovery_evidence_refs.iter())
@@ -430,6 +437,32 @@ struct SupervisorReport {
     live_open_execution_leases: usize,
     expired_recoverable_execution_leases: usize,
     execution_reconciliations: usize,
+}
+
+impl SupervisorReport {
+    fn ensure_complete(&self) -> Result<(), String> {
+        if self.runnable_pending_actions == 0
+            && self.open_execution_leases == 0
+            && self.expired_recoverable_execution_leases == 0
+            && self.stop_reason
+                != format!("{:?}", RuntimeLocalShellWorkerLoopStopReason::MaxActions)
+            && self.stop_reason
+                != format!(
+                    "{:?}",
+                    RuntimeLocalShellWorkerLoopStopReason::RecoveryBlocked
+                )
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "runtime worker supervisor stopped incomplete: stop={} runnable_pending_actions={} open_execution_leases={} live_open_execution_leases={} expired_recoverable_execution_leases={}",
+            self.stop_reason,
+            self.runnable_pending_actions,
+            self.open_execution_leases,
+            self.live_open_execution_leases,
+            self.expired_recoverable_execution_leases
+        ))
+    }
 }
 
 fn next_value(args: &[String], idx: &mut usize, flag: &str) -> Result<String, String> {
