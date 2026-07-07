@@ -40,7 +40,8 @@ review boundaries.
     compare-and-set fields, resolve pinned tool identity through the
     daemon-owned registry, and return the derived target/grants/budget lease
     authority; completion requires the exact open lease id before appending a
-    receipt.
+    receipt, and reconciliation can close an expired open lease as
+    `outcome_unknown` without fabricating success or no-side-effect evidence.
   - Local-shell execution can dispatch an existing scheduler-runnable pending
     action only when the journal projection proves it has no receipt, open
     execution lease, or outcome-unknown reconciliation; the daemon execution
@@ -109,8 +110,9 @@ review boundaries.
     gateway, completes a receipt, and drains from the runnable queue.
 - `scripts/run-beater-osd-http-claims-smoke.py`
   - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned
-    tool compare-and-set refusal, exact lease-id completion, and journal
-    verification.
+    tool compare-and-set refusal, exact lease-id completion, live-lease
+    reconcile refusal, expired-lease `outcome_unknown` reconciliation, and
+    journal verification.
 - `scripts/local-e2e.py`
   - Aggregate gate when doing full lane validation locally.
 
