@@ -3,9 +3,10 @@ use std::path::{Component, Path};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
-    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, GrantConstraints, HashValue,
-    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus, ResourceKind,
-    RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, hash_json,
+    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, ExecutionLeaseReconciliation,
+    ExecutionLeaseResolution, GrantConstraints, HashValue, PaymentIntent, PaymentMandate,
+    PaymentReceiptEvidence, PaymentSettlementStatus, ResourceKind, RiskClass, SessionStatus,
+    SideEffectClass, SimulationEvidence, hash_json,
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
@@ -46,6 +47,7 @@ pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         ("payment-spend", "propose") => payment_spend_propose(store, args),
         ("action", "propose") => action_propose(store, args),
         ("action", "execute") => action_execute(store, args),
+        ("execution-lease", "reconcile") => execution_lease_reconcile(store, args),
         ("simulation", "record") => simulation_record(store, args),
         ("receipt", "record") => receipt_record(store, args),
         ("journal", "verify") => journal_verify(store, args),
@@ -997,6 +999,71 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         receipt.status,
         receipt.side_effects,
         receipt.receipt_hash
+    ))
+}
+
+fn execution_lease_reconcile(store: &Store, args: &ParsedArgs) -> CliResult<String> {
+    let session_id = require_session(store, args)?;
+    let projection = store.project(&session_id)?;
+    let action_id = require_non_empty(args, "action")?.to_string();
+    let lease_id = require_non_empty(args, "lease-id")?.to_string();
+    let resolution = args::require_enum::<ExecutionLeaseResolution>(args, "resolution")?;
+    if resolution != ExecutionLeaseResolution::OutcomeUnknown {
+        return Err(CliError::Refused(
+            "only outcome_unknown execution lease reconciliation is currently supported"
+                .to_string(),
+        ));
+    }
+    let reason = require_non_empty(args, "reason")?.to_string();
+    let reconciled_by = args
+        .get("reconciled-by")
+        .filter(|value| !value.trim().is_empty() && *value != "true")
+        .unwrap_or(projection.session.created_by.as_str())
+        .to_string();
+    let evidence_refs = args.all("evidence");
+    if evidence_refs
+        .iter()
+        .any(|evidence| evidence.trim().is_empty() || evidence == "true")
+    {
+        return Err(CliError::invalid("evidence", ""));
+    }
+    let Some(open_lease) = store
+        .open_execution_leases(&session_id)?
+        .into_iter()
+        .find(|lease| lease.action_id == action_id && lease.lease_id == lease_id)
+    else {
+        return Err(CliError::Refused(format!(
+            "session {session_id} has no open execution lease {lease_id} for action {action_id}"
+        )));
+    };
+    let reconciliation_id = args
+        .get("reconciliation-id")
+        .filter(|value| !value.trim().is_empty() && *value != "true")
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("reconcile-{lease_id}"));
+    let record = store.reconcile_execution_lease(
+        &session_id,
+        ExecutionLeaseReconciliation {
+            reconciliation_id: reconciliation_id.clone(),
+            lease_id: lease_id.clone(),
+            session_id: session_id.clone(),
+            action_id: action_id.clone(),
+            manifest_hash: open_lease.manifest_hash,
+            decision_id: open_lease.decision_id,
+            resolution,
+            reconciled_by,
+            reason: reason.clone(),
+            evidence_refs,
+            reconciled_at: Utc::now(),
+        },
+        Utc::now(),
+    )?;
+    let resolution_label = match resolution {
+        ExecutionLeaseResolution::OutcomeUnknown => "outcome_unknown",
+    };
+    Ok(format!(
+        "reconciled execution lease {lease_id}\n  reconciliation: {reconciliation_id}\n  action:         {action_id}\n  resolution:     {resolution_label}\n  reason:         {reason}\n  journal seq:    {}",
+        record.seq
     ))
 }
 

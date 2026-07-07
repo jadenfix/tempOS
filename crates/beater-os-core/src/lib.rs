@@ -15,10 +15,10 @@ mod receipt;
 pub use contracts::{
     ActionKind, ActionManifest, AgentIdentity, AgentSession, ApprovalEvidence, ApprovalMode,
     ApprovalRequirement, Budget, CapabilityGrant, CapabilityScope, CapabilitySelector, DataClass,
-    DecisionResult, DelegationMode, ExecutionLease, GrantConstraints, HumanReviewRequest,
-    MemoryRecord, ModelPolicy, PaymentIntent, PaymentMandate, PolicyDecision, ResourceKind,
-    RiskClass, ScenarioManifest, SessionStatus, SideEffectClass, SimulationEvidence, TaintLabel,
-    ToolManifest,
+    DecisionResult, DelegationMode, ExecutionLease, ExecutionLeaseReconciliation,
+    ExecutionLeaseResolution, GrantConstraints, HumanReviewRequest, MemoryRecord, ModelPolicy,
+    PaymentIntent, PaymentMandate, PolicyDecision, ResourceKind, RiskClass, ScenarioManifest,
+    SessionStatus, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest,
 };
 pub use error::{BeaterOsError, BeaterOsResult};
 pub use hash::{HashValue, hash_json};

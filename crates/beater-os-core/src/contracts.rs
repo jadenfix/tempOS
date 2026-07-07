@@ -586,6 +586,28 @@ pub struct ExecutionLease {
     pub expires_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionLeaseResolution {
+    OutcomeUnknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionLeaseReconciliation {
+    pub reconciliation_id: String,
+    pub lease_id: String,
+    pub session_id: String,
+    pub action_id: String,
+    pub manifest_hash: HashValue,
+    pub decision_id: String,
+    pub resolution: ExecutionLeaseResolution,
+    pub reconciled_by: String,
+    pub reason: String,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub reconciled_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentIntent {
     pub mandate_id: String,

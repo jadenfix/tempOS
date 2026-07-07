@@ -103,6 +103,10 @@ pub fn help_text() -> String {
          \x20                 [--idempotency-key <k>]\n\
          \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\
          \x20                 [--env <NAME=VALUE>]...\n\
+         \x20 execution-lease reconcile --session <id> --action <id> --lease-id <id>\n\
+         \x20                 --resolution outcome_unknown --reason <text>\n\
+         \x20                 [--reconciliation-id <id>] [--reconciled-by <id>]\n\
+         \x20                 [--evidence <ref>]...\n\
          \x20 simulation record --session <id> --action <id>\n\
          \x20                 [--simulation-id <id>] [--scenario-id <id>]\n\
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\

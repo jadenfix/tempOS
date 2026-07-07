@@ -51,6 +51,7 @@ pub struct AuditMetrics {
     pub allowed_actions: usize,
     pub gated_or_denied_decisions: usize,
     pub receipts: usize,
+    pub execution_lease_reconciliations: usize,
     /// Fraction of proposed actions that received at least one policy decision.
     pub decision_coverage: Coverage,
     /// Fraction of allowed actions that produced at least one receipt. An action
@@ -66,11 +67,13 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
     let mut sessions = 0usize;
     let mut grants = 0usize;
     let mut receipts = 0usize;
+    let mut execution_lease_reconciliations = 0usize;
 
     let mut proposed_actions: BTreeSet<&str> = BTreeSet::new();
     let mut decided_actions: BTreeSet<&str> = BTreeSet::new();
     let mut allowed_actions: BTreeSet<&str> = BTreeSet::new();
     let mut receipted_actions: BTreeSet<&str> = BTreeSet::new();
+    let mut reconciled_actions: BTreeSet<&str> = BTreeSet::new();
 
     let mut decisions = 0usize;
     let mut gated_or_denied = 0usize;
@@ -100,7 +103,15 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
             }
             JournalEvent::ReceiptAppended { receipt } => {
                 receipts += 1;
-                receipted_actions.insert(receipt.action_id.as_str());
+                if !reconciled_actions.contains(receipt.action_id.as_str()) {
+                    receipted_actions.insert(receipt.action_id.as_str());
+                }
+            }
+            JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+                execution_lease_reconciliations += 1;
+                reconciled_actions.insert(reconciliation.action_id.as_str());
+                allowed_actions.remove(reconciliation.action_id.as_str());
+                receipted_actions.remove(reconciliation.action_id.as_str());
             }
             _ => {}
         }
@@ -124,6 +135,7 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
         allowed_actions: allowed_actions.len(),
         gated_or_denied_decisions: gated_or_denied,
         receipts,
+        execution_lease_reconciliations,
         decision_coverage: Coverage::new(decisions_for_proposed, proposed_actions.len()),
         receipt_coverage: Coverage::new(receipts_for_allowed, allowed_actions.len()),
         denial_explanation_coverage: Coverage::new(gated_or_denied_explained, gated_or_denied),

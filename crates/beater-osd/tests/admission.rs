@@ -12,9 +12,9 @@ use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, ApprovalEvidence, ApprovalMode, ApprovalRequirement,
     BeaterOsError, Budget, CapabilityGrant, CapabilityReceiptInput, CapabilityScope,
     CapabilitySelector, DataClass, DecisionResult, DelegationMode, ExecutionLease,
-    GrantConstraints, JournalEvent, PaymentIntent, PaymentMandate, PaymentReceiptEvidence,
-    PaymentSettlementStatus, PolicyDecision, ResourceKind, RiskClass, SessionStatus,
-    SideEffectClass, SimulationEvidence, ToolManifest,
+    ExecutionLeaseReconciliation, ExecutionLeaseResolution, GrantConstraints, JournalEvent,
+    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus, PolicyDecision,
+    ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_osd::{DaemonError, SessionTransition, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
@@ -845,6 +845,99 @@ fn open_execution_lease_blocks_admission_and_resume_after_callback_failure() {
         store.project(session_id).unwrap().session.status,
         SessionStatus::Paused
     );
+}
+
+#[test]
+fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecution() {
+    let (_root, store) =
+        create_store_with_session("execute-lease-reconcile", "sess_lease_reconcile");
+    let session_id = "sess_lease_reconcile";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-lease-reconcile");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let mut lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-reconcile");
+    lease.expires_at = lease.leased_at + TimeDelta::milliseconds(1);
+
+    let failed = store.execute_and_append_receipt(
+        session_id,
+        lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            Err(DaemonError::Refused(
+                "simulated crash after lease".to_string(),
+            ))
+        },
+    );
+    assert!(
+        matches!(failed, Err(DaemonError::Refused(ref message)) if message.contains("simulated crash after lease")),
+        "{failed:?}"
+    );
+    thread::sleep(Duration::from_millis(5));
+
+    store
+        .transition_session(session_id, SessionTransition::Pause, Utc::now())
+        .unwrap();
+    let record = store
+        .reconcile_execution_lease(
+            session_id,
+            ExecutionLeaseReconciliation {
+                reconciliation_id: "reconcile-lease-reconcile".to_string(),
+                lease_id: "lease-reconcile".to_string(),
+                session_id: session_id.to_string(),
+                action_id: "act-lease-reconcile".to_string(),
+                manifest_hash: String::new(),
+                decision_id: String::new(),
+                resolution: ExecutionLeaseResolution::OutcomeUnknown,
+                reconciled_by: "operator:runtime".to_string(),
+                reason: "operator inspected the workspace; outcome remains unknown".to_string(),
+                evidence_refs: vec!["incident:lease-reconcile".to_string()],
+                reconciled_at: Utc::now(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    assert!(matches!(
+        record.event,
+        JournalEvent::ExecutionLeaseReconciled { .. }
+    ));
+    assert!(store.open_execution_leases(session_id).unwrap().is_empty());
+
+    store
+        .transition_session(session_id, SessionTransition::Resume, Utc::now())
+        .unwrap();
+
+    let receipt_after_reconcile =
+        store.append_receipt(session_id, receipt_input("act-lease-reconcile"), Utc::now());
+    assert!(
+        matches!(receipt_after_reconcile, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("after execution lease reconciliation")),
+        "{receipt_after_reconcile:?}"
+    );
+
+    let new_admission = store
+        .admit_action(session_id, manifest(session_id, "act-after-reconcile"))
+        .unwrap();
+    assert_eq!(new_admission.decision.result, DecisionResult::Allowed);
+
+    let retry_lease = execution_lease_for(
+        &execute_manifest,
+        &admission.decision,
+        "lease-reconcile-retry",
+    );
+    let retry = store.execute_and_append_receipt(
+        session_id,
+        retry_lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            Ok((receipt_input("act-lease-reconcile"), ()))
+        },
+    );
+    assert!(
+        matches!(retry, Err(DaemonError::Refused(ref message)) if message.contains("cannot be re-executed")),
+        "{retry:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
 }
 
 #[test]

@@ -253,6 +253,7 @@ fn trace_bundle_from_snapshot(snapshot: &JournalSnapshot) -> TraceBundle {
             JournalEvent::SessionStatusChanged { .. }
             | JournalEvent::CapabilityRevoked { .. }
             | JournalEvent::ExecutionLeaseIssued { .. }
+            | JournalEvent::ExecutionLeaseReconciled { .. }
             | JournalEvent::MemoryWritten { .. }
             | JournalEvent::ScenarioEvaluated { .. }
             | JournalEvent::IncidentAnnotated { .. } => {}

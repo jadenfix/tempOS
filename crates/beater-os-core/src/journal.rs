@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
     ActionKind, ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult,
-    ExecutionLease, MemoryRecord, PaymentIntent, PaymentMandate, PolicyDecision, ScenarioManifest,
-    SessionStatus, SideEffectClass, SimulationEvidence,
+    ExecutionLease, ExecutionLeaseReconciliation, MemoryRecord, PaymentIntent, PaymentMandate,
+    PolicyDecision, ScenarioManifest, SessionStatus, SideEffectClass, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
@@ -46,6 +46,9 @@ pub enum JournalEvent {
     },
     ExecutionLeaseIssued {
         lease: ExecutionLease,
+    },
+    ExecutionLeaseReconciled {
+        reconciliation: ExecutionLeaseReconciliation,
     },
     ApprovalRecorded {
         approval: ApprovalEvidence,
@@ -214,6 +217,7 @@ struct CausalityState {
     allowed_decision_ids: BTreeMap<String, String>,
     latest_decision_by_action: BTreeMap<String, DecisionResult>,
     open_execution_leases: BTreeMap<String, ExecutionLease>,
+    reconciled_execution_actions: BTreeMap<String, String>,
     receipted_actions: BTreeSet<String>,
     review_ids: BTreeMap<String, ()>,
     simulation_ids: BTreeMap<String, ()>,
@@ -437,6 +441,16 @@ fn verify_event_causality(
                 );
             }
         }
+        JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+            validate_execution_lease_reconciliation(record, reconciliation, state)?;
+            state
+                .open_execution_leases
+                .remove(&reconciliation.action_id);
+            state.reconciled_execution_actions.insert(
+                reconciliation.action_id.clone(),
+                reconciliation.reconciliation_id.clone(),
+            );
+        }
         JournalEvent::ApprovalRecorded { approval } => {
             if state
                 .review_ids
@@ -556,6 +570,17 @@ fn verify_event_causality(
                     ),
                 );
             };
+            if let Some(reconciliation_id) =
+                state.reconciled_execution_actions.get(&receipt.action_id)
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} references action {} after execution lease reconciliation {}",
+                        receipt.receipt_id, receipt.action_id, reconciliation_id
+                    ),
+                );
+            }
             let Some(allowed_manifest_hash) = state.allowed_decisions.get(&receipt.action_id)
             else {
                 let latest = state
@@ -820,6 +845,15 @@ fn validate_execution_lease(
             ),
         );
     }
+    if let Some(reconciliation_id) = state.reconciled_execution_actions.get(&lease.action_id) {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} references already-reconciled action {} via {}",
+                lease.lease_id, lease.action_id, reconciliation_id
+            ),
+        );
+    }
     if state.allowed_decision_ids.get(&lease.action_id) != Some(&lease.decision_id) {
         return causality_error(
             record.seq,
@@ -912,6 +946,129 @@ fn validate_execution_lease(
                 ),
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_execution_lease_reconciliation(
+    record: &JournalRecord,
+    reconciliation: &ExecutionLeaseReconciliation,
+    state: &CausalityState,
+) -> BeaterOsResult<()> {
+    for (field, value) in [
+        (
+            "reconciliation_id",
+            reconciliation.reconciliation_id.as_str(),
+        ),
+        ("lease_id", reconciliation.lease_id.as_str()),
+        ("session_id", reconciliation.session_id.as_str()),
+        ("action_id", reconciliation.action_id.as_str()),
+        ("manifest_hash", reconciliation.manifest_hash.as_str()),
+        ("decision_id", reconciliation.decision_id.as_str()),
+        ("reconciled_by", reconciliation.reconciled_by.as_str()),
+        ("reason", reconciliation.reason.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return causality_error(
+                record.seq,
+                format!(
+                    "execution lease reconciliation {} has empty {field}",
+                    reconciliation.reconciliation_id
+                ),
+            );
+        }
+    }
+    if reconciliation
+        .evidence_refs
+        .iter()
+        .any(|evidence| evidence.trim().is_empty())
+    {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} has empty evidence ref",
+                reconciliation.reconciliation_id
+            ),
+        );
+    }
+    if reconciliation.reconciled_at > record.created_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} is future-dated",
+                reconciliation.reconciliation_id
+            ),
+        );
+    }
+    if state.receipted_actions.contains(&reconciliation.action_id) {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} references already-receipted action {}",
+                reconciliation.reconciliation_id, reconciliation.action_id
+            ),
+        );
+    }
+    if state
+        .reconciled_execution_actions
+        .contains_key(&reconciliation.action_id)
+    {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} references already-reconciled action {}",
+                reconciliation.reconciliation_id, reconciliation.action_id
+            ),
+        );
+    }
+    let Some(lease) = state.open_execution_leases.get(&reconciliation.action_id) else {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} references action {} without an open execution lease",
+                reconciliation.reconciliation_id, reconciliation.action_id
+            ),
+        );
+    };
+    if reconciliation.lease_id != lease.lease_id {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} lease {} does not match open lease {}",
+                reconciliation.reconciliation_id, reconciliation.lease_id, lease.lease_id
+            ),
+        );
+    }
+    if reconciliation.session_id != lease.session_id
+        || reconciliation.action_id != lease.action_id
+        || reconciliation.manifest_hash != lease.manifest_hash
+        || reconciliation.decision_id != lease.decision_id
+    {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} does not match open lease {} authority",
+                reconciliation.reconciliation_id, lease.lease_id
+            ),
+        );
+    }
+    if reconciliation.reconciled_at < lease.expires_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} occurred before lease {} expired",
+                reconciliation.reconciliation_id, lease.lease_id
+            ),
+        );
+    }
+    if record.created_at < lease.expires_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease reconciliation {} was journaled before lease {} expired",
+                reconciliation.reconciliation_id, lease.lease_id
+            ),
+        );
     }
     Ok(())
 }
@@ -1246,6 +1403,9 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
         JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
+        JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+            Some(reconciliation.reconciliation_id.as_str())
+        }
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),

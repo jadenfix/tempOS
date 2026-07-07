@@ -60,6 +60,10 @@ section references point to the authoritative definition.
   proves the outcome. Expiry ends executable authority; it does not prove the
   side effect did not happen, so unresolved leases are recovery blockers for
   blind retry, new admission, and session resume until reconciled.
+- **Execution lease reconciliation** — an operator-authored journal event that
+  closes an expired unresolved execution lease as `outcome_unknown`. It is not a
+  receipt, does not claim success or absence of side effects, and does not make
+  the original action executable again.
 
 ## Runtime and services (final.md §9, §10)
 

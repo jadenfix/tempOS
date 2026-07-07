@@ -18,7 +18,8 @@ review boundaries.
   - Durable execution leases between `Allowed` policy decisions and spawned
     side-effecting tools; unresolved open leases are projected as recovery
     blockers and prevent blind replay, new admission, and session resume after
-    crash windows.
+    crash windows until explicit operator reconciliation records
+    `outcome_unknown` without fabricating a receipt.
   - Local loopback control-plane API for health and token-gated session
     projection.
   - Canonical proof of authority writes (`PolicyEngine` is only invocation point

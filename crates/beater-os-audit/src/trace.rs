@@ -118,6 +118,15 @@ fn summarize_event(event: &JournalEvent) -> String {
             lease.target.resource_id,
             lease.expires_at.to_rfc3339()
         ),
+        JournalEvent::ExecutionLeaseReconciled { reconciliation } => format!(
+            "reconciliation={} lease={} action={} resolution={:?} by={} reason={:?}",
+            reconciliation.reconciliation_id,
+            reconciliation.lease_id,
+            reconciliation.action_id,
+            reconciliation.resolution,
+            reconciliation.reconciled_by,
+            reconciliation.reason
+        ),
         JournalEvent::ApprovalRecorded { approval } => format!(
             "approval={} action={} grant={} reviewer={}",
             approval.review_id, approval.action_id, approval.grant_id, approval.reviewer_id

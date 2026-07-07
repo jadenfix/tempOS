@@ -48,6 +48,7 @@ receipt ledger.
 | `payment-spend propose` | Derive a typed payment `ActionManifest` from an issued mandate and normalized rail envelope evidence, then run daemon admission. |
 | `action propose` | Journal an `ActionProposed`, run policy admission, journal `PolicyDecided`. |
 | `action execute` | Run a scoped shell action through the **tool gateway lane**: resolve a registered local shell tool, canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
+| `execution-lease reconcile` | Reconcile an expired unresolved execution lease as `outcome_unknown`, closing the runtime recovery blocker without creating a receipt or proving success/no-side-effect. |
 | `simulation record` | Record passed, action-bound simulation evidence for the latest `NeedsSimulation` decision. |
 | `receipt record` | Record a `CapabilityReceipt` for an **admitted** action (fails closed otherwise). |
 | `journal verify` | Verify the journal and receipt hash chains and causality. |
@@ -249,11 +250,13 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    held through lease append, sandbox execution, and receipt append, so lifecycle
    transitions cannot interleave. If a process fails after the lease is written
    but before a receipt exists, replay sees an open lease and refuses to run the
-   action again until a future reconciliation path handles it explicitly. The
+   action again until `execution-lease reconcile` handles it explicitly. The
    daemon also refuses new action admission and paused-session resume while any
    unresolved open execution lease remains, because that state means the side
    effect outcome is unknown and must not be hidden behind model memory or a
-   synthetic success receipt. The confined child runs under macOS Seatbelt with
+   synthetic success receipt. Reconciliation requires the lease to be expired,
+   records `outcome_unknown`, and does not make the action executable again. The
+   confined child runs under macOS Seatbelt with
    filesystem writes limited to granted prefixes, network denied by default, and
    process execution limited to the resolved entry executable. It also gets an
    **explicit environment allowlist** (`env_clear` + a CLI-owned safe `PATH`
@@ -285,6 +288,26 @@ action <id>
   fs-diff:     created=["out.txt"] modified=[] deleted=[]
   receipt:     <receipt-id> hash=<...>
 ```
+
+If the daemon crashes or a callback fails after `ExecutionLeaseIssued` is
+durable but before `ReceiptAppended`, operators must not record a synthetic
+receipt. After the lease expires and the side-effect outcome has been reviewed
+as unknown, reconcile the lease explicitly:
+
+```console
+$ beaterosctl execution-lease reconcile --session demo \
+    --action <action-id> --lease-id <lease-id> \
+    --resolution outcome_unknown \
+    --reconciliation-id reconcile-<lease-id> \
+    --reason "operator inspected workspace and external systems; outcome remains unknown" \
+    --evidence incident:ticket-123
+reconciled execution lease <lease-id>
+  reconciliation: reconcile-<lease-id>
+  resolution:     outcome_unknown
+```
+
+This closes the runtime recovery blocker for future admission or session resume,
+but the trace still shows an unresolved action outcome rather than a receipt.
 
 Use repeated `--env BEATER_NAME=VALUE` for the rare action that needs a process
 variable. The sandbox crate itself does not add implicit variables; the CLI

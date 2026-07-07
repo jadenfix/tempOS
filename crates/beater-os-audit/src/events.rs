@@ -14,6 +14,7 @@ pub(crate) fn event_kind(event: &JournalEvent) -> &'static str {
         JournalEvent::ActionProposed { .. } => "action_proposed",
         JournalEvent::PolicyDecided { .. } => "policy_decided",
         JournalEvent::ExecutionLeaseIssued { .. } => "execution_lease_issued",
+        JournalEvent::ExecutionLeaseReconciled { .. } => "execution_lease_reconciled",
         JournalEvent::ApprovalRecorded { .. } => "approval_recorded",
         JournalEvent::SimulationRecorded { .. } => "simulation_recorded",
         JournalEvent::ReceiptAppended { .. } => "receipt_appended",

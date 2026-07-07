@@ -24,9 +24,10 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, Budget,
     CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult,
-    DelegationMode, ExecutionLease, HashValue, InMemoryJournal, JournalEvent, JournalRecord,
-    JournalSnapshot, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind,
-    RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
+    DelegationMode, ExecutionLease, ExecutionLeaseReconciliation, HashValue, InMemoryJournal,
+    JournalEvent, JournalRecord, JournalSnapshot, PaymentMandate, PolicyDecision, PolicyEngine,
+    ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
+    ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
@@ -156,6 +157,7 @@ pub struct SessionProjection {
     pub manifests: Vec<ActionManifest>,
     pub decisions: Vec<PolicyDecision>,
     pub execution_leases: Vec<ExecutionLease>,
+    pub execution_reconciliations: Vec<ExecutionLeaseReconciliation>,
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
     pub receipts: Vec<CapabilityReceipt>,
@@ -397,6 +399,15 @@ impl Store {
                     "resume session",
                 ));
             }
+            if matches!(transition, SessionTransition::Cancel)
+                && !admission_state.open_execution_leases.is_empty()
+            {
+                return Err(open_execution_lease_refusal(
+                    session_id,
+                    &admission_state.open_execution_leases,
+                    "cancel session",
+                ));
+            }
             let transition_id = format!(
                 "session:{session_id}:transition:{}",
                 journal.records().len()
@@ -468,6 +479,12 @@ impl Store {
             JournalEvent::ExecutionLeaseIssued { .. } => {
                 return Err(DaemonError::Refused(
                     "ExecutionLeaseIssued must be written through execute_and_append_receipt"
+                        .to_string(),
+                ));
+            }
+            JournalEvent::ExecutionLeaseReconciled { .. } => {
+                return Err(DaemonError::Refused(
+                    "ExecutionLeaseReconciled must be written through reconcile_execution_lease"
                         .to_string(),
                 ));
             }
@@ -644,6 +661,80 @@ impl Store {
                     reason,
                 },
                 created_at,
+            )?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
+    /// Reconcile an expired open execution lease without creating a receipt.
+    ///
+    /// This closes the daemon recovery blocker for a side-effect outcome that
+    /// remains unknown. It does not prove success, failure, or absence of side
+    /// effects, and it does not make the action executable again.
+    pub fn reconcile_execution_lease(
+        &self,
+        session_id: &str,
+        mut reconciliation: ExecutionLeaseReconciliation,
+        _created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            if reconciliation.session_id != session_id {
+                return Err(DaemonError::Refused(format!(
+                    "execution lease reconciliation {} is bound to session {}, not {session_id}",
+                    reconciliation.reconciliation_id, reconciliation.session_id
+                )));
+            }
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            if !matches!(
+                admission_state.session.status,
+                SessionStatus::Running | SessionStatus::Paused
+            ) {
+                return Err(DaemonError::Refused(format!(
+                    "session {} is not reconcilable (status {:?})",
+                    admission_state.session.session_id, admission_state.session.status
+                )));
+            }
+            let Some(open_lease) = admission_state
+                .open_execution_leases
+                .get(&reconciliation.action_id)
+            else {
+                return Err(DaemonError::Refused(format!(
+                    "action {} has no open execution lease to reconcile",
+                    reconciliation.action_id
+                )));
+            };
+            if open_lease.lease_id != reconciliation.lease_id {
+                return Err(DaemonError::Refused(format!(
+                    "action {} open lease is {}, not {}",
+                    reconciliation.action_id, open_lease.lease_id, reconciliation.lease_id
+                )));
+            }
+            if admission_state
+                .reconciled_execution_actions
+                .contains_key(&reconciliation.action_id)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "action {} already has an execution lease reconciliation",
+                    reconciliation.action_id
+                )));
+            }
+            let now = Utc::now();
+            if now < open_lease.expires_at {
+                return Err(DaemonError::Refused(format!(
+                    "execution lease {} is still live until {}",
+                    open_lease.lease_id,
+                    open_lease.expires_at.to_rfc3339()
+                )));
+            }
+            reconciliation.manifest_hash = open_lease.manifest_hash.clone();
+            reconciliation.decision_id = open_lease.decision_id.clone();
+            reconciliation.reconciled_at = now;
+            let record = journal.append(
+                JournalEvent::ExecutionLeaseReconciled { reconciliation },
+                now,
             )?;
             journal.verify_chain()?;
             self.write_journal_record_unlocked(session_id, &record)?;
@@ -894,6 +985,16 @@ impl Store {
         {
             return Err(DaemonError::Refused(format!(
                 "action {} already has an open execution lease",
+                lease.action_id
+            ))
+            .into());
+        }
+        if admission_state
+            .reconciled_execution_actions
+            .contains_key(&lease.action_id)
+        {
+            return Err(DaemonError::Refused(format!(
+                "action {} has an outcome-unknown execution lease reconciliation and cannot be re-executed",
                 lease.action_id
             ))
             .into());
@@ -1247,6 +1348,7 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
     let mut manifests = Vec::new();
     let mut decisions = Vec::new();
     let mut execution_leases = Vec::new();
+    let mut execution_reconciliations = Vec::new();
     let mut approvals = Vec::new();
     let mut simulations = Vec::new();
     let mut receipts = Vec::new();
@@ -1295,6 +1397,9 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
             }
             JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
             JournalEvent::ExecutionLeaseIssued { lease } => execution_leases.push(lease.clone()),
+            JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+                execution_reconciliations.push(reconciliation.clone());
+            }
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
             JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
             JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
@@ -1316,6 +1421,7 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
         manifests,
         decisions,
         execution_leases,
+        execution_reconciliations,
         approvals,
         simulations,
         receipts,
@@ -1420,6 +1526,7 @@ struct AdmissionState {
     session_budget_used: Budget,
     pending_runtime_budget_by_action: BTreeMap<String, Budget>,
     open_execution_leases: BTreeMap<String, ExecutionLease>,
+    reconciled_execution_actions: BTreeMap<String, ExecutionLeaseReconciliation>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
     approvals: Vec<ApprovalEvidence>,
@@ -1445,6 +1552,7 @@ fn admission_state_from_journal(
     let mut session_budget_used = Budget::default();
     let mut receipted_actions = BTreeSet::new();
     let mut open_execution_leases = BTreeMap::new();
+    let mut reconciled_execution_actions = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     let mut approvals = Vec::new();
@@ -1524,6 +1632,12 @@ fn admission_state_from_journal(
                 latest_decisions.insert(decision.action_id.clone(), decision.clone());
             }
             JournalEvent::ExecutionLeaseIssued { lease } => {
+                if reconciled_execution_actions.contains_key(&lease.action_id) {
+                    return Err(DaemonError::Refused(format!(
+                        "action {} already has an execution lease reconciliation",
+                        lease.action_id
+                    )));
+                }
                 if open_execution_leases
                     .insert(lease.action_id.clone(), lease.clone())
                     .is_some()
@@ -1533,6 +1647,25 @@ fn admission_state_from_journal(
                         lease.action_id
                     )));
                 }
+            }
+            JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+                let Some(open_lease) = open_execution_leases.get(&reconciliation.action_id) else {
+                    return Err(DaemonError::Refused(format!(
+                        "execution lease reconciliation {} references action {} without an open execution lease",
+                        reconciliation.reconciliation_id, reconciliation.action_id
+                    )));
+                };
+                if open_lease.lease_id != reconciliation.lease_id {
+                    return Err(DaemonError::Refused(format!(
+                        "execution lease reconciliation {} targets {}, but open lease is {}",
+                        reconciliation.reconciliation_id,
+                        reconciliation.lease_id,
+                        open_lease.lease_id
+                    )));
+                }
+                open_execution_leases.remove(&reconciliation.action_id);
+                reconciled_execution_actions
+                    .insert(reconciliation.action_id.clone(), reconciliation.clone());
             }
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
             JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
@@ -1616,6 +1749,7 @@ fn admission_state_from_journal(
         session_budget_used,
         pending_runtime_budget_by_action,
         open_execution_leases,
+        reconciled_execution_actions,
         proposals,
         latest_decisions,
         approvals,
@@ -1787,6 +1921,9 @@ fn journal_event_id(event: &JournalEvent) -> Option<&str> {
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
         JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
+        JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+            Some(reconciliation.reconciliation_id.as_str())
+        }
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),

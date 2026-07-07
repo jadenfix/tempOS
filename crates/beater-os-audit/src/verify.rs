@@ -426,6 +426,11 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
                 lease.lease_id.as_str(),
                 lease.session_id.as_str(),
             )),
+            JournalEvent::ExecutionLeaseReconciled { reconciliation } => Some((
+                "execution lease reconciliation",
+                reconciliation.reconciliation_id.as_str(),
+                reconciliation.session_id.as_str(),
+            )),
             _ => None,
         };
         if let Some((kind, id, session_id)) = reference
@@ -599,6 +604,7 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
 fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
     let mut proposed: BTreeMap<&str, &ActionManifest> = BTreeMap::new();
     let mut allowed: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut reconciled: BTreeMap<&str, &str> = BTreeMap::new();
     for record in &snapshot.records {
         match &record.event {
             JournalEvent::ActionProposed { manifest } => {
@@ -612,7 +618,23 @@ fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
                 }
             }
             JournalEvent::ExecutionLeaseIssued { .. } => {}
+            JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+                reconciled.insert(
+                    reconciliation.action_id.as_str(),
+                    reconciliation.reconciliation_id.as_str(),
+                );
+                allowed.remove(reconciliation.action_id.as_str());
+            }
             JournalEvent::ReceiptAppended { receipt } => {
+                if let Some(reconciliation_id) = reconciled.get(receipt.action_id.as_str()) {
+                    return CheckResult::fail(
+                        "receipt_causality",
+                        format!(
+                            "receipt {} references action {} after execution lease reconciliation {}",
+                            receipt.receipt_id, receipt.action_id, reconciliation_id
+                        ),
+                    );
+                }
                 let Some(manifest) = proposed.get(receipt.action_id.as_str()) else {
                     return CheckResult::fail(
                         "receipt_causality",
@@ -749,6 +771,9 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
         JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
+        JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+            Some(reconciliation.reconciliation_id.as_str())
+        }
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),

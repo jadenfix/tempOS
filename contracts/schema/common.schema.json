@@ -113,6 +113,29 @@
         "expires_at": { "$ref": "#/$defs/timestamp" }
       }
     },
+    "execution_lease_resolution": {
+      "type": "string",
+      "enum": ["outcome_unknown"]
+    },
+    "execution_lease_reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Operator reconciliation for an expired unresolved execution lease. This closes a recovery blocker without creating a receipt or proving success.",
+      "required": ["reconciliation_id", "lease_id", "session_id", "action_id", "manifest_hash", "decision_id", "resolution", "reconciled_by", "reason", "reconciled_at"],
+      "properties": {
+        "reconciliation_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "session_id": { "type": "string", "minLength": 1 },
+        "action_id": { "type": "string", "minLength": 1 },
+        "manifest_hash": { "$ref": "#/$defs/hash_value" },
+        "decision_id": { "type": "string", "minLength": 1 },
+        "resolution": { "$ref": "#/$defs/execution_lease_resolution" },
+        "reconciled_by": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "reconciled_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
     "grant_constraints": {
       "type": "object",
       "additionalProperties": false,

@@ -235,6 +235,33 @@
         "expires_at": { "$ref": "common.schema.json#/$defs/Timestamp" }
       }
     },
+    "ExecutionLeaseResolution": {
+      "description": "contracts.rs ExecutionLeaseResolution. Initial reconciliation vocabulary intentionally admits only outcome_unknown.",
+      "type": "string",
+      "enum": ["outcome_unknown"]
+    },
+    "ExecutionLeaseReconciliation": {
+      "description": "contracts.rs ExecutionLeaseReconciliation. Operator recovery marker for an expired unresolved execution lease; not a receipt and not proof of success or no side effects.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reconciliation_id", "lease_id", "session_id", "action_id", "manifest_hash", "decision_id", "resolution", "reconciled_by", "reason", "reconciled_at"],
+      "properties": {
+        "reconciliation_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "lease_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "session_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "action_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "manifest_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+        "decision_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "resolution": { "$ref": "common.schema.json#/$defs/ExecutionLeaseResolution" },
+        "reconciled_by": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "reconciled_at": { "$ref": "common.schema.json#/$defs/Timestamp" }
+      }
+    },
     "GrantConstraints": {
       "description": "contracts.rs GrantConstraints. Attenuating limits applied on top of a grant's scope.",
       "type": "object",
