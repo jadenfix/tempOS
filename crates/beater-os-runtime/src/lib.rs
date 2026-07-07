@@ -163,50 +163,54 @@ impl AgentRuntime {
     /// grants, admit ordered action manifests, and return deterministic replay
     /// evidence without granting the caller a direct store API.
     pub fn run_bundle(&self, bundle: RuntimeBundle) -> RuntimeResult<RuntimeBundleOutcome> {
-        let declared_session_id = bundle
-            .session_id
-            .clone()
-            .or_else(|| bundle.steps.first().map(|step| step.session_id.clone()));
-        let (session_id, created_session) = match bundle.session {
-            Some(mut start) => {
-                if start.session_id.is_none() {
-                    start.session_id = declared_session_id.clone();
-                }
-                let session = self.create_session(start)?;
-                if let Some(declared) = declared_session_id
-                    && declared != session.session_id
-                {
-                    return Err(RuntimeError::Refused(format!(
-                        "bundle session_id {declared} does not match created session {}",
-                        session.session_id
-                    )));
-                }
-                (session.session_id, true)
-            }
-            None => (
-                declared_session_id.ok_or_else(|| {
-                    RuntimeError::Refused(
-                        "runtime bundle must declare a session or at least one step".to_string(),
-                    )
-                })?,
-                false,
-            ),
-        };
-
-        let mut issued_grants = Vec::new();
-        for request in bundle.grants {
-            let grant = self.issue_grant(&session_id, request)?;
-            issued_grants.push(grant.grant_id);
-        }
-
-        let mut steps = Vec::new();
-        for step in bundle.steps {
+        let RuntimeBundle {
+            session_id: bundle_session_id,
+            session,
+            grants,
+            steps,
+        } = bundle;
+        let declared_session_id = bundle_session_id
+            .or_else(|| session.as_ref().and_then(|start| start.session_id.clone()))
+            .or_else(|| steps.first().map(|step| step.session_id.clone()));
+        let session_id = declared_session_id.ok_or_else(|| {
+            RuntimeError::Refused(
+                "runtime bundle must declare a session or at least one step".to_string(),
+            )
+        })?;
+        for step in &steps {
             if step.session_id != session_id {
                 return Err(RuntimeError::Refused(format!(
                     "bundle step session_id {} does not match bundle session {session_id}",
                     step.session_id
                 )));
             }
+        }
+        let (session_id, created_session) = match session {
+            Some(mut start) => {
+                if let Some(start_session_id) = &start.session_id
+                    && start_session_id != &session_id
+                {
+                    return Err(RuntimeError::Refused(format!(
+                        "bundle session_id {session_id} does not match session genesis {start_session_id}",
+                    )));
+                }
+                if start.session_id.is_none() {
+                    start.session_id = Some(session_id.clone());
+                }
+                let session = self.create_session(start)?;
+                (session.session_id, true)
+            }
+            None => (session_id, false),
+        };
+
+        let mut issued_grants = Vec::new();
+        for request in grants {
+            let grant = self.issue_grant(&session_id, request)?;
+            issued_grants.push(grant.grant_id);
+        }
+
+        let mut steps = Vec::new();
+        for step in steps {
             let outcome = self.admit_step(step)?;
             let report = RuntimeBundleStepReport::from_outcome(&outcome);
             let allowed = outcome.admission.decision.result == DecisionResult::Allowed;
@@ -723,6 +727,14 @@ fn expires_at(now: DateTime<Utc>, ttl_secs: u64) -> RuntimeResult<DateTime<Utc>>
         .ok_or(RuntimeError::InvalidTtl(ttl_secs as u64))
 }
 
+fn allows_observation_receipt(manifest: &ActionManifest) -> bool {
+    manifest.expected_side_effects.is_empty()
+        || manifest
+            .expected_side_effects
+            .iter()
+            .all(|effect| matches!(effect, SideEffectClass::None))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -793,12 +805,114 @@ mod tests {
         let _ = fs::remove_dir_all(root);
         Ok(())
     }
-}
 
-fn allows_observation_receipt(manifest: &ActionManifest) -> bool {
-    manifest.expected_side_effects.is_empty()
-        || manifest
-            .expected_side_effects
-            .iter()
-            .all(|effect| matches!(effect, SideEffectClass::None))
+    #[test]
+    fn bundle_rejects_session_mismatch_before_persisting() -> Result<(), Box<dyn Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "beater-os-runtime-bundle-reject-{}",
+            Uuid::new_v4()
+        ));
+        let runtime = AgentRuntime::open(&root)?;
+        let mut start = SessionStart::new(
+            "agent:bundle",
+            "workspace:bundle",
+            "prove mismatched bundle rejection",
+        );
+        start.session_id = Some("genesis-session".to_string());
+
+        let result = runtime.run_bundle(RuntimeBundle {
+            session_id: Some("declared-session".to_string()),
+            session: Some(start),
+            grants: Vec::new(),
+            steps: Vec::new(),
+        });
+
+        assert!(matches!(result, Err(RuntimeError::Refused(_))));
+        assert!(!runtime.store().session_exists("declared-session")?);
+        assert!(!runtime.store().session_exists("genesis-session")?);
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_rejects_step_mismatch_before_grants_are_issued() -> Result<(), Box<dyn Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "beater-os-runtime-bundle-step-reject-{}",
+            Uuid::new_v4()
+        ));
+        let runtime = AgentRuntime::open(&root)?;
+        let session_id = "bundle-session".to_string();
+        let mut start = SessionStart::new(
+            "agent:bundle",
+            "workspace:bundle",
+            "prove step mismatch rejection",
+        );
+        start.session_id = Some(session_id.clone());
+
+        let result = runtime.run_bundle(RuntimeBundle {
+            session_id: Some(session_id.clone()),
+            session: Some(start),
+            grants: vec![GrantRequest::new(
+                ResourceKind::FilePath,
+                "*",
+                [ActionKind::Read],
+            )],
+            steps: vec![RuntimeStep::new(
+                "other-session",
+                ActionKind::Read,
+                CapabilitySelector {
+                    resource_kind: ResourceKind::FilePath,
+                    resource_id: "/tmp/beater-os-runtime-bundle-observe".to_string(),
+                },
+                "observe runtime bundle state",
+            )],
+        });
+
+        assert!(matches!(result, Err(RuntimeError::Refused(_))));
+        assert!(!runtime.store().session_exists(&session_id)?);
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_bundle_json_deserializes_with_contract_defaults() -> Result<(), Box<dyn Error>> {
+        let bundle: RuntimeBundle = serde_json::from_value(serde_json::json!({
+            "session_id": "json-bundle-session",
+            "session": {
+                "agent_id": "agent:json",
+                "workspace_id": "workspace:json",
+                "goal": "prove sparse bundle defaults"
+            },
+            "grants": [{
+                "resource_kind": "file_path",
+                "resource_id": "*",
+                "actions": ["read"]
+            }],
+            "steps": [{
+                "session_id": "json-bundle-session",
+                "action_kind": "read",
+                "target": {
+                    "resource_kind": "file_path",
+                    "resource_id": "/tmp/beater-os-runtime-json"
+                },
+                "inputs_summary": "observe sparse json bundle",
+                "risk_class": "low",
+                "human_explanation": "read-only sparse json runtime bundle"
+            }]
+        }))?;
+
+        let Some(session) = bundle.session.as_ref() else {
+            panic!("sparse json should include session");
+        };
+        assert_eq!(session.policy_profile, "default");
+        assert!(session.initial_capability_ids.is_empty());
+        assert_eq!(bundle.grants[0].expires_in_secs, DEFAULT_GRANT_TTL_SECS);
+        assert_eq!(bundle.grants[0].delegation, DelegationMode::None);
+        assert!(bundle.steps[0].expected_side_effects.is_empty());
+        assert!(bundle.steps[0].required_grants.is_empty());
+        assert!(bundle.steps[0].observation.is_none());
+        Ok(())
+    }
 }

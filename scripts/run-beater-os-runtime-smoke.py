@@ -16,6 +16,7 @@ def run_smoke(*, as_json: bool) -> int:
         "cargo",
         "run",
         "-q",
+        "--locked",
         "-p",
         "beater-os-runtime",
         "--example",
