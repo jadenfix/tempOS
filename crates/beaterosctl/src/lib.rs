@@ -96,6 +96,7 @@ pub fn help_text() -> String {
          \x20                 [--risk <r>] [--side-effects <s,..>] [--data-classes <d,..>]\n\
          \x20                 [--taint <t,..>] [--revoked-handle <h>]...\n\
          \x20                 [--idempotency-key <k>] [--summary <text>]\n\
+         \x20                 [--inputs-digest <sha256>] [--max-wall-ms <n>]\n\
          \x20 action execute  --session <id> --tool <id> --command <cmd> [--arg <a>]...\n\
          \x20                 --cwd <dir> --grants <g1,g2> [--risk <r>]\n\
          \x20                 [--tool-version <v>] [--tool-digest <sha256>]\n\

@@ -89,6 +89,10 @@ review boundaries.
   - Hosted agent runtime bundle smoke proof over `beater-os-runtime`.
 - `scripts/run-beater-osd-http-execute-smoke.py`
   - Token-gated daemon HTTP execution smoke over the local shell gateway.
+- `scripts/run-beater-osd-http-claims-smoke.py`
+  - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned
+    tool compare-and-set refusal, exact lease-id completion, and journal
+    verification.
 - `scripts/local-e2e.py`
   - Aggregate gate when doing full lane validation locally.
 
