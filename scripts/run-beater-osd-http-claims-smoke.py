@@ -22,7 +22,9 @@ SESSION_ID = "http-claims-smoke-session"
 GRANT_ID = f"{SESSION_ID}-root-grant"
 REGISTER_ACTION_ID = "http-claims-register-tool"
 CLAIM_ACTION_ID = "http-claims-worker-action"
+RECONCILE_ACTION_ID = "http-claims-reconcile-action"
 LEASE_ID = "lease-http-claims-worker"
+RECONCILE_LEASE_ID = "lease-http-claims-reconcile"
 WORKER_INPUT_DIGEST = "1111111111111111111111111111111111111111111111111111111111111111"
 
 
@@ -211,7 +213,14 @@ def register_shell_tool(root: Path, token_file: Path, workdir: Path) -> tuple[st
     return version, digest, tool_ref
 
 
-def propose_claimable_action(root: Path, workdir: Path, worker_input_digest: str) -> tuple[str, str]:
+def propose_claimable_action(
+    root: Path,
+    workdir: Path,
+    worker_input_digest: str,
+    *,
+    action_id: str = CLAIM_ACTION_ID,
+    max_wall_ms: str = "30000",
+) -> tuple[str, str]:
     cargo_bin(
         "beaterosctl",
         [
@@ -222,7 +231,7 @@ def propose_claimable_action(root: Path, workdir: Path, worker_input_digest: str
             "--session",
             SESSION_ID,
             "--action-id",
-            CLAIM_ACTION_ID,
+            action_id,
             "--tool",
             "shell",
             "--kind",
@@ -238,7 +247,7 @@ def propose_claimable_action(root: Path, workdir: Path, worker_input_digest: str
             "--inputs-digest",
             worker_input_digest,
             "--max-wall-ms",
-            "30000",
+            max_wall_ms,
             "--summary",
             "claimed local-shell worker action",
         ],
@@ -249,9 +258,9 @@ def propose_claimable_action(root: Path, workdir: Path, worker_input_digest: str
         capture=True,
     ).stdout
     bundle = json.loads(export)
-    decisions = [decision for decision in bundle["decisions"] if decision["action_id"] == CLAIM_ACTION_ID]
+    decisions = [decision for decision in bundle["decisions"] if decision["action_id"] == action_id]
     if len(decisions) != 1:
-        raise RuntimeError(f"expected one decision for {CLAIM_ACTION_ID}: {bundle}")
+        raise RuntimeError(f"expected one decision for {action_id}: {bundle}")
     decision = decisions[0]
     if decision["result"] != "allowed":
         raise RuntimeError(f"expected allowed claim action decision: {decision}")
@@ -260,6 +269,12 @@ def propose_claimable_action(root: Path, workdir: Path, worker_input_digest: str
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def wait_until_rfc3339(timestamp: str) -> None:
+    deadline = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+    while datetime.now(timezone.utc).timestamp() <= deadline:
+        time.sleep(0.1)
 
 
 def run_smoke(root: Path, *, as_json: bool) -> int:
@@ -328,6 +343,53 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
     if complete.get("lease_id") != LEASE_ID or complete.get("receipt_id") != receipt_body["receipt_id"]:
         raise RuntimeError(f"completion response mismatch: {complete}")
 
+    reconcile_decision_id, reconcile_manifest_hash = propose_claimable_action(
+        root,
+        workdir,
+        WORKER_INPUT_DIGEST,
+        action_id=RECONCILE_ACTION_ID,
+        max_wall_ms="1",
+    )
+    reconcile_claim_body = {
+        "expected_manifest_hash": reconcile_manifest_hash,
+        "expected_decision_id": reconcile_decision_id,
+        "expected_tool_version": tool_version,
+        "expected_tool_digest": tool_digest,
+        "lease_id": RECONCILE_LEASE_ID,
+    }
+    reconcile_claim_path = f"/v1/sessions/{SESSION_ID}/actions/{RECONCILE_ACTION_ID}/claims"
+    reconcile_claim_status, reconcile_claim = one_shot_request(
+        root, token_file, reconcile_claim_path, reconcile_claim_body, token=TOKEN
+    )
+    if reconcile_claim_status != 201:
+        raise RuntimeError(
+            f"expected 201 from reconcile claim route, got {reconcile_claim_status}: {reconcile_claim}"
+        )
+    reconcile_path = (
+        f"/v1/sessions/{SESSION_ID}/actions/{RECONCILE_ACTION_ID}"
+        f"/claims/{RECONCILE_LEASE_ID}/reconcile"
+    )
+    reconcile_body = {
+        "resolution": "outcome_unknown",
+        "reason": "worker abandoned short lease during HTTP smoke",
+        "reconciliation_id": "reconcile-http-claims-worker",
+        "reconciled_by": "agent:http-claims-smoke",
+        "evidence_refs": ["smoke:short-lease-expired"],
+    }
+    early_status, early_payload = one_shot_request(
+        root, token_file, reconcile_path, reconcile_body, token=TOKEN
+    )
+    if early_status != 403:
+        raise RuntimeError(f"expected 403 for live lease reconcile, got {early_status}: {early_payload}")
+    wait_until_rfc3339(reconcile_claim["expires_at"])
+    reconcile_status, reconcile = one_shot_request(
+        root, token_file, reconcile_path, reconcile_body, token=TOKEN
+    )
+    if reconcile_status != 200:
+        raise RuntimeError(f"expected 200 from reconcile route, got {reconcile_status}: {reconcile}")
+    if reconcile.get("lease_id") != RECONCILE_LEASE_ID or reconcile.get("resolution") != "outcome_unknown":
+        raise RuntimeError(f"reconciliation response mismatch: {reconcile}")
+
     verify = cargo_bin(
         "beaterosctl",
         ["--home", str(root), "journal", "verify", "--session", SESSION_ID],
@@ -335,6 +397,14 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
     ).stdout
     if "journal OK" not in verify or "receipts:      2" not in verify:
         raise RuntimeError(f"journal verification did not prove two receipts:\n{verify}")
+    export = cargo_bin(
+        "beaterosctl",
+        ["--home", str(root), "trace", "export", "--session", SESSION_ID],
+        capture=True,
+    ).stdout
+    bundle = json.loads(export)
+    if len(bundle.get("execution_reconciliations", [])) != 1:
+        raise RuntimeError(f"trace did not prove one execution reconciliation: {bundle}")
 
     report = {
         "command": "beater-osd-http-claims-smoke",
@@ -344,6 +414,10 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
         "lease_hash": claim["lease_hash"],
         "receipt_id": complete["receipt_id"],
         "receipt_hash": complete["receipt_hash"],
+        "reconciled_action_id": RECONCILE_ACTION_ID,
+        "reconciled_lease_id": RECONCILE_LEASE_ID,
+        "reconciliation_id": reconcile["reconciliation_id"],
+        "reconciliation_hash": reconcile["reconciliation_hash"],
         "tool_ref": tool_ref,
     }
     if as_json:

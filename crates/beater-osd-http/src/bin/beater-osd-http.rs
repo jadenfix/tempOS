@@ -25,8 +25,8 @@ use std::time::Duration as StdDuration;
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
     CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
-    GrantConstraints, PolicyDecision, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
-    TaintLabel,
+    ExecutionLeaseReconciliation, ExecutionLeaseResolution, GrantConstraints, PolicyDecision,
+    ResourceKind, RiskClass, SessionStatus, SideEffectClass, TaintLabel,
 };
 use beater_os_runtime::{AgentRuntime, RuntimeBundle, RuntimeError};
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
@@ -580,6 +580,11 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
             if let Some((session_id, action_id)) = parse_action_claim_path(path) {
                 return claim_execution_lease_route(store, session_id, action_id, request);
             }
+            if let Some((session_id, action_id, lease_id)) = parse_action_reconcile_path(path) {
+                return reconcile_execution_lease_route(
+                    store, session_id, action_id, lease_id, request,
+                );
+            }
             if let Some((session_id, action_id, lease_id)) = parse_action_complete_path(path) {
                 return complete_execution_lease_route(
                     store, session_id, action_id, lease_id, request,
@@ -677,6 +682,23 @@ fn parse_action_complete_path(path: &str) -> Option<(&str, &str, &str)> {
     let (session_id, action_path) = rest.split_once("/actions/")?;
     let (action_id, lease_path) = action_path.split_once("/claims/")?;
     let lease_id = lease_path.strip_suffix("/complete")?;
+    if session_id.is_empty()
+        || action_id.is_empty()
+        || lease_id.is_empty()
+        || session_id.contains('/')
+        || action_id.contains('/')
+        || lease_id.contains('/')
+    {
+        return None;
+    }
+    Some((session_id, action_id, lease_id))
+}
+
+fn parse_action_reconcile_path(path: &str) -> Option<(&str, &str, &str)> {
+    let rest = path.strip_prefix("/v1/sessions/")?;
+    let (session_id, action_path) = rest.split_once("/actions/")?;
+    let (action_id, lease_path) = action_path.split_once("/claims/")?;
+    let lease_id = lease_path.strip_suffix("/reconcile")?;
     if session_id.is_empty()
         || action_id.is_empty()
         || lease_id.is_empty()
@@ -945,6 +967,92 @@ fn complete_execution_lease_route(
                 },
             )
         }
+        Err(err) => daemon_error_response(err),
+    }
+}
+
+fn reconcile_execution_lease_route(
+    store: &Store,
+    session_id: &str,
+    action_id: &str,
+    lease_id: &str,
+    request: &ControlRequest,
+) -> (u16, String) {
+    if !request.headers.contains_key("content-length") {
+        return (
+            400,
+            json_error("missing_content_length", "POST requires Content-Length"),
+        );
+    }
+    let payload = match serde_json::from_slice::<ReconcileExecutionLeaseHttpRequest>(&request.body)
+    {
+        Ok(payload) => payload,
+        Err(err) => return (400, json_error("bad_json", &err.to_string())),
+    };
+    if payload.resolution != ExecutionLeaseResolution::OutcomeUnknown {
+        return (
+            400,
+            json_error(
+                "bad_request",
+                "only outcome_unknown execution lease reconciliation is supported",
+            ),
+        );
+    }
+    if payload.reason.trim().is_empty() {
+        return (400, json_error("bad_request", "reason must not be empty"));
+    }
+    if payload
+        .evidence_refs
+        .iter()
+        .any(|evidence| evidence.trim().is_empty())
+    {
+        return (
+            400,
+            json_error("bad_request", "evidence_refs must not contain empty values"),
+        );
+    }
+    let projection = match store.project(session_id) {
+        Ok(projection) => projection,
+        Err(err) => return daemon_error_response(err),
+    };
+    let reconciled_by = payload
+        .reconciled_by
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| projection.session.created_by.clone());
+    let reconciliation_id = payload
+        .reconciliation_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("reconcile-{lease_id}"));
+    match store.reconcile_execution_lease(
+        session_id,
+        ExecutionLeaseReconciliation {
+            reconciliation_id: reconciliation_id.clone(),
+            lease_id: lease_id.to_string(),
+            session_id: session_id.to_string(),
+            action_id: action_id.to_string(),
+            manifest_hash: String::new(),
+            decision_id: String::new(),
+            resolution: payload.resolution,
+            reconciled_by,
+            reason: payload.reason,
+            evidence_refs: payload.evidence_refs,
+            reconciled_at: Utc::now(),
+        },
+        Utc::now(),
+    ) {
+        Ok(record) => serialize_response(
+            200,
+            &ReconcileExecutionLeaseResponse {
+                session_id: session_id.to_string(),
+                action_id: action_id.to_string(),
+                lease_id: lease_id.to_string(),
+                reconciliation_id,
+                resolution: payload.resolution,
+                reconciliation_seq: record.seq,
+                reconciliation_hash: record.hash.clone(),
+                final_journal_root_hash: record.hash,
+            },
+        ),
         Err(err) => daemon_error_response(err),
     }
 }
@@ -1329,6 +1437,19 @@ struct ClaimExecutionLeaseHttpRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ReconcileExecutionLeaseHttpRequest {
+    resolution: ExecutionLeaseResolution,
+    reason: String,
+    #[serde(default)]
+    reconciliation_id: Option<String>,
+    #[serde(default)]
+    reconciled_by: Option<String>,
+    #[serde(default)]
+    evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ExecuteLocalShellRequest {
     #[serde(default)]
     action_id: Option<String>,
@@ -1398,6 +1519,18 @@ struct CompleteExecutionLeaseResponse {
     receipt_hash: String,
     receipt_journal_seq: u64,
     receipt_journal_hash: String,
+    final_journal_root_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReconcileExecutionLeaseResponse {
+    session_id: String,
+    action_id: String,
+    lease_id: String,
+    reconciliation_id: String,
+    resolution: ExecutionLeaseResolution,
+    reconciliation_seq: u64,
+    reconciliation_hash: String,
     final_journal_root_hash: String,
 }
 
