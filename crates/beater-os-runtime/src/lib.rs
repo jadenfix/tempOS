@@ -33,8 +33,8 @@ use beater_os_tool_gateway::{
 };
 use beater_osd::{
     AdmissionOutcome, ClaimableExecutionAction, DAEMON_POLICY_VERSION, DaemonError,
-    ExecutionLeaseClaimRequest, LocalShellToolRegistration, SchedulerOpenExecutionLease,
-    SessionProjection, Store,
+    ExecutionLeaseClaimRequest, LocalShellToolRegistration, SchedulerExecutionLeaseStatus,
+    SchedulerOpenExecutionLease, SessionProjection, Store,
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -313,88 +313,27 @@ impl AgentRuntime {
         request: RuntimeLocalShellWorkerRequest,
     ) -> RuntimeResult<Option<RuntimeLocalShellWorkerOutcome>> {
         let projection = self.store.project(&request.session_id)?;
-        let action_filter = request.action_id.clone();
-        let command = require_worker_non_empty("command", request.command)?;
-        if command.contains('/') {
-            return Err(RuntimeError::Refused(
-                "local shell worker accepts PATH-resolved command names only".to_string(),
-            ));
-        }
-        let cwd = require_worker_non_empty("cwd", request.cwd)?;
-        let mut environment = safe_path_environment();
-        for (name, value) in request.env {
-            if name == "PATH" {
-                return Err(RuntimeError::Refused(
-                    "PATH is reserved for the sandbox safe system search path".to_string(),
-                ));
-            }
-            if environment.contains_key(&name) {
-                return Err(RuntimeError::Refused(format!(
-                    "duplicate environment variable {name:?}"
-                )));
-            }
-            environment.insert(name, value);
-        }
-        let defaults = SandboxLimits::default();
-        let timeout_secs = request.timeout_secs.unwrap_or(30);
-        if timeout_secs == 0 {
-            return Err(RuntimeError::Refused(
-                "timeout_secs must be greater than zero".to_string(),
-            ));
-        }
-        let max_output_bytes = request
-            .max_output_bytes
-            .unwrap_or(defaults.max_output_bytes);
-        if max_output_bytes > defaults.max_output_bytes {
-            return Err(RuntimeError::Refused(format!(
-                "max_output_bytes must be at most {}",
-                defaults.max_output_bytes
-            )));
-        }
-        let limits = SandboxLimits {
-            timeout: StdDuration::from_secs(timeout_secs),
-            max_output_bytes,
-            ..defaults
-        };
-        let command_args = request.args;
-        let computed_digest =
-            local_shell_tool_digest_with_environment(&cwd, &command, &command_args, &environment)?;
-        let expected_tool_digest = request
-            .tool_digest
-            .unwrap_or_else(|| computed_digest.clone());
-        if expected_tool_digest != computed_digest {
-            return Err(RuntimeError::Gateway(GatewayError::ToolDigestMismatch));
-        }
-        let tool_id = request.tool.unwrap_or_else(|| "shell".to_string());
-        let tool_version = request.tool_version.unwrap_or_else(|| {
-            let prefix_len = expected_tool_digest.len().min(16);
-            format!("local-{}", &expected_tool_digest[..prefix_len])
-        });
-        let registered_side_effects = if request.side_effects.is_empty() {
-            BTreeSet::from([SideEffectClass::LocalWrite])
-        } else {
-            request.side_effects
-        };
+        let prepared = prepare_local_shell_worker(&request)?;
         let registry = self
             .store
             .register_local_shell_tool(LocalShellToolRegistration {
                 workspace_id: projection.session.workspace_id.clone(),
-                tool_id: tool_id.clone(),
-                version: tool_version.clone(),
-                content_digest: expected_tool_digest.clone(),
-                side_effects: registered_side_effects,
-                risk_class: request.risk.unwrap_or(RiskClass::Low),
+                tool_id: prepared.tool_id.clone(),
+                version: prepared.tool_version.clone(),
+                content_digest: prepared.expected_tool_digest.clone(),
+                side_effects: prepared.registered_side_effects.clone(),
+                risk_class: prepared.risk,
             })?;
         let claimable = self
             .store
             .claimable_execution_actions(&request.session_id)?;
         let Some(action) = select_worker_action(
             claimable,
-            action_filter.as_deref(),
-            &tool_id,
-            &tool_version,
-            &expected_tool_digest,
-            &computed_digest,
+            prepared.action_filter.as_deref(),
+            &prepared.tool_id,
+            &prepared.tool_version,
+            &prepared.expected_tool_digest,
+            &prepared.computed_digest,
         )?
         else {
             return Ok(None);
@@ -420,12 +359,12 @@ impl AgentRuntime {
             &request.session_id,
             &lease.lease.lease_id,
             ClaimedLocalToolInvocation {
-                command,
-                args: command_args,
-                cwd,
-                environment,
+                command: prepared.command,
+                args: prepared.args,
+                cwd: prepared.cwd,
+                environment: prepared.environment,
                 receipt_id: request.receipt_id,
-                limits,
+                limits: prepared.limits,
             },
         )?;
         let projection = self.store.project(&request.session_id)?;
@@ -450,6 +389,124 @@ impl AgentRuntime {
             receipt: gateway.receipt,
             projection: RuntimeBundleProjectionSummary::from_projection(&projection),
         }))
+    }
+
+    /// Plan the next local-shell worker action without claiming, recovering, or
+    /// executing anything.
+    ///
+    /// The plan uses the same local command digest and claimable-action matching
+    /// rules as `run_local_shell_worker_once`, but returns a scheduler
+    /// recommendation derived from daemon-owned projection state. This gives
+    /// external workers a safe preflight before choosing to wait, ask for
+    /// explicit recovery, dispatch, or idle.
+    pub fn plan_local_shell_worker(
+        &self,
+        request: RuntimeLocalShellWorkerPlanRequest,
+    ) -> RuntimeResult<RuntimeLocalShellWorkerPlanOutcome> {
+        if request.max_actions == 0 {
+            return Err(RuntimeError::Refused(
+                "max_actions must be greater than zero".to_string(),
+            ));
+        }
+        if request.worker.lease_id.is_some() {
+            return Err(RuntimeError::Refused(
+                "worker plan must not pin a lease_id".to_string(),
+            ));
+        }
+        if request.worker.receipt_id.is_some() {
+            return Err(RuntimeError::Refused(
+                "worker plan must not pin a receipt_id".to_string(),
+            ));
+        }
+        let prepared = prepare_local_shell_worker(&request.worker)?;
+        let projection = self.store.project(&request.worker.session_id)?;
+        let observed_at = Utc::now();
+        let summary = RuntimeBundleProjectionSummary::from_projection(&projection);
+        let mut lease = None;
+        let mut dispatch = None;
+        let wait_until;
+        let reason;
+        let action = if summary.live_open_execution_leases > 0 {
+            lease = summary
+                .open_execution_lease_statuses
+                .iter()
+                .find(|lease| lease.status == SchedulerExecutionLeaseStatus::LiveOpen)
+                .map(RuntimeWorkerLeasePlan::from_scheduler_status);
+            wait_until = lease.as_ref().map(|lease| lease.expires_at);
+            reason =
+                "a live open execution lease blocks dispatch and recovery until it completes or expires"
+                    .to_string();
+            RuntimeWorkerPreflightAction::WaitLiveLease
+        } else if summary.expired_recoverable_execution_leases > 0 {
+            lease = summary
+                .open_execution_lease_statuses
+                .iter()
+                .find(|lease| lease.status == SchedulerExecutionLeaseStatus::ExpiredRecoverable)
+                .map(RuntimeWorkerLeasePlan::from_scheduler_status);
+            wait_until = None;
+            reason =
+                "an expired open execution lease must be reconciled as outcome_unknown before dispatch"
+                    .to_string();
+            RuntimeWorkerPreflightAction::RecoverExpiredLease
+        } else if summary.runnable_pending_actions == 0 {
+            wait_until = None;
+            reason = "no pending allowed actions are runnable for this session".to_string();
+            RuntimeWorkerPreflightAction::Idle
+        } else {
+            let claimable = self
+                .store
+                .claimable_execution_actions(&request.worker.session_id)?;
+            match select_worker_action(
+                claimable,
+                prepared.action_filter.as_deref(),
+                &prepared.tool_id,
+                &prepared.tool_version,
+                &prepared.expected_tool_digest,
+                &prepared.computed_digest,
+            )? {
+                Some(action) => {
+                    dispatch = Some(RuntimeWorkerDispatchPlan {
+                        action_id: action.action_id,
+                        manifest_hash: action.manifest_hash,
+                        decision_id: action.decision_id,
+                        tool_id: action.tool_id,
+                        expected_tool_version: action.expected_tool_version,
+                        expected_tool_digest: action.expected_tool_digest,
+                        target: action.target,
+                        required_grants: action.required_grants,
+                        requested_budget: action.requested_budget,
+                    });
+                    wait_until = None;
+                    reason =
+                        "a claimable action matches this worker tool and input digest".to_string();
+                    RuntimeWorkerPreflightAction::DispatchRunnableAction
+                }
+                None => {
+                    wait_until = None;
+                    reason =
+                        "runnable actions exist, but none match this worker tool and input digest"
+                            .to_string();
+                    RuntimeWorkerPreflightAction::NoMatchingAction
+                }
+            }
+        };
+        Ok(RuntimeLocalShellWorkerPlanOutcome {
+            session_id: request.worker.session_id,
+            worker_lane: "local_shell".to_string(),
+            observed_at,
+            max_actions: request.max_actions,
+            action,
+            reason,
+            wait_until,
+            lease,
+            tool_id: prepared.tool_id,
+            tool_version: prepared.tool_version,
+            tool_digest: prepared.expected_tool_digest,
+            input_digest: prepared.computed_digest,
+            action_filter: prepared.action_filter,
+            dispatch,
+            projection: summary,
+        })
     }
 
     /// Run a bounded local-shell worker loop over daemon-claimable work.
@@ -1019,6 +1076,82 @@ pub struct RuntimeLocalShellWorkerLoopRequest {
     pub max_actions: usize,
 }
 
+/// Side-effect-free local-shell worker planning request.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeLocalShellWorkerPlanRequest {
+    pub worker: RuntimeLocalShellWorkerRequest,
+    pub max_actions: usize,
+}
+
+/// Result of a side-effect-free local-shell worker preflight.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeLocalShellWorkerPlanOutcome {
+    pub session_id: String,
+    pub worker_lane: String,
+    pub observed_at: DateTime<Utc>,
+    pub max_actions: usize,
+    pub action: RuntimeWorkerPreflightAction,
+    pub reason: String,
+    #[serde(default)]
+    pub wait_until: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub lease: Option<RuntimeWorkerLeasePlan>,
+    pub tool_id: String,
+    pub tool_version: String,
+    pub tool_digest: String,
+    pub input_digest: String,
+    #[serde(default)]
+    pub action_filter: Option<String>,
+    #[serde(default)]
+    pub dispatch: Option<RuntimeWorkerDispatchPlan>,
+    pub projection: RuntimeBundleProjectionSummary,
+}
+
+/// Scheduler recommendation for a worker that has not yet claimed authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeWorkerPreflightAction {
+    WaitLiveLease,
+    RecoverExpiredLease,
+    DispatchRunnableAction,
+    Idle,
+    NoMatchingAction,
+}
+
+/// Open lease that blocks dispatch in a preflight plan.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeWorkerLeasePlan {
+    pub action_id: String,
+    pub lease_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub status: SchedulerExecutionLeaseStatus,
+}
+
+impl RuntimeWorkerLeasePlan {
+    fn from_scheduler_status(lease: &SchedulerOpenExecutionLease) -> Self {
+        Self {
+            action_id: lease.action_id.clone(),
+            lease_id: lease.lease_id.clone(),
+            expires_at: lease.expires_at,
+            status: lease.status.clone(),
+        }
+    }
+}
+
+/// Claimable dispatch target selected by a preflight plan.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeWorkerDispatchPlan {
+    pub action_id: String,
+    pub manifest_hash: HashValue,
+    pub decision_id: String,
+    pub tool_id: String,
+    pub expected_tool_version: String,
+    pub expected_tool_digest: HashValue,
+    pub target: CapabilitySelector,
+    pub required_grants: BTreeSet<String>,
+    pub requested_budget: Budget,
+}
+
 /// Result of a bounded local-shell worker loop.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeLocalShellWorkerLoopOutcome {
@@ -1248,6 +1381,102 @@ fn closed_execution_actions(projection: &SessionProjection) -> BTreeSet<&str> {
             .map(|reconciliation| reconciliation.action_id.as_str()),
     );
     closed_actions
+}
+
+struct RuntimePreparedLocalShellWorker {
+    action_filter: Option<String>,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    environment: BTreeMap<String, String>,
+    limits: SandboxLimits,
+    expected_tool_digest: String,
+    computed_digest: String,
+    tool_id: String,
+    tool_version: String,
+    registered_side_effects: BTreeSet<SideEffectClass>,
+    risk: RiskClass,
+}
+
+fn prepare_local_shell_worker(
+    request: &RuntimeLocalShellWorkerRequest,
+) -> RuntimeResult<RuntimePreparedLocalShellWorker> {
+    let command = require_worker_non_empty("command", request.command.clone())?;
+    if command.contains('/') {
+        return Err(RuntimeError::Refused(
+            "local shell worker accepts PATH-resolved command names only".to_string(),
+        ));
+    }
+    let cwd = require_worker_non_empty("cwd", request.cwd.clone())?;
+    let mut environment = safe_path_environment();
+    for (name, value) in request.env.clone() {
+        if name == "PATH" {
+            return Err(RuntimeError::Refused(
+                "PATH is reserved for the sandbox safe system search path".to_string(),
+            ));
+        }
+        if environment.contains_key(&name) {
+            return Err(RuntimeError::Refused(format!(
+                "duplicate environment variable {name:?}"
+            )));
+        }
+        environment.insert(name, value);
+    }
+    let defaults = SandboxLimits::default();
+    let timeout_secs = request.timeout_secs.unwrap_or(30);
+    if timeout_secs == 0 {
+        return Err(RuntimeError::Refused(
+            "timeout_secs must be greater than zero".to_string(),
+        ));
+    }
+    let max_output_bytes = request
+        .max_output_bytes
+        .unwrap_or(defaults.max_output_bytes);
+    if max_output_bytes > defaults.max_output_bytes {
+        return Err(RuntimeError::Refused(format!(
+            "max_output_bytes must be at most {}",
+            defaults.max_output_bytes
+        )));
+    }
+    let limits = SandboxLimits {
+        timeout: StdDuration::from_secs(timeout_secs),
+        max_output_bytes,
+        ..defaults
+    };
+    let args = request.args.clone();
+    let computed_digest =
+        local_shell_tool_digest_with_environment(&cwd, &command, &args, &environment)?;
+    let expected_tool_digest = request
+        .tool_digest
+        .clone()
+        .unwrap_or_else(|| computed_digest.clone());
+    if expected_tool_digest != computed_digest {
+        return Err(RuntimeError::Gateway(GatewayError::ToolDigestMismatch));
+    }
+    let tool_id = request.tool.clone().unwrap_or_else(|| "shell".to_string());
+    let tool_version = request.tool_version.clone().unwrap_or_else(|| {
+        let prefix_len = expected_tool_digest.len().min(16);
+        format!("local-{}", &expected_tool_digest[..prefix_len])
+    });
+    let registered_side_effects = if request.side_effects.is_empty() {
+        BTreeSet::from([SideEffectClass::LocalWrite])
+    } else {
+        request.side_effects.clone()
+    };
+    Ok(RuntimePreparedLocalShellWorker {
+        action_filter: request.action_id.clone(),
+        command,
+        args,
+        cwd,
+        environment,
+        limits,
+        expected_tool_digest,
+        computed_digest,
+        tool_id,
+        tool_version,
+        registered_side_effects,
+        risk: request.risk.unwrap_or(RiskClass::Low),
+    })
 }
 
 fn select_worker_action(

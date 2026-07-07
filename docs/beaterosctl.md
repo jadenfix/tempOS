@@ -63,6 +63,22 @@ Projection summaries keep the compatibility fields `open_execution_leases` and
 the owning worker while live leases remain, and should use explicit
 `outcome_unknown` recovery only for expired-recoverable leases.
 
+Schedulers can ask for a side-effect-free plan before executing:
+
+```text
+POST /v1/sessions/<session-id>/actions/execute-local-shell-preflight
+```
+
+The preflight body uses the same local shell recipe fields as the worker loop:
+`tool`, optional `tool_version`, `tool_digest`, `command`, `args`, `cwd`,
+`env`, `side_effects`, `risk`, `timeout_secs`, `max_output_bytes`, and
+`max_actions`. It does not accept lease ids, receipt ids, or recovery fields.
+The response follows `contracts/schema/worker-preflight-plan.schema.json` and
+returns one `action`: `wait_live_lease`, `recover_expired_lease`,
+`dispatch_runnable_action`, `idle`, or `no_matching_action`. `dispatch` is only
+a plan; the runner must still call the worker-loop route to claim a daemon lease
+before any side effect.
+
 Callers may explicitly opt into supervised recovery before the loop runs:
 
 ```json

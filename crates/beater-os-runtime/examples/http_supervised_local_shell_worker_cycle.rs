@@ -124,6 +124,29 @@ fn main() -> Result<(), Box<dyn Error>> {
             side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
             risk_class: RiskClass::Low,
         })?;
+    let preflight_body = json!({
+        "tool": "shell",
+        "tool_digest": command_digest.clone(),
+        "command": command.clone(),
+        "args": args.clone(),
+        "cwd": cwd.clone(),
+        "side_effects": ["local_write"],
+        "timeout_secs": 30,
+        "max_actions": 8,
+    });
+    let dispatch_plan = one_shot_preflight(&root, &token_file, &preflight_body)?;
+    if dispatch_plan.status != 200
+        || dispatch_plan.body["action"] != "dispatch_runnable_action"
+        || dispatch_plan.body["dispatch"]["action_id"] != lost_action_id
+        || dispatch_plan.body["lease"] != Value::Null
+        || dispatch_plan.body["projection"]["runnable_pending_actions"] != 2
+    {
+        return Err(format!(
+            "preflight should select dispatch before any lease is claimed: {}",
+            dispatch_plan.body
+        )
+        .into());
+    }
     let lost_action = runtime
         .store()
         .claimable_execution_actions(SESSION_ID)?
@@ -158,13 +181,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
+    let live_plan = one_shot_preflight(&root, &token_file, &preflight_body)?;
+    if live_plan.status != 200
+        || live_plan.body["action"] != "wait_live_lease"
+        || live_plan.body["lease"]["status"] != "live_open"
+        || live_plan.body["wait_until"] == Value::Null
+        || live_plan.body["dispatch"] != Value::Null
+    {
+        return Err(format!(
+            "preflight should wait while a live lease blocks dispatch: {}",
+            live_plan.body
+        )
+        .into());
+    }
 
     let body = json!({
         "tool": "shell",
-        "tool_digest": command_digest,
-        "command": command,
-        "args": args,
-        "cwd": cwd,
+        "tool_digest": command_digest.clone(),
+        "command": command.clone(),
+        "args": args.clone(),
+        "cwd": cwd.clone(),
         "side_effects": ["local_write"],
         "timeout_secs": 30,
         "max_actions": 8,
@@ -223,6 +259,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
+    let expired_plan = one_shot_preflight(&root, &token_file, &preflight_body)?;
+    if expired_plan.status != 200
+        || expired_plan.body["action"] != "recover_expired_lease"
+        || expired_plan.body["lease"]["status"] != "expired_recoverable"
+        || expired_plan.body["wait_until"] != Value::Null
+        || expired_plan.body["dispatch"] != Value::Null
+    {
+        return Err(format!(
+            "preflight should require recovery after lease expiry: {}",
+            expired_plan.body
+        )
+        .into());
+    }
 
     let recovered_response = one_shot_request(&root, &token_file, &body)?;
     if recovered_response.status != 200 {
@@ -260,10 +309,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     if output_text != "http-supervised-worker" {
         return Err(format!("unexpected HTTP supervised output: {output_text:?}").into());
     }
+    let idle_plan = one_shot_preflight(&root, &token_file, &preflight_body)?;
+    if idle_plan.status != 200
+        || idle_plan.body["action"] != "idle"
+        || idle_plan.body["lease"] != Value::Null
+        || idle_plan.body["dispatch"] != Value::Null
+        || idle_plan.body["projection"]["runnable_pending_actions"] != 0
+    {
+        return Err(format!(
+            "preflight should idle after recovery and dispatch drain work: {}",
+            idle_plan.body
+        )
+        .into());
+    }
 
     let report = json!({
         "status": "ok",
         "session_id": SESSION_ID,
+        "preflight_dispatch_action": dispatch_plan.body["action"],
+        "preflight_live_action": live_plan.body["action"],
+        "preflight_expired_action": expired_plan.body["action"],
+        "preflight_idle_action": idle_plan.body["action"],
         "recoveries": recoveries.len(),
         "executions": executions.len(),
         "executed_action": executions[0]["action_id"],
@@ -318,6 +384,56 @@ fn one_shot_get_session(
         .stderr(Stdio::piped())
         .spawn()?;
     let response = match get_json(port, &format!("/v1/sessions/{SESSION_ID}"), TOKEN) {
+        Ok(response) => response,
+        Err(err) => {
+            stop_server(&mut server);
+            return Err(err);
+        }
+    };
+    let output = server.wait_with_output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "beater-osd-http exited {}\nSTDOUT:\n{}\nSTDERR:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(response)
+}
+
+fn one_shot_preflight(
+    root: &std::path::Path,
+    token_file: &std::path::Path,
+    body: &Value,
+) -> Result<HttpResponse, Box<dyn Error>> {
+    let port = free_loopback_port()?;
+    let mut server = Command::new("cargo")
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "beater-osd-http",
+            "--",
+            "serve",
+            "--root",
+            &root.display().to_string(),
+            "--token-file",
+            &token_file.display().to_string(),
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+            "--once",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let response = match post_json(
+        port,
+        &format!("/v1/sessions/{SESSION_ID}/actions/execute-local-shell-preflight"),
+        body,
+        TOKEN,
+    ) {
         Ok(response) => response,
         Err(err) => {
             stop_server(&mut server);

@@ -23,6 +23,7 @@ should serialize to and validate against.
 | `security-scenario.schema.json` | Adversarial eval + admission probe | §14.5 |
 | `performance-trace.schema.json` | Optimization trace evidence envelope | §8, §13 |
 | `accelerator-telemetry.schema.json` | Vendor-neutral accelerator job telemetry | §8, §13 |
+| `worker-preflight-plan.schema.json` | Side-effect-free worker scheduler plan | §4.4, §6.4, §7 |
 
 ## Versioning & provenance
 

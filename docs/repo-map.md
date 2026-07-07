@@ -31,6 +31,10 @@ review boundaries.
   - Loopback HTTP control-plane binary over `beater-osd` and the tool gateway,
     including token-gated local shell execution, hosted runtime bundle
     submission, and scheduler execution-lease claim/completion routes.
+  - Worker preflight route returns a side-effect-free scheduler plan before
+    execution: wait on a live lease, recover an expired lease, dispatch a
+    matching runnable action, idle, or report that runnable work does not match
+    the worker recipe.
   - Session projection responses expose execution-lease recovery blockers and
     split open leases into live versus expired-recoverable ids so operators and
     schedulers can distinguish ordinary idle state from runnable pending work,
@@ -80,6 +84,9 @@ review boundaries.
     execution-lease blockers split into live versus expired-recoverable ids,
     admission blockers, and reconciliation counts for scheduler/operator
     visibility.
+  - Local-shell worker preflight shares the same command digest and
+    claimable-action matching rules as execution, but does not claim, recover,
+    execute, or append receipts.
   - Service-facing `RuntimeBundle` contract used by daemon HTTP adapters without
     exposing direct store mutation APIs.
 - `crates/beater-os-audit`
@@ -130,8 +137,9 @@ review boundaries.
 - `scripts/run-beater-osd-http-supervised-worker-smoke.py`
   - Token-gated HTTP proof that opt-in supervised recovery blocks on live
     leases, exposes live versus expired-recoverable open lease state through
-    session projection, reconciles expired lost leases as `outcome_unknown`,
-    and dispatches later admitted work without retrying the reconciled action.
+    session projection and worker preflight plans, reconciles expired lost
+    leases as `outcome_unknown`, and dispatches later admitted work without
+    retrying the reconciled action.
 - `scripts/run-beater-osd-http-claims-smoke.py`
   - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned
     tool compare-and-set refusal, exact lease-id completion, live-lease
@@ -152,6 +160,9 @@ review boundaries.
   - Readiness semantics and migration terminology.
 - `docs/engineering/bare-metal-e2e-matrix.json`
   - Deterministic phase and lane matrix fixtures.
+- `contracts/schema/worker-preflight-plan.schema.json`
+  - Model/runner-facing schema for the side-effect-free scheduler plan that
+    precedes lease claims and local-shell worker dispatch.
 - `docs/implementation-backlog.md`
   - Slice assignments, sequencing, and ownership.
 - `docs/governance/review-checklist.md`

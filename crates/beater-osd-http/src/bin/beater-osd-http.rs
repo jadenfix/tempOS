@@ -30,7 +30,8 @@ use beater_os_core::{
 };
 use beater_os_runtime::{
     AgentRuntime, RuntimeBundle, RuntimeError, RuntimeLocalShellWorkerLoopRequest,
-    RuntimeLocalShellWorkerRequest, RuntimeSupervisedLocalShellWorkerCycleRequest,
+    RuntimeLocalShellWorkerPlanRequest, RuntimeLocalShellWorkerRequest,
+    RuntimeSupervisedLocalShellWorkerCycleRequest,
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
@@ -582,6 +583,9 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
         },
         ("POST", "/v1/runtime/bundles") => runtime_bundle_route(store, request),
         ("POST", path) if path.starts_with("/v1/sessions/") => {
+            if let Some(session_id) = parse_runtime_worker_preflight_path(path) {
+                return runtime_local_shell_worker_preflight_route(store, session_id, request);
+            }
             if let Some(session_id) = parse_runtime_worker_loop_path(path) {
                 return runtime_local_shell_worker_loop_route(store, session_id, request);
             }
@@ -742,6 +746,15 @@ fn parse_runtime_worker_loop_path(path: &str) -> Option<&str> {
     Some(session_id)
 }
 
+fn parse_runtime_worker_preflight_path(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/v1/sessions/")?;
+    let session_id = rest.strip_suffix("/actions/execute-local-shell-preflight")?;
+    if session_id.is_empty() || session_id.contains('/') {
+        return None;
+    }
+    Some(session_id)
+}
+
 fn runtime_bundle_route(store: &Store, request: &ControlRequest) -> (u16, String) {
     if !request.headers.contains_key("content-length") {
         return (
@@ -785,6 +798,70 @@ fn runtime_error_response(err: RuntimeError) -> (u16, String) {
         RuntimeError::Daemon(err) => daemon_error_response(err),
         RuntimeError::Core(err) => (500, json_error("core_error", &err.to_string())),
         RuntimeError::Gateway(err) => (500, json_error("gateway_error", &err.to_string())),
+    }
+}
+
+fn runtime_local_shell_worker_preflight_route(
+    store: &Store,
+    session_id: &str,
+    request: &ControlRequest,
+) -> (u16, String) {
+    if !request.headers.contains_key("content-length") {
+        return (
+            400,
+            json_error("missing_content_length", "POST requires Content-Length"),
+        );
+    }
+    let payload = match serde_json::from_slice::<RuntimeLocalShellWorkerPreflightHttpRequest>(
+        &request.body,
+    ) {
+        Ok(payload) => payload,
+        Err(err) => return (400, json_error("bad_json", &err.to_string())),
+    };
+    if payload.max_actions == 0 || payload.max_actions > MAX_HTTP_WORKER_LOOP_ACTIONS {
+        return (
+            400,
+            json_error(
+                "bad_request",
+                &format!("max_actions must be between 1 and {MAX_HTTP_WORKER_LOOP_ACTIONS}"),
+            ),
+        );
+    }
+    if let Some(timeout_secs) = payload.timeout_secs
+        && (timeout_secs == 0 || timeout_secs > MAX_EXECUTE_TIMEOUT_SECS)
+    {
+        return (
+            400,
+            json_error(
+                "bad_request",
+                &format!("timeout_secs must be between 1 and {MAX_EXECUTE_TIMEOUT_SECS}"),
+            ),
+        );
+    }
+    let runtime = AgentRuntime::from_store(store.clone());
+    let plan = RuntimeLocalShellWorkerPlanRequest {
+        max_actions: payload.max_actions,
+        worker: RuntimeLocalShellWorkerRequest {
+            session_id: session_id.to_string(),
+            action_id: payload.action_id,
+            lease_id: None,
+            tool: payload.tool,
+            tool_version: payload.tool_version,
+            tool_digest: payload.tool_digest,
+            command: payload.command,
+            args: payload.args,
+            cwd: payload.cwd,
+            env: payload.env,
+            side_effects: payload.side_effects.into_iter().collect(),
+            risk: payload.risk,
+            receipt_id: None,
+            timeout_secs: payload.timeout_secs,
+            max_output_bytes: payload.max_output_bytes,
+        },
+    };
+    match runtime.plan_local_shell_worker(plan) {
+        Ok(outcome) => serialize_response(200, &outcome),
+        Err(err) => runtime_error_response(err),
     }
 }
 
@@ -1579,6 +1656,34 @@ struct ExecuteLocalShellRequest {
     timeout_secs: Option<u64>,
     #[serde(default)]
     max_output_bytes: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeLocalShellWorkerPreflightHttpRequest {
+    #[serde(default)]
+    action_id: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    tool_version: Option<String>,
+    #[serde(default)]
+    tool_digest: Option<String>,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    cwd: String,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    side_effects: Vec<SideEffectClass>,
+    #[serde(default)]
+    risk: Option<RiskClass>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    max_output_bytes: Option<usize>,
+    max_actions: usize,
 }
 
 #[derive(Debug, Deserialize)]

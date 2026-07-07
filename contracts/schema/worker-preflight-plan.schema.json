@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "worker-preflight-plan.schema.json",
+  "title": "RuntimeLocalShellWorkerPlanOutcome",
+  "description": "Side-effect-free worker preflight plan for an external local-shell runner. It observes daemon projection state and recommends wait, recover, dispatch, idle, or no-match without claiming a lease or executing work.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "worker_lane",
+    "observed_at",
+    "max_actions",
+    "action",
+    "reason",
+    "tool_id",
+    "tool_version",
+    "tool_digest",
+    "input_digest",
+    "projection"
+  ],
+  "properties": {
+    "session_id": { "type": "string", "minLength": 1 },
+    "worker_lane": { "type": "string", "const": "local_shell" },
+    "observed_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "max_actions": { "type": "integer", "minimum": 1 },
+    "action": {
+      "type": "string",
+      "enum": [
+        "wait_live_lease",
+        "recover_expired_lease",
+        "dispatch_runnable_action",
+        "idle",
+        "no_matching_action"
+      ]
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "wait_until": {
+      "anyOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+    },
+    "lease": {
+      "anyOf": [{ "$ref": "#/$defs/lease_plan" }, { "type": "null" }]
+    },
+    "tool_id": { "type": "string", "minLength": 1 },
+    "tool_version": { "type": "string", "minLength": 1 },
+    "tool_digest": { "$ref": "common.schema.json#/$defs/hash_value" },
+    "input_digest": { "$ref": "common.schema.json#/$defs/hash_value" },
+    "action_filter": {
+      "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "dispatch": {
+      "anyOf": [{ "$ref": "#/$defs/dispatch_plan" }, { "type": "null" }]
+    },
+    "projection": { "$ref": "#/$defs/projection_summary" }
+  },
+  "$defs": {
+    "lease_status": {
+      "type": "string",
+      "enum": ["live_open", "expired_recoverable"]
+    },
+    "lease_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "lease_id", "expires_at", "status"],
+      "properties": {
+        "action_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "status": { "$ref": "#/$defs/lease_status" }
+      }
+    },
+    "dispatch_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "manifest_hash",
+        "decision_id",
+        "tool_id",
+        "expected_tool_version",
+        "expected_tool_digest",
+        "target",
+        "required_grants",
+        "requested_budget"
+      ],
+      "properties": {
+        "action_id": { "type": "string", "minLength": 1 },
+        "manifest_hash": { "$ref": "common.schema.json#/$defs/hash_value" },
+        "decision_id": { "type": "string", "minLength": 1 },
+        "tool_id": { "type": "string", "minLength": 1 },
+        "expected_tool_version": { "type": "string", "minLength": 1 },
+        "expected_tool_digest": { "$ref": "common.schema.json#/$defs/hash_value" },
+        "target": { "$ref": "common.schema.json#/$defs/capability_selector" },
+        "required_grants": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "requested_budget": { "$ref": "#/$defs/runtime_budget" }
+      }
+    },
+    "runtime_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Runtime Budget as serde emits it today: optional ceilings appear as integers or null.",
+      "required": [
+        "max_model_cents",
+        "max_tool_calls",
+        "max_wall_ms",
+        "max_payment_minor_units"
+      ],
+      "properties": {
+        "max_model_cents": {
+          "anyOf": [{ "$ref": "common.schema.json#/$defs/uint" }, { "type": "null" }]
+        },
+        "max_tool_calls": {
+          "anyOf": [{ "$ref": "common.schema.json#/$defs/uint" }, { "type": "null" }]
+        },
+        "max_wall_ms": {
+          "anyOf": [{ "$ref": "common.schema.json#/$defs/uint" }, { "type": "null" }]
+        },
+        "max_payment_minor_units": {
+          "anyOf": [{ "$ref": "common.schema.json#/$defs/uint" }, { "type": "null" }]
+        }
+      }
+    },
+    "open_execution_lease_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "lease_id", "expires_at", "status"],
+      "properties": {
+        "action_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "status": { "$ref": "#/$defs/lease_status" }
+      }
+    },
+    "projection_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grants",
+        "active_grants",
+        "actions",
+        "decisions",
+        "pending_allowed_actions",
+        "pending_allowed_action_ids",
+        "runnable_pending_actions",
+        "runnable_pending_action_ids",
+        "execution_leases",
+        "open_execution_leases",
+        "open_execution_lease_ids",
+        "open_execution_lease_statuses",
+        "live_open_execution_leases",
+        "live_open_execution_lease_ids",
+        "expired_recoverable_execution_leases",
+        "expired_recoverable_execution_lease_ids",
+        "execution_reconciliations",
+        "recovery_blocked",
+        "admission_blocked",
+        "admission_blockers",
+        "receipts"
+      ],
+      "properties": {
+        "grants": { "$ref": "common.schema.json#/$defs/uint" },
+        "active_grants": { "$ref": "common.schema.json#/$defs/uint" },
+        "actions": { "$ref": "common.schema.json#/$defs/uint" },
+        "decisions": { "$ref": "common.schema.json#/$defs/uint" },
+        "pending_allowed_actions": { "$ref": "common.schema.json#/$defs/uint" },
+        "pending_allowed_action_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "runnable_pending_actions": { "$ref": "common.schema.json#/$defs/uint" },
+        "runnable_pending_action_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "execution_leases": { "$ref": "common.schema.json#/$defs/uint" },
+        "open_execution_leases": { "$ref": "common.schema.json#/$defs/uint" },
+        "open_execution_lease_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "open_execution_lease_statuses": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/open_execution_lease_status" }
+        },
+        "live_open_execution_leases": { "$ref": "common.schema.json#/$defs/uint" },
+        "live_open_execution_lease_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "expired_recoverable_execution_leases": {
+          "$ref": "common.schema.json#/$defs/uint"
+        },
+        "expired_recoverable_execution_lease_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "execution_reconciliations": { "$ref": "common.schema.json#/$defs/uint" },
+        "recovery_blocked": { "type": "boolean" },
+        "admission_blocked": { "type": "boolean" },
+        "admission_blockers": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "receipts": { "$ref": "common.schema.json#/$defs/uint" }
+      }
+    }
+  }
+}
