@@ -510,6 +510,54 @@ impl AgentRuntime {
         })
     }
 
+    /// Run one supervised worker cycle: recover expired lost leases, then drain
+    /// claimable local-shell work through the bounded worker loop.
+    ///
+    /// This is the minimal scheduler supervision primitive. It treats an
+    /// expired open lease as a recovery event (`outcome_unknown`), never as a
+    /// retryable action. Live leases still stop the cycle through the worker
+    /// loop's `recovery_blocked` stop state.
+    pub fn run_supervised_local_shell_worker_cycle(
+        &self,
+        request: RuntimeSupervisedLocalShellWorkerCycleRequest,
+    ) -> RuntimeResult<RuntimeSupervisedLocalShellWorkerCycleOutcome> {
+        let session_id = request.worker_loop.worker.session_id.clone();
+        let mut recoveries = Vec::new();
+        for _ in 0..request.max_recoveries {
+            let Some(recovery_target) = self.next_expired_open_execution_lease(&session_id)? else {
+                break;
+            };
+            let recovery = self
+                .recover_expired_execution_lease_once(RuntimeExecutionLeaseRecoveryRequest {
+                    session_id: session_id.clone(),
+                    action_id: Some(recovery_target.action_id.clone()),
+                    lease_id: Some(recovery_target.lease_id.clone()),
+                    reconciliation_id: Some(format!(
+                        "supervised-reconcile-{}",
+                        recovery_target.lease_id
+                    )),
+                    reconciled_by: request.reconciled_by.clone(),
+                    reason: Some(request.recovery_reason.clone()),
+                    evidence_refs: request.recovery_evidence_refs.clone(),
+                })?
+                .ok_or_else(|| {
+                    RuntimeError::Refused(format!(
+                        "expired execution lease {} disappeared before recovery",
+                        recovery_target.lease_id
+                    ))
+                })?;
+            recoveries.push(recovery);
+        }
+        let worker_loop = self.run_local_shell_worker_loop(request.worker_loop)?;
+        let projection = worker_loop.projection.clone();
+        Ok(RuntimeSupervisedLocalShellWorkerCycleOutcome {
+            session_id,
+            recoveries,
+            worker_loop,
+            projection,
+        })
+    }
+
     /// Reconcile one expired open execution lease as `outcome_unknown`.
     ///
     /// This is the runtime recovery path for a worker that claimed authority but
@@ -607,6 +655,25 @@ impl AgentRuntime {
             final_journal_root_hash: record.hash,
             projection: RuntimeBundleProjectionSummary::from_projection(&projection),
         }))
+    }
+
+    fn next_expired_open_execution_lease(
+        &self,
+        session_id: &str,
+    ) -> RuntimeResult<Option<RuntimeExpiredOpenExecutionLease>> {
+        let projection = self.store.project(session_id)?;
+        let closed_actions = closed_execution_actions(&projection);
+        let now = Utc::now();
+        Ok(projection
+            .execution_leases
+            .iter()
+            .filter(|lease| !closed_actions.contains(lease.action_id.as_str()))
+            .filter(|lease| now >= lease.expires_at)
+            .map(|lease| RuntimeExpiredOpenExecutionLease {
+                action_id: lease.action_id.clone(),
+                lease_id: lease.lease_id.clone(),
+            })
+            .next())
     }
 
     fn append_observation_receipt(
@@ -970,6 +1037,35 @@ pub enum RuntimeLocalShellWorkerLoopStopReason {
     RecoveryBlocked,
 }
 
+/// Supervised worker-cycle request: recovery budget followed by a worker loop.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeSupervisedLocalShellWorkerCycleRequest {
+    pub worker_loop: RuntimeLocalShellWorkerLoopRequest,
+    #[serde(default)]
+    pub max_recoveries: usize,
+    #[serde(default = "default_supervised_recovery_reason")]
+    pub recovery_reason: String,
+    #[serde(default)]
+    pub reconciled_by: Option<String>,
+    #[serde(default)]
+    pub recovery_evidence_refs: Vec<String>,
+}
+
+/// Result of one supervised worker cycle.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeSupervisedLocalShellWorkerCycleOutcome {
+    pub session_id: String,
+    pub recoveries: Vec<RuntimeExecutionLeaseRecoveryOutcome>,
+    pub worker_loop: RuntimeLocalShellWorkerLoopOutcome,
+    pub projection: RuntimeBundleProjectionSummary,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeExpiredOpenExecutionLease {
+    action_id: String,
+    lease_id: String,
+}
+
 /// Request to close a stale worker lease without inventing a receipt.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeExecutionLeaseRecoveryRequest {
@@ -1300,6 +1396,10 @@ fn default_policy_profile() -> String {
 
 fn default_grant_ttl_secs() -> u64 {
     DEFAULT_GRANT_TTL_SECS
+}
+
+fn default_supervised_recovery_reason() -> String {
+    "supervised worker cycle found an expired open execution lease".to_string()
 }
 
 fn default_delegation_none() -> DelegationMode {

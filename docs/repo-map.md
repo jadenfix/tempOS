@@ -110,6 +110,11 @@ review boundaries.
   - Bounded runtime worker-loop smoke proving multiple admitted local-shell
     actions are repeatedly selected, claimed, executed, receipted, and drained
     without treating `Allowed` as direct execution authority.
+- `scripts/run-beater-os-runtime-supervised-worker-smoke.py`
+  - Supervised runtime worker-cycle smoke proving expired lost leases are
+    reconciled as `outcome_unknown` before later admitted work is dispatched,
+    while live leases block without recovery and reconciled actions are not
+    retried.
 - `scripts/run-beater-osd-http-execute-smoke.py`
   - Token-gated daemon HTTP execution smoke over the local shell gateway.
 - `scripts/run-beater-osd-http-pending-worker-smoke.py`
