@@ -68,6 +68,10 @@ review boundaries.
   - Typed agent runtime loop over the daemon store: session bootstrap, bounded
     grant issuance, sequential step admission, and no-side-effect observation
     receipts.
+  - Typed local-shell worker-once API that registers the exact command digest,
+    selects a daemon-claimable admitted action, claims a durable execution
+    lease, executes through the gateway, and returns the completed receipt plus
+    projection summary.
   - Deterministic step replay evidence anchored to proposal, decision, receipt,
     journal-root, and receipt-root hashes.
   - Bundle projection summaries include open execution-lease recovery blockers

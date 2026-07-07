@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::time::Duration as StdDuration;
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, BeaterOsError, Budget, CapabilityGrant,
@@ -24,7 +25,15 @@ use beater_os_core::{
     DecisionResult, DelegationMode, GrantConstraints, HashValue, ModelPolicy, ResourceKind,
     RiskClass, SessionStatus, SideEffectClass, TaintLabel, hash_json,
 };
-use beater_osd::{AdmissionOutcome, DAEMON_POLICY_VERSION, DaemonError, SessionProjection, Store};
+use beater_os_sandbox::{SandboxLimits, safe_path_environment};
+use beater_os_tool_gateway::{
+    ClaimedLocalToolInvocation, GatewayError, execute_claimed_local_tool,
+    local_shell_tool_digest_with_environment,
+};
+use beater_osd::{
+    AdmissionOutcome, ClaimableExecutionAction, DAEMON_POLICY_VERSION, DaemonError,
+    ExecutionLeaseClaimRequest, LocalShellToolRegistration, SessionProjection, Store,
+};
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -41,6 +50,8 @@ pub enum RuntimeError {
     Daemon(#[from] DaemonError),
     #[error(transparent)]
     Core(#[from] BeaterOsError),
+    #[error(transparent)]
+    Gateway(#[from] GatewayError),
     #[error("runtime refused request: {0}")]
     Refused(String),
     #[error("invalid ttl seconds: {0}")]
@@ -285,6 +296,158 @@ impl AgentRuntime {
             evidence,
             projection,
         })
+    }
+
+    /// Run one local-shell worker dispatch for an already-admitted execute
+    /// action.
+    ///
+    /// This is the typed in-process worker loop for the agent runtime. It does
+    /// not treat `Allowed` as execution authority. Instead it registers the
+    /// exact local command digest, asks the daemon store for claimable actions,
+    /// claims one action with manifest/decision/tool compare-and-set fields,
+    /// executes through the gateway, and completes the exact open lease.
+    pub fn run_local_shell_worker_once(
+        &self,
+        request: RuntimeLocalShellWorkerRequest,
+    ) -> RuntimeResult<Option<RuntimeLocalShellWorkerOutcome>> {
+        let projection = self.store.project(&request.session_id)?;
+        let action_filter = request.action_id.clone();
+        let command = require_worker_non_empty("command", request.command)?;
+        if command.contains('/') {
+            return Err(RuntimeError::Refused(
+                "local shell worker accepts PATH-resolved command names only".to_string(),
+            ));
+        }
+        let cwd = require_worker_non_empty("cwd", request.cwd)?;
+        let mut environment = safe_path_environment();
+        for (name, value) in request.env {
+            if name == "PATH" {
+                return Err(RuntimeError::Refused(
+                    "PATH is reserved for the sandbox safe system search path".to_string(),
+                ));
+            }
+            if environment.contains_key(&name) {
+                return Err(RuntimeError::Refused(format!(
+                    "duplicate environment variable {name:?}"
+                )));
+            }
+            environment.insert(name, value);
+        }
+        let defaults = SandboxLimits::default();
+        let timeout_secs = request.timeout_secs.unwrap_or(30);
+        if timeout_secs == 0 {
+            return Err(RuntimeError::Refused(
+                "timeout_secs must be greater than zero".to_string(),
+            ));
+        }
+        let max_output_bytes = request
+            .max_output_bytes
+            .unwrap_or(defaults.max_output_bytes);
+        if max_output_bytes > defaults.max_output_bytes {
+            return Err(RuntimeError::Refused(format!(
+                "max_output_bytes must be at most {}",
+                defaults.max_output_bytes
+            )));
+        }
+        let limits = SandboxLimits {
+            timeout: StdDuration::from_secs(timeout_secs),
+            max_output_bytes,
+            ..defaults
+        };
+        let command_args = request.args;
+        let computed_digest =
+            local_shell_tool_digest_with_environment(&cwd, &command, &command_args, &environment)?;
+        let expected_tool_digest = request
+            .tool_digest
+            .unwrap_or_else(|| computed_digest.clone());
+        if expected_tool_digest != computed_digest {
+            return Err(RuntimeError::Gateway(GatewayError::ToolDigestMismatch));
+        }
+        let tool_id = request.tool.unwrap_or_else(|| "shell".to_string());
+        let tool_version = request.tool_version.unwrap_or_else(|| {
+            let prefix_len = expected_tool_digest.len().min(16);
+            format!("local-{}", &expected_tool_digest[..prefix_len])
+        });
+        let registered_side_effects = if request.side_effects.is_empty() {
+            BTreeSet::from([SideEffectClass::LocalWrite])
+        } else {
+            request.side_effects
+        };
+        let registry = self
+            .store
+            .register_local_shell_tool(LocalShellToolRegistration {
+                workspace_id: projection.session.workspace_id.clone(),
+                tool_id: tool_id.clone(),
+                version: tool_version.clone(),
+                content_digest: expected_tool_digest.clone(),
+                side_effects: registered_side_effects,
+                risk_class: request.risk.unwrap_or(RiskClass::Low),
+            })?;
+        let claimable = self
+            .store
+            .claimable_execution_actions(&request.session_id)?;
+        let Some(action) = select_worker_action(
+            claimable,
+            action_filter.as_deref(),
+            &tool_id,
+            &tool_version,
+            &expected_tool_digest,
+            &computed_digest,
+        )?
+        else {
+            return Ok(None);
+        };
+        let lease_id = request
+            .lease_id
+            .unwrap_or_else(|| format!("lease-{}", action.decision_id));
+        let lease = self.store.claim_execution_lease_from_admission(
+            &request.session_id,
+            ExecutionLeaseClaimRequest {
+                lease_id,
+                action_id: action.action_id.clone(),
+                expected_manifest_hash: action.manifest_hash.clone(),
+                expected_decision_id: action.decision_id.clone(),
+                expected_tool_version: action.expected_tool_version.clone(),
+                expected_tool_digest: action.expected_tool_digest.clone(),
+            },
+            Utc::now(),
+        )?;
+        let gateway = execute_claimed_local_tool(
+            &self.store,
+            &registry,
+            &request.session_id,
+            &lease.lease.lease_id,
+            ClaimedLocalToolInvocation {
+                command,
+                args: command_args,
+                cwd,
+                environment,
+                receipt_id: request.receipt_id,
+                limits,
+            },
+        )?;
+        let projection = self.store.project(&request.session_id)?;
+        Ok(Some(RuntimeLocalShellWorkerOutcome {
+            session_id: request.session_id,
+            action_id: action.action_id,
+            lease_id: lease.lease.lease_id,
+            manifest_hash: action.manifest_hash,
+            decision_id: action.decision_id,
+            tool_ref: lease.lease.tool_ref,
+            target: lease.lease.target,
+            execution: RuntimeWorkerExecutionReport {
+                status: gateway.execution.status_str().to_string(),
+                exit_code: gateway.execution.exit_code,
+                stdout_digest: gateway.execution.stdout_digest(),
+                stdout_truncated: gateway.execution.stdout_truncated,
+                stderr_truncated: gateway.execution.stderr_truncated,
+                created: gateway.execution.diff.created,
+                modified: gateway.execution.diff.modified,
+                deleted: gateway.execution.diff.deleted,
+            },
+            receipt: gateway.receipt,
+            projection: RuntimeBundleProjectionSummary::from_projection(&projection),
+        }))
     }
 
     fn append_observation_receipt(
@@ -562,6 +725,66 @@ impl RuntimeObservation {
     }
 }
 
+/// One local-shell worker attempt over already-admitted runtime work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeLocalShellWorkerRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub action_id: Option<String>,
+    #[serde(default)]
+    pub lease_id: Option<String>,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub tool_version: Option<String>,
+    #[serde(default)]
+    pub tool_digest: Option<String>,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub cwd: String,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub side_effects: BTreeSet<SideEffectClass>,
+    #[serde(default)]
+    pub risk: Option<RiskClass>,
+    #[serde(default)]
+    pub receipt_id: Option<String>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub max_output_bytes: Option<usize>,
+}
+
+/// Result of one lease-bound local-shell worker dispatch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeLocalShellWorkerOutcome {
+    pub session_id: String,
+    pub action_id: String,
+    pub lease_id: String,
+    pub manifest_hash: HashValue,
+    pub decision_id: String,
+    pub tool_ref: String,
+    pub target: CapabilitySelector,
+    pub execution: RuntimeWorkerExecutionReport,
+    pub receipt: CapabilityReceipt,
+    pub projection: RuntimeBundleProjectionSummary,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeWorkerExecutionReport {
+    pub status: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    pub stdout_digest: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub created: Vec<String>,
+    pub modified: Vec<String>,
+    pub deleted: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeStepOutcome {
     pub admission: AdmissionOutcome,
@@ -749,6 +972,40 @@ fn scheduler_projection(projection: &SessionProjection) -> SchedulerProjection {
     }
 }
 
+fn select_worker_action(
+    actions: Vec<ClaimableExecutionAction>,
+    action_filter: Option<&str>,
+    tool_id: &str,
+    tool_version: &str,
+    tool_digest: &str,
+    input_digest: &str,
+) -> RuntimeResult<Option<ClaimableExecutionAction>> {
+    let mut mismatched_filter = false;
+    for action in actions {
+        if let Some(expected_action_id) = action_filter
+            && action.action_id != expected_action_id
+        {
+            continue;
+        }
+        if action.tool_id != tool_id
+            || action.expected_tool_version != tool_version
+            || action.expected_tool_digest != tool_digest
+            || action.manifest.inputs_digest != input_digest
+        {
+            mismatched_filter = action_filter.is_some();
+            continue;
+        }
+        return Ok(Some(action));
+    }
+    if mismatched_filter {
+        return Err(RuntimeError::Refused(
+            "selected action is claimable but does not match the worker tool/input digest"
+                .to_string(),
+        ));
+    }
+    Ok(None)
+}
+
 /// Deterministic replay anchor for one runtime step.
 ///
 /// `PolicyDecision::decision_id` is intentionally nonce-like, so replay should
@@ -806,6 +1063,13 @@ impl StepReplayEvidence {
 
 pub fn default_root_grant_id(session_id: &str) -> String {
     format!("{session_id}-root-grant")
+}
+
+fn require_worker_non_empty(field: &str, value: String) -> RuntimeResult<String> {
+    if value.trim().is_empty() {
+        return Err(RuntimeError::Refused(format!("{field} must not be empty")));
+    }
+    Ok(value)
 }
 
 fn default_policy_profile() -> String {
