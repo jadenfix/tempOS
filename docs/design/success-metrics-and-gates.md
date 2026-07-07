@@ -31,6 +31,7 @@ ones; the same table shape extends to the rest.
 | Ambient-authority violations | count of admitted actions with no covering `CapabilityGrant` bound to the acting principal + session | **0** | block |
 | Secret exposure | count of trace fields carrying `DataClass::Secret` that crossed a disallowed model route or appeared unredacted in a receipt | **0** | block |
 | Unreceipted external side effect | count of admitted actions with an external `SideEffectClass` and no `CapabilityReceipt` | **0** | block |
+| Runtime resume/admission across unresolved execution lease | count of `SessionStatus::Running` resumes or new `PolicyDecision`s appended while journal replay reports an open `ExecutionLeaseIssued` without a resolving `ReceiptAppended` | **0** | block |
 | Journal chain integrity | receipt hash-chain `verify_chain()` failures | **0** | block |
 | Prompt-injection authority grants | count of `CapabilityGrant`s whose provenance traces to `untrusted_web/email/document` taint | **0** | block |
 

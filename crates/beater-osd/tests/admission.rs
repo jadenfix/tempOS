@@ -786,6 +786,68 @@ fn open_execution_lease_blocks_reexecution_after_callback_failure() {
 }
 
 #[test]
+fn open_execution_lease_blocks_admission_and_resume_after_callback_failure() {
+    let (_root, store) =
+        create_store_with_session("execute-open-lease-recovery", "sess_open_lease_recovery");
+    let session_id = "sess_open_lease_recovery";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-open-lease-recovery");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let lease = execution_lease_for(
+        &execute_manifest,
+        &admission.decision,
+        "lease-open-recovery",
+    );
+    let mut lease = lease;
+    lease.expires_at = lease.leased_at + TimeDelta::milliseconds(1);
+
+    let failed = store.execute_and_append_receipt(
+        session_id,
+        lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            Err(DaemonError::Refused(
+                "simulated crash after lease".to_string(),
+            ))
+        },
+    );
+    assert!(
+        matches!(failed, Err(DaemonError::Refused(ref message)) if message.contains("simulated crash after lease")),
+        "{failed:?}"
+    );
+    thread::sleep(Duration::from_millis(5));
+
+    let open_leases = store.open_execution_leases(session_id).unwrap();
+    assert_eq!(open_leases.len(), 1);
+    assert_eq!(open_leases[0].lease_id, "lease-open-recovery");
+    assert!(open_leases[0].expires_at < Utc::now());
+
+    let admission_after_open = store.admit_action(
+        session_id,
+        manifest(session_id, "act-after-open-lease-recovery"),
+    );
+    assert!(
+        matches!(admission_after_open, Err(DaemonError::Refused(ref message)) if message.contains("unresolved open execution lease")),
+        "{admission_after_open:?}"
+    );
+
+    store
+        .transition_session(session_id, SessionTransition::Pause, Utc::now())
+        .unwrap();
+    let resume = store.transition_session(session_id, SessionTransition::Resume, Utc::now());
+    assert!(
+        matches!(resume, Err(DaemonError::Refused(ref message)) if message.contains("cannot resume session")),
+        "{resume:?}"
+    );
+    assert_eq!(
+        store.project(session_id).unwrap().session.status,
+        SessionStatus::Paused
+    );
+}
+
+#[test]
 fn expired_execution_lease_cannot_be_consumed_by_receipt() {
     let (_root, store) = create_store_with_session("execute-expired-lease", "sess_expired_lease");
     let session_id = "sess_expired_lease";

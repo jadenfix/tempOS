@@ -16,7 +16,9 @@ review boundaries.
   - Runtime daemon store, admission boundary, projection, receipt append path.
   - Durable session budget replay for tool-call and wall-clock runtime quotas.
   - Durable execution leases between `Allowed` policy decisions and spawned
-    side-effecting tools; open leases block blind replay after crash windows.
+    side-effecting tools; unresolved open leases are projected as recovery
+    blockers and prevent blind replay, new admission, and session resume after
+    crash windows.
   - Local loopback control-plane API for health and token-gated session
     projection.
   - Canonical proof of authority writes (`PolicyEngine` is only invocation point
