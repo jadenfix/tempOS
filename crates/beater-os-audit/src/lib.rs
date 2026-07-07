@@ -27,7 +27,10 @@ mod verify;
 pub use bundle::{AuditBundle, RecordDigest, build_bundle, bundle_to_json};
 pub use metrics::{AuditMetrics, Coverage, compute_metrics};
 pub use trace::render_trace;
-pub use trace_bundle::{TraceBundle, trace_bundle_to_json};
+pub use trace_bundle::{
+    TraceBundle, TraceBundleVerificationReport, TraceBundleVerifyOptions, trace_bundle_snapshot,
+    trace_bundle_to_json, verify_trace_bundle, verify_trace_bundle_with_options,
+};
 pub use verify::{
     AuditReport, CheckOutcome, CheckResult, GENESIS_HASH, snapshot_root_hash, verify_expected_root,
     verify_snapshot,

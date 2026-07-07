@@ -7,6 +7,7 @@
 //! - `show`    — print a human-legible trace timeline.
 //! - `metrics` — print audit coverage metrics as JSON.
 //! - `bundle`  — print a redaction-safe audit bundle as JSON.
+//! - `verify-trace` — verify a full trace bundle exported by `beaterosctl`.
 //!
 //! This is the offline reviewer tool from `final.md` §25 (trace viewer) and
 //! §13.15 (export trace / incident timeline). It performs no network I/O.
@@ -15,8 +16,9 @@ use std::io::Read as _;
 use std::process::ExitCode;
 
 use beater_os_audit::{
-    CheckOutcome, CheckResult, build_bundle, bundle_to_json, compute_metrics, render_trace,
-    verify_expected_root, verify_snapshot,
+    CheckOutcome, CheckResult, TraceBundle, TraceBundleVerifyOptions, build_bundle, bundle_to_json,
+    compute_metrics, render_trace, verify_expected_root, verify_snapshot,
+    verify_trace_bundle_with_options,
 };
 use beater_os_core::JournalSnapshot;
 
@@ -26,21 +28,23 @@ beateros-audit — independent audit for a beaterOS journal snapshot
 USAGE:
     beateros-audit <COMMAND> <SNAPSHOT>
     beateros-audit verify [--expected-root <HASH>] <SNAPSHOT>
+    beateros-audit verify-trace [--expected-root <HASH>] <TRACE_BUNDLE>
 
 COMMANDS:
-    verify    Run every independent audit check (exit 1 if any fails)
-    show      Print a human-legible trace timeline
-    metrics   Print audit coverage metrics as JSON
-    bundle    Print a redaction-safe audit bundle as JSON
+    verify        Run every independent audit check (exit 1 if any fails)
+    verify-trace  Verify a full trace bundle exported by beaterosctl trace export
+    show          Print a human-legible trace timeline
+    metrics       Print audit coverage metrics as JSON
+    bundle        Print a redaction-safe audit bundle as JSON
 
 SNAPSHOT:
-    Path to a JSON journal snapshot, or - to read from stdin.
+    Path to a JSON journal snapshot or trace bundle, or - to read from stdin.
 
 OPTIONS:
     --expected-root <HASH>
-        For verify only: require the snapshot root hash to match an externally
-        trusted anchor. This detects truncation or coherent re-hashing relative
-        to that anchor.
+        For verify and verify-trace only: require the journal root hash to match
+        an externally trusted anchor. This detects truncation or coherent
+        re-hashing relative to that anchor.
 ";
 
 fn main() -> ExitCode {
@@ -59,12 +63,45 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
 
     // Validate the command before touching input, so an unknown command reports
     // itself rather than a downstream file/parse error.
-    if !matches!(command, "verify" | "show" | "metrics" | "bundle") {
+    if !matches!(
+        command,
+        "verify" | "verify-trace" | "show" | "metrics" | "bundle"
+    ) {
         eprint!("{USAGE}");
         return Err(format!("unknown command: {command}"));
     }
 
     let raw = read_source(source)?;
+    if command == "verify-trace" {
+        let bundle: TraceBundle = serde_json::from_str(&raw)
+            .map_err(|err| format!("could not parse trace bundle as JSON: {err}"))?;
+        let report = verify_trace_bundle_with_options(
+            &bundle,
+            TraceBundleVerifyOptions {
+                expected_journal_root: expected_root,
+            },
+        );
+        for check in &report.checks {
+            println!("[{:?}] {} — {}", check.outcome, check.check, check.detail);
+        }
+        if report.records == 0 {
+            println!("note: trace bundle journal is empty — this attests nothing about a real run");
+        }
+        if report.ok {
+            println!(
+                "OK: trace bundle {} verified over {} record(s), journal root {}",
+                report.bundle_id, report.records, report.journal_root_hash
+            );
+            return Ok(ExitCode::SUCCESS);
+        }
+        let failures = report
+            .checks
+            .iter()
+            .filter(|check| !check_passed(check))
+            .count();
+        println!("FAIL: {failures} trace bundle check(s) failed");
+        return Ok(ExitCode::FAILURE);
+    }
     let snapshot: JournalSnapshot = serde_json::from_str(&raw)
         .map_err(|err| format!("could not parse journal snapshot as JSON: {err}"))?;
 
@@ -125,7 +162,8 @@ fn parse_args(args: &[String]) -> Result<(&str, Option<&str>, &str), String> {
     match args {
         [command, source] => Ok((command.as_str(), None, source.as_str())),
         [command, flag, expected_root, source]
-            if command == "verify" && flag == "--expected-root" =>
+            if matches!(command.as_str(), "verify" | "verify-trace")
+                && flag == "--expected-root" =>
         {
             Ok((
                 command.as_str(),
@@ -133,14 +171,17 @@ fn parse_args(args: &[String]) -> Result<(&str, Option<&str>, &str), String> {
                 source.as_str(),
             ))
         }
-        [command, flag, ..] if flag == "--expected-root" && command != "verify" => {
+        [command, flag, ..]
+            if flag == "--expected-root"
+                && !matches!(command.as_str(), "verify" | "verify-trace") =>
+        {
             eprint!("{USAGE}");
-            Err("--expected-root is only valid with verify".to_string())
+            Err("--expected-root is only valid with verify or verify-trace".to_string())
         }
         _ => {
             eprint!("{USAGE}");
             Err(
-                "expected <command> <snapshot> or verify --expected-root <hash> <snapshot>"
+                "expected <command> <snapshot> or verify[/-trace] --expected-root <hash> <input>"
                     .to_string(),
             )
         }

@@ -22,8 +22,9 @@ use beater_os_core::{
 use chrono::{DateTime, Utc};
 
 use beater_os_audit::{
-    CheckOutcome, build_bundle, compute_metrics, render_trace, snapshot_root_hash,
-    verify_expected_root, verify_snapshot,
+    CheckOutcome, TraceBundle, TraceBundleVerifyOptions, build_bundle, compute_metrics,
+    render_trace, snapshot_root_hash, trace_bundle_snapshot, verify_expected_root, verify_snapshot,
+    verify_trace_bundle, verify_trace_bundle_with_options,
 };
 
 fn ts(secs: i64) -> DateTime<Utc> {
@@ -199,12 +200,64 @@ impl TempFile {
         fs::write(&path, json)?;
         Ok(Self { path })
     }
+
+    fn trace_bundle(bundle: &TraceBundle, tag: &str) -> Result<Self, Box<dyn Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "beateros-audit-trace-{tag}-{}-{}.json",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let json = serde_json::to_vec(bundle)?;
+        fs::write(&path, json)?;
+        Ok(Self { path })
+    }
 }
 
 impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+fn trace_bundle_from_snapshot(snapshot: &JournalSnapshot) -> TraceBundle {
+    let mut bundle = TraceBundle {
+        bundle_id: "trace-bundle-test".to_string(),
+        description: Some("test trace bundle".to_string()),
+        policy_version: "v1".to_string(),
+        sessions: Vec::new(),
+        grants: Vec::new(),
+        payment_mandates: Vec::new(),
+        approvals: Vec::new(),
+        simulations: Vec::new(),
+        manifests: Vec::new(),
+        decisions: Vec::new(),
+        receipts: Vec::new(),
+        journal: snapshot.records.clone(),
+    };
+    for record in &snapshot.records {
+        match &record.event {
+            JournalEvent::SessionCreated { session } => bundle.sessions.push(session.clone()),
+            JournalEvent::CapabilityGranted { grant } => bundle.grants.push(grant.clone()),
+            JournalEvent::PaymentMandateIssued { mandate } => {
+                bundle.payment_mandates.push(mandate.clone());
+            }
+            JournalEvent::ActionProposed { manifest } => {
+                bundle.manifests.push((**manifest).clone())
+            }
+            JournalEvent::PolicyDecided { decision } => bundle.decisions.push(decision.clone()),
+            JournalEvent::ApprovalRecorded { approval } => bundle.approvals.push(approval.clone()),
+            JournalEvent::SimulationRecorded { simulation } => {
+                bundle.simulations.push(simulation.clone());
+            }
+            JournalEvent::ReceiptAppended { receipt } => bundle.receipts.push(receipt.clone()),
+            JournalEvent::SessionStatusChanged { .. }
+            | JournalEvent::CapabilityRevoked { .. }
+            | JournalEvent::MemoryWritten { .. }
+            | JournalEvent::ScenarioEvaluated { .. }
+            | JournalEvent::IncidentAnnotated { .. } => {}
+        }
+    }
+    bundle
 }
 
 #[test]
@@ -219,6 +272,64 @@ fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
     assert_eq!(report.records, 5);
     assert_eq!(report.checks.len(), 10);
     assert_eq!(report.failures().count(), 0);
+    Ok(())
+}
+
+#[test]
+fn trace_bundle_verify_accepts_journal_derived_projection() -> Result<(), BeaterOsError> {
+    let snapshot = valid_snapshot()?;
+    let bundle = trace_bundle_from_snapshot(&snapshot);
+    let report = verify_trace_bundle(&bundle);
+
+    assert!(
+        report.ok,
+        "expected pass, failures: {:?}",
+        report
+            .checks
+            .iter()
+            .filter(|check| check.outcome == CheckOutcome::Fail)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(report.records, 5);
+    assert_eq!(report.session_id.as_deref(), Some("S1"));
+    assert_eq!(report.journal_root_hash, snapshot_root_hash(&snapshot));
+    assert_eq!(trace_bundle_snapshot(&bundle), snapshot);
+    Ok(())
+}
+
+#[test]
+fn trace_bundle_verify_rejects_forged_projection_array() -> Result<(), BeaterOsError> {
+    let snapshot = valid_snapshot()?;
+    let mut bundle = trace_bundle_from_snapshot(&snapshot);
+    bundle.receipts.clear();
+
+    let report = verify_trace_bundle(&bundle);
+
+    assert!(!report.ok, "forged projection should fail");
+    assert!(report.checks.iter().any(|check| {
+        check.check == "trace_bundle_receipts" && check.outcome == CheckOutcome::Fail
+    }));
+    Ok(())
+}
+
+#[test]
+fn trace_bundle_verify_expected_root_detects_mismatch() -> Result<(), BeaterOsError> {
+    let snapshot = valid_snapshot()?;
+    let bundle = trace_bundle_from_snapshot(&snapshot);
+    let report = verify_trace_bundle_with_options(
+        &bundle,
+        TraceBundleVerifyOptions {
+            expected_journal_root: Some(&"f".repeat(64)),
+        },
+    );
+
+    assert!(!report.ok, "expected-root mismatch should fail");
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| { check.check == "expected_root" && check.outcome == CheckOutcome::Fail })
+    );
     Ok(())
 }
 
@@ -328,6 +439,54 @@ fn cli_verify_expected_root_fails_for_mismatched_anchor() -> Result<(), Box<dyn 
     assert!(stdout.contains("expected_root"));
     assert!(stdout.contains("snapshot root mismatch"));
     assert!(stdout.contains("FAIL: 1 check(s) failed"));
+    Ok(())
+}
+
+#[test]
+fn cli_verify_trace_succeeds_for_exported_trace_bundle() -> Result<(), Box<dyn Error>> {
+    let snapshot = valid_snapshot()?;
+    let bundle = trace_bundle_from_snapshot(&snapshot);
+    let root = snapshot_root_hash(&snapshot);
+    let file = TempFile::trace_bundle(&bundle, "match")?;
+    let path = file.path.display().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_beateros-audit"))
+        .args(["verify-trace", "--expected-root", &root, &path])
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "expected success, stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("trace_bundle_receipts"));
+    assert!(stdout.contains("OK: trace bundle trace-bundle-test verified"));
+    Ok(())
+}
+
+#[test]
+fn cli_verify_trace_fails_for_forged_projection() -> Result<(), Box<dyn Error>> {
+    let snapshot = valid_snapshot()?;
+    let mut bundle = trace_bundle_from_snapshot(&snapshot);
+    bundle.manifests.clear();
+    let file = TempFile::trace_bundle(&bundle, "forged")?;
+    let path = file.path.display().to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_beateros-audit"))
+        .args(["verify-trace", &path])
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "expected failure, stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("trace_bundle_manifests"));
+    assert!(stdout.contains("FAIL:"));
     Ok(())
 }
 

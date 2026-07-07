@@ -30,8 +30,12 @@ the same code path that *produced* it. It re-derives the audit invariants from
   export for incident response and hand-off: it carries per-record hashes,
   kinds, verification results, and coverage, but not raw event payloads
   (`final.md` §6.6, §13.15).
+- **Trace bundle verification** (`verify_trace_bundle`) — read-only verification
+  for the full `beaterosctl trace export` artifact. The embedded journal is the
+  authority payload; exported projection arrays are checked against a
+  journal-derived projection and never imported into live daemon state.
 - **`beateros-audit` binary** — `verify` / `show` / `metrics` / `bundle` a
-  journal snapshot from a file or stdin.
+  journal snapshot from a file or stdin, and `verify-trace` a full trace bundle.
 - **Expected-root verification** — `verify --expected-root <hash>` compares the
   snapshot root against an external anchor, so a valid prefix or coherent
   re-hash can be detected relative to the trusted hand-off value.
@@ -49,6 +53,10 @@ beateros-audit show snapshot.json
 beateros-audit metrics snapshot.json
 # redaction-safe audit bundle as JSON (also accepts - for stdin)
 cat snapshot.json | beateros-audit bundle -
+# verify the full trace/debug bundle emitted by beaterosctl
+beaterosctl trace export --session demo | beateros-audit verify-trace -
+# bind trace verification to an externally trusted journal root
+beateros-audit verify-trace --expected-root <root-hash> trace-bundle.json
 ```
 
 ## Boundary vs. `observability-export` (backlog slice 7)
@@ -63,5 +71,6 @@ boundary should be settled on the PR before either lands.
 ## Non-goals
 
 - It does not replace the core verifier; it corroborates it.
+- It does not import, restore, resume, or apply full trace bundles.
 - It does not emit spans or own live tracing (that is slice 7).
 - It performs no network or filesystem I/O of its own beyond CLI arguments.

@@ -46,8 +46,10 @@ review boundaries.
   - Service-facing `RuntimeBundle` contract used by daemon HTTP adapters without
     exposing direct store mutation APIs.
 - `crates/beater-os-audit`
-  - Trace/receipt validation, integrity reporting, replay tooling, and full
-    trace/action bundle serialization.
+  - Trace/receipt validation, integrity reporting, read-only verification
+    tooling, and full trace/action bundle serialization.
+  - `verify-trace` checks exported full trace bundles offline without importing
+    them into daemon state.
 
 ## 3) Infrastructure and hardening gates
 

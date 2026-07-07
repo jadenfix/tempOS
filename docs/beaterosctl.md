@@ -292,6 +292,19 @@ replay/debug artifact, not a redaction-safe incident handoff: goals, paths,
 summaries, external IDs, and payment metadata may be present. Use
 `beateros-audit bundle` when a digest-only redaction-safe bundle is required.
 
+For offline full-trace verification, pipe or save the export and run
+`beateros-audit verify-trace`:
+
+```console
+$ beaterosctl trace export --session demo | beateros-audit verify-trace -
+$ beateros-audit verify-trace --expected-root <journal-root-hash> trace-bundle.json
+```
+
+`verify-trace` treats the embedded `journal` section as authoritative, derives
+projection arrays from that journal, compares them to the exported arrays, and
+verifies the receipt chain from `ReceiptAppended` events. It is not an import,
+resume, restore, or live replay path.
+
 ## Invariants preserved
 
 - **No ambient authority.** An action with no matching grant is never admitted.
