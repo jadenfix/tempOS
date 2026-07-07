@@ -106,6 +106,10 @@ review boundaries.
   - Typed runtime recovery smoke proving an expired worker lease is reconciled
     as `outcome_unknown`, clears the recovery blocker, and does not fabricate a
     receipt or rerun the action.
+- `scripts/run-beater-os-runtime-worker-loop-smoke.py`
+  - Bounded runtime worker-loop smoke proving multiple admitted local-shell
+    actions are repeatedly selected, claimed, executed, receipted, and drained
+    without treating `Allowed` as direct execution authority.
 - `scripts/run-beater-osd-http-execute-smoke.py`
   - Token-gated daemon HTTP execution smoke over the local shell gateway.
 - `scripts/run-beater-osd-http-pending-worker-smoke.py`

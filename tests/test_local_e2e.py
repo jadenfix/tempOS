@@ -56,6 +56,10 @@ class PlanTest(unittest.TestCase):
                     ),
                 ),
                 (
+                    "beater-os-runtime-worker-loop-smoke",
+                    ("python3", "scripts/run-beater-os-runtime-worker-loop-smoke.py", "--json"),
+                ),
+                (
                     "beater-osd-http-execute-smoke",
                     ("python3", "scripts/run-beater-osd-http-execute-smoke.py", "--json"),
                 ),

@@ -451,6 +451,65 @@ impl AgentRuntime {
         }))
     }
 
+    /// Run a bounded local-shell worker loop over daemon-claimable work.
+    ///
+    /// The loop is intentionally just repeated one-shot dispatch: every
+    /// iteration re-projects daemon state, claims a fresh lease, executes
+    /// through the gateway, and completes the exact receipt before continuing.
+    /// A live or unreconciled lease stops the loop rather than causing blind
+    /// replay.
+    pub fn run_local_shell_worker_loop(
+        &self,
+        request: RuntimeLocalShellWorkerLoopRequest,
+    ) -> RuntimeResult<RuntimeLocalShellWorkerLoopOutcome> {
+        if request.max_actions == 0 {
+            return Err(RuntimeError::Refused(
+                "max_actions must be greater than zero".to_string(),
+            ));
+        }
+        if request.worker.lease_id.is_some() {
+            return Err(RuntimeError::Refused(
+                "worker loop must not pin a lease_id across iterations".to_string(),
+            ));
+        }
+        if request.worker.receipt_id.is_some() {
+            return Err(RuntimeError::Refused(
+                "worker loop must not pin a receipt_id across iterations".to_string(),
+            ));
+        }
+        let session_id = request.worker.session_id.clone();
+        let mut executions = Vec::new();
+        for _ in 0..request.max_actions {
+            match self.run_local_shell_worker_once(request.worker.clone())? {
+                Some(outcome) => executions.push(outcome),
+                None => {
+                    let projection = self.store.project(&session_id)?;
+                    let summary = RuntimeBundleProjectionSummary::from_projection(&projection);
+                    let stop_reason = if summary.recovery_blocked {
+                        RuntimeLocalShellWorkerLoopStopReason::RecoveryBlocked
+                    } else if summary.runnable_pending_actions == 0 {
+                        RuntimeLocalShellWorkerLoopStopReason::NoRunnableAction
+                    } else {
+                        RuntimeLocalShellWorkerLoopStopReason::NoMatchingRunnableAction
+                    };
+                    return Ok(RuntimeLocalShellWorkerLoopOutcome {
+                        session_id,
+                        stop_reason,
+                        executions,
+                        projection: summary,
+                    });
+                }
+            }
+        }
+        let projection = self.store.project(&session_id)?;
+        Ok(RuntimeLocalShellWorkerLoopOutcome {
+            session_id,
+            stop_reason: RuntimeLocalShellWorkerLoopStopReason::MaxActions,
+            executions,
+            projection: RuntimeBundleProjectionSummary::from_projection(&projection),
+        })
+    }
+
     /// Reconcile one expired open execution lease as `outcome_unknown`.
     ///
     /// This is the runtime recovery path for a worker that claimed authority but
@@ -883,6 +942,32 @@ pub struct RuntimeWorkerExecutionReport {
     pub created: Vec<String>,
     pub modified: Vec<String>,
     pub deleted: Vec<String>,
+}
+
+/// Bounded worker-loop request over already-admitted local-shell work.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeLocalShellWorkerLoopRequest {
+    pub worker: RuntimeLocalShellWorkerRequest,
+    pub max_actions: usize,
+}
+
+/// Result of a bounded local-shell worker loop.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeLocalShellWorkerLoopOutcome {
+    pub session_id: String,
+    pub stop_reason: RuntimeLocalShellWorkerLoopStopReason,
+    pub executions: Vec<RuntimeLocalShellWorkerOutcome>,
+    pub projection: RuntimeBundleProjectionSummary,
+}
+
+/// Why a bounded worker loop stopped without surfacing an execution error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeLocalShellWorkerLoopStopReason {
+    MaxActions,
+    NoRunnableAction,
+    NoMatchingRunnableAction,
+    RecoveryBlocked,
 }
 
 /// Request to close a stale worker lease without inventing a receipt.
