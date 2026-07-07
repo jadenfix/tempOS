@@ -128,6 +128,12 @@ pub enum GatewayError {
     MissingWorkspaceAllowlist { workspace_id: String },
     #[error("named grants do not cover registered tool required capabilities")]
     MissingToolCapability,
+    #[error("required grant {grant_id} is no longer active")]
+    MissingActiveGrant { grant_id: String },
+    #[error(
+        "resolved execution target changed after admission: expected {expected}, actual {actual}"
+    )]
+    ResolvedTargetChanged { expected: String, actual: String },
     #[error("observed side effects were not declared by the registered tool or invocation")]
     ObservedUndeclaredSideEffect,
 }
@@ -325,9 +331,26 @@ pub fn execute_local_tool(
     let receipt_tool_ref = tool_ref.clone();
     let required_grants_for_lease = invocation.required_grants.clone();
     let required_tool_capabilities = tool.manifest.required_capabilities.clone();
+    let admitted_target = manifest
+        .resolved_target
+        .as_ref()
+        .unwrap_or(&manifest.target)
+        .resource_id
+        .clone();
     let (receipt_outcome, execution) =
         store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |projection| {
             let active_grants = projection.active_grants(Utc::now());
+            let active_grant_ids: BTreeSet<&str> = active_grants
+                .iter()
+                .map(|grant| grant.grant_id.as_str())
+                .collect();
+            for grant_id in &required_grants_for_lease {
+                if !active_grant_ids.contains(grant_id.as_str()) {
+                    return Err(GatewayError::MissingActiveGrant {
+                        grant_id: grant_id.clone(),
+                    });
+                }
+            }
             if !tool_capabilities_covered(
                 &active_grants,
                 &required_grants_for_lease,
@@ -341,6 +364,13 @@ pub fn execute_local_tool(
                 return Err(GatewayError::MissingConfinement);
             }
             let resolved = resolve_confined(&cwd, &confinement_prefixes)?;
+            let actual_target = resolved.display().to_string();
+            if actual_target != admitted_target {
+                return Err(GatewayError::ResolvedTargetChanged {
+                    expected: admitted_target.clone(),
+                    actual: actual_target,
+                });
+            }
             let execution = sandbox_execute(&SandboxRequest {
                 command,
                 args,
