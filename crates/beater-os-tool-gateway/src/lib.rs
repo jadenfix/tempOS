@@ -34,6 +34,7 @@ use thiserror::Error;
 
 const LOCAL_SHELL_DIGEST_VERSION: &str = "beateros.local_shell_tool.v2";
 const SAFE_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+const LOCAL_SHELL_LEASE_OVERHEAD_GRACE_MS: u64 = 2_000;
 
 /// Result alias for gateway operations.
 pub type GatewayResult<T> = Result<T, GatewayError>;
@@ -351,9 +352,12 @@ pub fn execute_local_tool(
         .resource_id
         .clone();
     let lease_started_at = Utc::now();
+    let lease_wall_ms = requested_wall_ms
+        .checked_add(LOCAL_SHELL_LEASE_OVERHEAD_GRACE_MS)
+        .ok_or(GatewayError::RuntimeBudgetOverflow)?;
     let lease_expires_at = lease_started_at
         .checked_add_signed(TimeDelta::milliseconds(
-            i64::try_from(requested_wall_ms).map_err(|_| GatewayError::RuntimeBudgetOverflow)?,
+            i64::try_from(lease_wall_ms).map_err(|_| GatewayError::RuntimeBudgetOverflow)?,
         ))
         .ok_or(GatewayError::RuntimeBudgetOverflow)?;
     let execution_lease = ExecutionLease {

@@ -238,7 +238,10 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    `Allowed` is not executable authority by itself. Before spawning the child,
    the gateway asks `beater-osd` to append an `ExecutionLeaseIssued` event bound
    to the exact decision id, manifest hash, tool ref, resolved target, required
-   grants, and requested runtime budget. Journal appends are flushed and synced
+   grants, and requested runtime budget. The lease expiry covers the sandbox
+   timeout plus a bounded two-second gateway overhead grace for durable append,
+   preflight, and receipt bookkeeping; it does not widen the sandbox's own
+   timeout. Journal appends are flushed and synced
    before the daemon returns from the append path, so the lease is durable before
    the gateway starts the side-effecting process. The same daemon session lock is
    held through lease append, sandbox execution, and receipt append, so lifecycle
