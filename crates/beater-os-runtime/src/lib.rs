@@ -22,8 +22,9 @@ use std::time::Duration as StdDuration;
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, BeaterOsError, Budget, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass,
-    DecisionResult, DelegationMode, GrantConstraints, HashValue, ModelPolicy, ResourceKind,
-    RiskClass, SessionStatus, SideEffectClass, TaintLabel, hash_json,
+    DecisionResult, DelegationMode, ExecutionLeaseReconciliation, ExecutionLeaseResolution,
+    GrantConstraints, HashValue, ModelPolicy, ResourceKind, RiskClass, SessionStatus,
+    SideEffectClass, TaintLabel, hash_json,
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment};
 use beater_os_tool_gateway::{
@@ -450,6 +451,105 @@ impl AgentRuntime {
         }))
     }
 
+    /// Reconcile one expired open execution lease as `outcome_unknown`.
+    ///
+    /// This is the runtime recovery path for a worker that claimed authority but
+    /// lost its process, transport, or local state before it could durably
+    /// complete a receipt. It never fabricates success or retries the action:
+    /// the daemon writes an explicit reconciliation record, closes the recovery
+    /// blocker, and leaves the side-effect outcome unknown for review/replay.
+    pub fn recover_expired_execution_lease_once(
+        &self,
+        request: RuntimeExecutionLeaseRecoveryRequest,
+    ) -> RuntimeResult<Option<RuntimeExecutionLeaseRecoveryOutcome>> {
+        let projection = self.store.project(&request.session_id)?;
+        let closed_actions = closed_execution_actions(&projection);
+        let mut matching_open_leases = projection
+            .execution_leases
+            .iter()
+            .filter(|lease| !closed_actions.contains(lease.action_id.as_str()))
+            .filter(|lease| {
+                request
+                    .action_id
+                    .as_ref()
+                    .is_none_or(|action_id| action_id == &lease.action_id)
+            })
+            .filter(|lease| {
+                request
+                    .lease_id
+                    .as_ref()
+                    .is_none_or(|lease_id| lease_id == &lease.lease_id)
+            });
+        let Some(open_lease) = matching_open_leases.next() else {
+            return Ok(None);
+        };
+        if let Some(second) = matching_open_leases.next() {
+            return Err(RuntimeError::Refused(format!(
+                "multiple open execution leases matched recovery request: {} and {}",
+                open_lease.lease_id, second.lease_id
+            )));
+        }
+        let open_lease = open_lease.clone();
+        let now = Utc::now();
+        if now < open_lease.expires_at {
+            return Err(RuntimeError::Refused(format!(
+                "execution lease {} is still live until {}",
+                open_lease.lease_id, open_lease.expires_at
+            )));
+        }
+        let reason = request.reason.unwrap_or_else(|| {
+            "runtime worker lease expired before a receipt was completed".to_string()
+        });
+        if reason.trim().is_empty() {
+            return Err(RuntimeError::Refused(
+                "recovery reason must not be empty".to_string(),
+            ));
+        }
+        if request
+            .evidence_refs
+            .iter()
+            .any(|reference| reference.trim().is_empty())
+        {
+            return Err(RuntimeError::Refused(
+                "recovery evidence_refs must not contain empty references".to_string(),
+            ));
+        }
+        let reconciliation_id = request
+            .reconciliation_id
+            .unwrap_or_else(|| format!("reconcile-{}", open_lease.lease_id));
+        let reconciled_by = request
+            .reconciled_by
+            .unwrap_or_else(|| projection.session.created_by.clone());
+        let reconciliation = ExecutionLeaseReconciliation {
+            reconciliation_id: reconciliation_id.clone(),
+            lease_id: open_lease.lease_id.clone(),
+            session_id: request.session_id.clone(),
+            action_id: open_lease.action_id.clone(),
+            manifest_hash: open_lease.manifest_hash.clone(),
+            decision_id: open_lease.decision_id.clone(),
+            resolution: ExecutionLeaseResolution::OutcomeUnknown,
+            reconciled_by,
+            reason,
+            evidence_refs: request.evidence_refs,
+            reconciled_at: now,
+        };
+        let record =
+            self.store
+                .reconcile_execution_lease(&request.session_id, reconciliation, now)?;
+        let projection = self.store.project(&request.session_id)?;
+        Ok(Some(RuntimeExecutionLeaseRecoveryOutcome {
+            session_id: request.session_id,
+            action_id: open_lease.action_id.clone(),
+            lease_id: open_lease.lease_id.clone(),
+            reconciliation_id,
+            resolution: ExecutionLeaseResolution::OutcomeUnknown,
+            reconciliation_seq: record.seq,
+            reconciliation_hash: record.hash.clone(),
+            final_journal_root_hash: record.hash,
+            projection: RuntimeBundleProjectionSummary::from_projection(&projection),
+        }))
+    }
+
     fn append_observation_receipt(
         &self,
         manifest: &ActionManifest,
@@ -785,6 +885,38 @@ pub struct RuntimeWorkerExecutionReport {
     pub deleted: Vec<String>,
 }
 
+/// Request to close a stale worker lease without inventing a receipt.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeExecutionLeaseRecoveryRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub action_id: Option<String>,
+    #[serde(default)]
+    pub lease_id: Option<String>,
+    #[serde(default)]
+    pub reconciliation_id: Option<String>,
+    #[serde(default)]
+    pub reconciled_by: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+}
+
+/// Result of one runtime worker lease recovery write.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeExecutionLeaseRecoveryOutcome {
+    pub session_id: String,
+    pub action_id: String,
+    pub lease_id: String,
+    pub reconciliation_id: String,
+    pub resolution: ExecutionLeaseResolution,
+    pub reconciliation_seq: u64,
+    pub reconciliation_hash: HashValue,
+    pub final_journal_root_hash: HashValue,
+    pub projection: RuntimeBundleProjectionSummary,
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeStepOutcome {
     pub admission: AdmissionOutcome,
@@ -913,17 +1045,7 @@ struct SchedulerProjection {
 }
 
 fn scheduler_projection(projection: &SessionProjection) -> SchedulerProjection {
-    let mut closed_actions: BTreeSet<&str> = projection
-        .receipts
-        .iter()
-        .map(|receipt| receipt.action_id.as_str())
-        .collect();
-    closed_actions.extend(
-        projection
-            .execution_reconciliations
-            .iter()
-            .map(|reconciliation| reconciliation.action_id.as_str()),
-    );
+    let closed_actions = closed_execution_actions(projection);
     let open_execution_leases: BTreeMap<&str, &str> = projection
         .execution_leases
         .iter()
@@ -970,6 +1092,21 @@ fn scheduler_projection(projection: &SessionProjection) -> SchedulerProjection {
         admission_blocked: !admission_blockers.is_empty(),
         admission_blockers,
     }
+}
+
+fn closed_execution_actions(projection: &SessionProjection) -> BTreeSet<&str> {
+    let mut closed_actions: BTreeSet<&str> = projection
+        .receipts
+        .iter()
+        .map(|receipt| receipt.action_id.as_str())
+        .collect();
+    closed_actions.extend(
+        projection
+            .execution_reconciliations
+            .iter()
+            .map(|reconciliation| reconciliation.action_id.as_str()),
+    );
+    closed_actions
 }
 
 fn select_worker_action(
