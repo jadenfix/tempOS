@@ -71,7 +71,11 @@ review boundaries.
     receipt append for local shell tools.
   - Lease-bound local-shell worker execution for already-admitted actions:
     re-check active grants, registry pin, admitted input digest, confinement,
-    and observed side effects before completing the open daemon lease.
+    and observed side effects before completing the open daemon lease. The
+    claimed-worker path snapshots the open lease under the daemon session lock,
+    releases the lock while sandbox execution runs, then reacquires it only for
+    exact lease-id receipt completion so local lifecycle controls are not
+    serialized behind blocking tool work.
 - `crates/beater-os-runtime`
   - Typed agent runtime loop over the daemon store: session bootstrap, bounded
     grant issuance, sequential step admission, and no-side-effect observation

@@ -560,138 +560,136 @@ pub fn execute_claimed_local_tool(
     let environment = invocation.environment;
     let receipt_id = invocation.receipt_id;
     let limits = invocation.limits;
-    let (receipt_outcome, execution) = store.execute_open_lease_and_append_receipt(
+    let preparation = store.prepare_open_execution_lease(session_id, lease_id)?;
+    let projection = preparation.projection;
+    let lease = preparation.lease;
+    let manifest = projection.manifest(&lease.action_id).ok_or_else(|| {
+        GatewayError::ClaimedActionMissingManifest {
+            action_id: lease.action_id.clone(),
+        }
+    })?;
+    if manifest.inputs_digest != inputs_digest {
+        return Err(GatewayError::ClaimedActionInputDigestMismatch {
+            action_id: lease.action_id.clone(),
+        });
+    }
+    let (tool_id, version, digest) = parse_tool_ref(&lease.tool_ref)?;
+    if tool_id != lease.tool_id {
+        return Err(GatewayError::LeaseToolRefMismatch {
+            tool_id: lease.tool_id.clone(),
+            tool_ref: lease.tool_ref.clone(),
+        });
+    }
+    if digest != inputs_digest {
+        return Err(GatewayError::ToolDigestMismatch);
+    }
+    if !registry.has_workspace_allowlist(&projection.session.workspace_id) {
+        return Err(GatewayError::MissingWorkspaceAllowlist {
+            workspace_id: projection.session.workspace_id.clone(),
+        });
+    }
+    let tool = registry.resolve(
+        &ResolveRequest::new(tool_id, version)
+            .in_workspace(projection.session.workspace_id.clone())
+            .expecting_digest(digest.clone()),
+    )?;
+    if tool.manifest.transport != "local_shell" {
+        return Err(GatewayError::UnsupportedTransport {
+            tool_id: tool.manifest.tool_id.clone(),
+            version: tool.manifest.version.clone(),
+            transport: tool.manifest.transport.clone(),
+        });
+    }
+    let active_grants = projection.active_grants(Utc::now());
+    let active_grant_ids: BTreeSet<&str> = active_grants
+        .iter()
+        .map(|grant| grant.grant_id.as_str())
+        .collect();
+    for grant_id in &lease.required_grants {
+        if !active_grant_ids.contains(grant_id.as_str()) {
+            return Err(GatewayError::MissingActiveGrant {
+                grant_id: grant_id.clone(),
+            });
+        }
+    }
+    if !tool_capabilities_covered(
+        &active_grants,
+        &lease.required_grants,
+        &tool.manifest.required_capabilities,
+    ) {
+        return Err(GatewayError::MissingToolCapability);
+    }
+    let confinement_prefixes = confinement_prefixes(&active_grants, &lease.required_grants);
+    if confinement_prefixes.is_empty() {
+        return Err(GatewayError::MissingConfinement);
+    }
+    let resolved = resolve_confined(&cwd, &confinement_prefixes)?;
+    let actual_target = resolved.display().to_string();
+    if actual_target != lease.target.resource_id {
+        return Err(GatewayError::ResolvedTargetChanged {
+            expected: lease.target.resource_id.clone(),
+            actual: actual_target,
+        });
+    }
+    let mut expected_side_effects = manifest
+        .expected_side_effects
+        .union(&tool.manifest.side_effects)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    expected_side_effects.insert(SideEffectClass::LocalWrite);
+    let started_at = Utc::now();
+    let execution = sandbox_execute(&SandboxRequest {
+        command,
+        args,
+        environment,
+        working_dir: resolved.display().to_string(),
+        path_prefixes: confinement_prefixes,
+        limits,
+    })?;
+    let observed_effects: BTreeSet<SideEffectClass> = if execution.diff.is_empty() {
+        BTreeSet::new()
+    } else {
+        BTreeSet::from([SideEffectClass::LocalWrite])
+    };
+    if !observed_effects.is_subset(&expected_side_effects) {
+        return Err(GatewayError::ObservedUndeclaredSideEffect);
+    }
+    let certified_effects: Vec<SideEffectClass> = observed_effects.iter().cloned().collect();
+    let side_effect_summary =
+        side_effect_summary(&execution, &observed_effects, &expected_side_effects);
+    let artifact_refs: Vec<String> = execution
+        .diff
+        .created
+        .iter()
+        .chain(execution.diff.modified.iter())
+        .cloned()
+        .collect();
+    let receipt_outcome = store.append_receipt_for_execution_lease(
         session_id,
         lease_id,
-        |projection, lease| {
-            let manifest = projection.manifest(&lease.action_id).ok_or_else(|| {
-                GatewayError::ClaimedActionMissingManifest {
-                    action_id: lease.action_id.clone(),
-                }
-            })?;
-            if manifest.inputs_digest != inputs_digest {
-                return Err(GatewayError::ClaimedActionInputDigestMismatch {
-                    action_id: lease.action_id.clone(),
-                });
-            }
-            let (tool_id, version, digest) = parse_tool_ref(&lease.tool_ref)?;
-            if tool_id != lease.tool_id {
-                return Err(GatewayError::LeaseToolRefMismatch {
-                    tool_id: lease.tool_id.clone(),
-                    tool_ref: lease.tool_ref.clone(),
-                });
-            }
-            if digest != inputs_digest {
-                return Err(GatewayError::ToolDigestMismatch);
-            }
-            if !registry.has_workspace_allowlist(&projection.session.workspace_id) {
-                return Err(GatewayError::MissingWorkspaceAllowlist {
-                    workspace_id: projection.session.workspace_id.clone(),
-                });
-            }
-            let tool = registry.resolve(
-                &ResolveRequest::new(tool_id, version)
-                    .in_workspace(projection.session.workspace_id.clone())
-                    .expecting_digest(digest.clone()),
-            )?;
-            if tool.manifest.transport != "local_shell" {
-                return Err(GatewayError::UnsupportedTransport {
-                    tool_id: tool.manifest.tool_id.clone(),
-                    version: tool.manifest.version.clone(),
-                    transport: tool.manifest.transport.clone(),
-                });
-            }
-            let active_grants = projection.active_grants(Utc::now());
-            let active_grant_ids: BTreeSet<&str> = active_grants
-                .iter()
-                .map(|grant| grant.grant_id.as_str())
-                .collect();
-            for grant_id in &lease.required_grants {
-                if !active_grant_ids.contains(grant_id.as_str()) {
-                    return Err(GatewayError::MissingActiveGrant {
-                        grant_id: grant_id.clone(),
-                    });
-                }
-            }
-            if !tool_capabilities_covered(
-                &active_grants,
-                &lease.required_grants,
-                &tool.manifest.required_capabilities,
-            ) {
-                return Err(GatewayError::MissingToolCapability);
-            }
-            let confinement_prefixes = confinement_prefixes(&active_grants, &lease.required_grants);
-            if confinement_prefixes.is_empty() {
-                return Err(GatewayError::MissingConfinement);
-            }
-            let resolved = resolve_confined(&cwd, &confinement_prefixes)?;
-            let actual_target = resolved.display().to_string();
-            if actual_target != lease.target.resource_id {
-                return Err(GatewayError::ResolvedTargetChanged {
-                    expected: lease.target.resource_id.clone(),
-                    actual: actual_target,
-                });
-            }
-            let mut expected_side_effects = manifest
-                .expected_side_effects
-                .union(&tool.manifest.side_effects)
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            expected_side_effects.insert(SideEffectClass::LocalWrite);
-            let started_at = Utc::now();
-            let execution = sandbox_execute(&SandboxRequest {
-                command,
-                args,
-                environment,
-                working_dir: resolved.display().to_string(),
-                path_prefixes: confinement_prefixes,
-                limits,
-            })?;
-            let observed_effects: BTreeSet<SideEffectClass> = if execution.diff.is_empty() {
-                BTreeSet::new()
-            } else {
-                BTreeSet::from([SideEffectClass::LocalWrite])
-            };
-            if !observed_effects.is_subset(&expected_side_effects) {
-                return Err(GatewayError::ObservedUndeclaredSideEffect);
-            }
-            let certified_effects: Vec<SideEffectClass> =
-                observed_effects.iter().cloned().collect();
-            let side_effect_summary =
-                side_effect_summary(&execution, &observed_effects, &expected_side_effects);
-            let artifact_refs: Vec<String> = execution
-                .diff
-                .created
-                .iter()
-                .chain(execution.diff.modified.iter())
-                .cloned()
-                .collect();
-            Ok((
-                CapabilityReceiptInput {
-                    receipt_id,
-                    action_id: lease.action_id.clone(),
-                    tool_id: lease.tool_id.clone(),
-                    target: CapabilitySelector {
-                        resource_kind: lease.target.resource_kind.clone(),
-                        resource_id: execution.resolved_target.display().to_string(),
-                    },
-                    started_at,
-                    finished_at: Utc::now(),
-                    status: execution.status_str().to_string(),
-                    input_digest: inputs_digest,
-                    output_digest: execution.stdout_digest(),
-                    side_effect_summary,
-                    side_effects: certified_effects,
-                    external_ids: vec![
-                        format!("tool_ref={}", lease.tool_ref),
-                        format!("lease_id={}", lease.lease_id),
-                    ],
-                    artifact_refs,
-                    payment_receipt: None,
-                },
-                execution,
-            ))
+        CapabilityReceiptInput {
+            receipt_id,
+            action_id: lease.action_id.clone(),
+            tool_id: lease.tool_id.clone(),
+            target: CapabilitySelector {
+                resource_kind: lease.target.resource_kind.clone(),
+                resource_id: execution.resolved_target.display().to_string(),
+            },
+            started_at,
+            finished_at: Utc::now(),
+            status: execution.status_str().to_string(),
+            input_digest: inputs_digest,
+            output_digest: execution.stdout_digest(),
+            side_effect_summary,
+            side_effects: certified_effects,
+            external_ids: vec![
+                format!("tool_ref={}", lease.tool_ref),
+                format!("lease_id={}", lease.lease_id),
+            ],
+            artifact_refs,
+            payment_receipt: None,
         },
+        Utc::now(),
     )?;
     Ok(ClaimedGatewayOutcome {
         execution,

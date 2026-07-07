@@ -624,6 +624,15 @@ for that action. Generic receipt append paths refuse to complete open execution
 leases, so scheduler workers cannot bypass the claim token by posting a receipt
 that only matches the action id.
 
+For runtime local-shell workers, the claimed execution path snapshots the open
+lease and projection under the daemon session lock, releases that lock while
+the sandboxed command runs, and reacquires the lock only to append the terminal
+receipt through the exact lease id. New lease starts still require a running
+session, but a pause or cancel after the lease has started does not prevent the
+already-running worker from recording its final receipt. This keeps local
+lifecycle controls bounded independently of backend/tool execution time while
+preserving the durable lease as the only completion token.
+
 ## Scope boundary
 
 `action execute` now routes through the gateway and a daemon-owned durable local
