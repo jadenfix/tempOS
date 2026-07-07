@@ -45,6 +45,8 @@ coordination artifact, not a replacement for `final.md`.
 | 22 | `codex/bare-metal-host-profile-pipeline` | Add deterministic host-profile capture + host-profile-driven e2e gates | introduce host snapshot collector utility, profile file mode for readiness checks, local-e2e profile injection | 21 |
 | 23 | `codex/bare-metal-e2e-matrix-infra` | Add matrix-driven bare-metal acceptance gates and reproducible case fixtures | deterministic matrix cases, expected-fail assertions, matrix artifacts for PRs, local-e2e+CI wiring | 22 |
 | 24 | `codex/runtime-to-metal-scaffolding` | Add runtime-first migration map, repo runtime/metal slice boundaries, and phase-gated PR artifacts | create architecture map doc, local-e2e runtime-phase enforcement, matrix-case migration-phase assertions | 23 |
+| 25 | `codex/runtime-supervisor-service` | Add bounded runtime worker supervisor service | standalone supervised local-shell worker process over existing lease/recovery/heartbeat contracts, smoke gate, repo-map update | 24 |
+| 26 | `codex/mcp-stdio-gateway` | Add mediated MCP stdio gateway for agent adoption | minimal stdio MCP server exposing one local-shell tool through daemon admission, sandbox, leases, receipts, and bounded model-visible output | 25 |
 | A1 | `claude/multi-agent-pr-review-4cfv9t` | Add beater-os-audit independent verifier and trace viewer | offline independent journal/receipt re-verification, human-legible trace render, audit metrics, redaction-safe audit bundle, `beateros-audit` CLI | 1 |
 
 ## Cross-Agent Coordination Log

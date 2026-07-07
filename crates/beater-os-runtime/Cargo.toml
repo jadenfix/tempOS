@@ -14,11 +14,11 @@ beater-os-tool-gateway = { path = "../beater-os-tool-gateway" }
 beater-osd = { path = "../beater-osd" }
 chrono.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

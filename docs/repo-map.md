@@ -80,6 +80,11 @@ review boundaries.
   - Typed agent runtime loop over the daemon store: session bootstrap, bounded
     grant issuance, sequential step admission, and no-side-effect observation
     receipts.
+  - Bounded `beater-os-runtime-worker supervise-local-shell` service binary that
+    repeatedly runs the supervised local-shell cycle without direct store
+    mutation authority: expired open leases are reconciled as `outcome_unknown`,
+    live leases block, and runnable work is claimed/completed through daemon
+    execution leases.
   - Typed local-shell worker-once API that registers the exact command digest,
     selects a daemon-claimable admitted action, claims a durable execution
     lease, optionally emits bounded heartbeat renewals while the sandboxed
@@ -134,6 +139,10 @@ review boundaries.
     reconciled as `outcome_unknown` before later admitted work is dispatched,
     while live leases block without recovery and reconciled actions are not
     retried.
+- `scripts/run-beater-os-runtime-supervisor-service-smoke.py`
+  - Runtime worker supervisor service smoke proving the standalone
+    `beater-os-runtime-worker` binary can recover expired lease debt and drain
+    later runnable local-shell work through the same daemon lease/receipt path.
 - `scripts/run-beater-osd-http-execute-smoke.py`
   - Token-gated daemon HTTP execution smoke over the local shell gateway.
 - `scripts/run-beater-osd-http-pending-worker-smoke.py`
