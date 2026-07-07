@@ -957,8 +957,17 @@ impl Store {
         _created_at: DateTime<Utc>,
     ) -> DaemonResult<ReceiptAppendOutcome> {
         self.with_session_lock(session_id, || {
-            let projection = self.project_unlocked(session_id)?;
+            let journal = self.load_journal_unlocked(session_id)?;
+            let projection = project_journal(session_id, &journal)?;
             ensure_session_running(&projection.session)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            if let Some(open_lease) = admission_state.open_execution_leases.get(&input.action_id)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "receipt for action {} must complete execution lease {} through lease-bound completion",
+                    input.action_id, open_lease.lease_id
+                )));
+            }
             let mut ledger = self.receipt_ledger_from_journal_unlocked(session_id)?;
             let receipt = ledger.append(input)?;
             let receipt_record = self.append_event_unlocked(
