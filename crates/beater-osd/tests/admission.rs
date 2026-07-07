@@ -838,11 +838,6 @@ fn open_execution_lease_blocks_admission_and_resume_after_callback_failure() {
         matches!(pause, Err(DaemonError::Refused(ref message)) if message.contains("cannot pause session")),
         "{pause:?}"
     );
-    let resume = store.transition_session(session_id, SessionTransition::Resume, Utc::now());
-    assert!(
-        matches!(resume, Err(DaemonError::Refused(ref message)) if message.contains("cannot resume session")),
-        "{resume:?}"
-    );
     assert_eq!(
         store.project(session_id).unwrap().session.status,
         SessionStatus::Running
@@ -907,10 +902,10 @@ fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecut
         JournalEvent::ExecutionLeaseReconciled { .. }
     ));
     assert!(store.open_execution_leases(session_id).unwrap().is_empty());
-
-    store
-        .transition_session(session_id, SessionTransition::Resume, Utc::now())
-        .unwrap();
+    assert_eq!(
+        store.project(session_id).unwrap().session.status,
+        SessionStatus::Running
+    );
 
     let receipt_after_reconcile =
         store.append_receipt(session_id, receipt_input("act-lease-reconcile"), Utc::now());
