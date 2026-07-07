@@ -1062,7 +1062,18 @@ fn public_receipt_append_cannot_backdate_expired_execution_lease() {
     let mut backdated = receipt_input("act-backdate-lease");
     backdated.started_at = issued_lease.leased_at;
     backdated.finished_at = issued_lease.leased_at;
-    let result = store.append_receipt(session_id, backdated, issued_lease.leased_at);
+    let legacy_result = store.append_receipt(session_id, backdated.clone(), issued_lease.leased_at);
+    assert!(
+        matches!(legacy_result, Err(DaemonError::Refused(ref message)) if message.contains("lease-bound completion")),
+        "{legacy_result:?}"
+    );
+
+    let result = store.append_receipt_for_execution_lease(
+        session_id,
+        "lease-backdate",
+        backdated,
+        issued_lease.leased_at,
+    );
 
     assert!(
         matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("journaled after execution lease")),
