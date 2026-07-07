@@ -707,16 +707,19 @@ fn scheduler_projection(projection: &SessionProjection) -> SchedulerProjection {
         .filter(|lease| !closed_actions.contains(lease.action_id.as_str()))
         .map(|lease| (lease.action_id.as_str(), lease.lease_id.as_str()))
         .collect();
-    let latest_decisions: BTreeMap<&str, &DecisionResult> = projection
+    let latest_decisions: BTreeMap<&str, bool> = projection
         .decisions
         .iter()
-        .map(|decision| (decision.action_id.as_str(), &decision.result))
+        .map(|decision| {
+            (
+                decision.action_id.as_str(),
+                decision.result == DecisionResult::Allowed,
+            )
+        })
         .collect();
     let pending_allowed_action_ids: Vec<String> = latest_decisions
         .iter()
-        .filter(|(action_id, result)| {
-            *result == &DecisionResult::Allowed && !closed_actions.contains(*action_id)
-        })
+        .filter(|(action_id, allowed)| **allowed && !closed_actions.contains(*action_id))
         .map(|(action_id, _)| (*action_id).to_string())
         .collect();
     let runnable_pending_action_ids: Vec<String> = pending_allowed_action_ids
