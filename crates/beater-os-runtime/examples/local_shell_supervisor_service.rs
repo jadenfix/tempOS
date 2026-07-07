@@ -100,7 +100,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut grant = GrantRequest::new(ResourceKind::FilePath, "*", [ActionKind::Execute]);
     grant.constraints = GrantConstraints {
-        max_risk: Some(RiskClass::High),
+        max_risk: None,
+        max_data_class: None,
         budget: Budget {
             max_model_cents: None,
             max_tool_calls: Some(1),
