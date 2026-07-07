@@ -661,6 +661,24 @@ fn verify_event_causality(
                         ),
                     );
                 }
+                if record.created_at > lease.expires_at {
+                    return causality_error(
+                        record.seq,
+                        format!(
+                            "receipt {} was journaled after execution lease {} expired",
+                            receipt.receipt_id, lease.lease_id
+                        ),
+                    );
+                }
+                if receipt.finished_at > record.created_at {
+                    return causality_error(
+                        record.seq,
+                        format!(
+                            "receipt {} finished after it was journaled",
+                            receipt.receipt_id
+                        ),
+                    );
+                }
             }
             validate_payment_receipt(record.seq, record.created_at, manifest, receipt, state)?;
             state.receipted_actions.insert(receipt.action_id.clone());

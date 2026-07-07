@@ -806,6 +806,48 @@ fn expired_execution_lease_cannot_be_consumed_by_receipt() {
 }
 
 #[test]
+fn public_receipt_append_cannot_backdate_expired_execution_lease() {
+    let (_root, store) = create_store_with_session("receipt-backdate-lease", "sess_backdate_lease");
+    let session_id = "sess_backdate_lease";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-backdate-lease");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let now = Utc::now();
+    let mut lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-backdate");
+    lease.leased_at = now;
+    lease.expires_at = now + TimeDelta::milliseconds(1);
+
+    let failed = store.execute_and_append_receipt(
+        session_id,
+        lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            Err(DaemonError::Refused(
+                "simulated crash after lease".to_string(),
+            ))
+        },
+    );
+    assert!(
+        matches!(failed, Err(DaemonError::Refused(ref message)) if message.contains("simulated crash after lease")),
+        "{failed:?}"
+    );
+    thread::sleep(Duration::from_millis(5));
+
+    let mut backdated = receipt_input("act-backdate-lease");
+    backdated.started_at = now;
+    backdated.finished_at = now;
+    let result = store.append_receipt(session_id, backdated, Utc::now());
+
+    assert!(
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("journaled after execution lease")),
+        "{result:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+}
+
+#[test]
 fn readmission_after_denial_can_use_new_grant_evidence() {
     let (_root, store) = create_store_with_session("admit-readmit", "sess_readmit");
     let session_id = "sess_readmit";
