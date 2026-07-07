@@ -100,6 +100,10 @@ $ beaterosctl action propose --session demo --tool fs.write --kind write \
 action a1
   decision:    Allowed
 
+Pre-admitted worker actions may also supply an explicit `--inputs-digest` and
+`--max-wall-ms` so a later scheduler claim can bind the action to a pinned tool
+digest and finite execution lease without executing inline.
+
 # An out-of-scope canonical path is refused by policy — not by the model.
 $ beaterosctl action propose --session demo --tool fs.write --kind write \
     --target-kind file_path --target /etc/hosts --resolved-target /etc/hosts \

@@ -531,7 +531,10 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     }
 
     let inputs_summary = args.get_or("summary", "").to_string();
-    let inputs_digest = hash_json(&inputs_summary)?;
+    let inputs_digest = match args.get("inputs-digest") {
+        Some(value) => value.to_string(),
+        None => hash_json(&inputs_summary)?,
+    };
 
     let required_grants: BTreeSet<String> = args.csv("grants").into_iter().collect();
 
@@ -575,7 +578,17 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         expected_outputs: Vec::new(),
         expected_side_effects,
         required_grants,
-        requested_budget: Budget::default(),
+        requested_budget: Budget {
+            max_wall_ms: args
+                .get("max-wall-ms")
+                .map(|value| {
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| CliError::invalid("max-wall-ms", value))
+                })
+                .transpose()?,
+            ..Budget::default()
+        },
         risk_class,
         data_classes,
         taint,
