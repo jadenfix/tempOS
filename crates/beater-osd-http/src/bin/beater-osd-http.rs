@@ -34,7 +34,10 @@ use beater_os_tool_gateway::{
     ExecutionReplayEvidence, GatewayError, LocalToolInvocation, execute_local_tool,
     local_shell_tool_digest_with_environment,
 };
-use beater_osd::{DAEMON_POLICY_VERSION, DaemonError, LocalShellToolRegistration, Store};
+use beater_osd::{
+    DAEMON_POLICY_VERSION, DaemonError, ExecutionLeaseClaimRequest, LocalShellToolRegistration,
+    Store,
+};
 use chrono::{Duration, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -573,6 +576,26 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
             Err(err) => (500, json_error("store_error", &err.to_string())),
         },
         ("POST", "/v1/runtime/bundles") => runtime_bundle_route(store, request),
+        ("POST", path) if path.starts_with("/v1/sessions/") => {
+            if let Some((session_id, action_id)) = parse_action_claim_path(path) {
+                return claim_execution_lease_route(store, session_id, action_id, request);
+            }
+            if let Some((session_id, action_id, lease_id)) = parse_action_complete_path(path) {
+                return complete_execution_lease_route(
+                    store, session_id, action_id, lease_id, request,
+                );
+            }
+            if path.ends_with("/actions/execute-local-shell") {
+                let session_id = path
+                    .trim_start_matches("/v1/sessions/")
+                    .trim_end_matches("/actions/execute-local-shell");
+                if session_id.is_empty() || session_id.contains('/') {
+                    return (404, json_error("not_found", "unknown control-plane route"));
+                }
+                return execute_local_shell_route(store, session_id, request);
+            }
+            (404, json_error("not_found", "unknown control-plane route"))
+        }
         ("GET", path) if path.starts_with("/v1/sessions/") => {
             let session_id = path.trim_start_matches("/v1/sessions/");
             if session_id.contains('/') {
@@ -614,24 +637,43 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
                 Err(err) => (500, json_error("store_error", &err.to_string())),
             }
         }
-        ("POST", path)
-            if path.starts_with("/v1/sessions/")
-                && path.ends_with("/actions/execute-local-shell") =>
-        {
-            let session_id = path
-                .trim_start_matches("/v1/sessions/")
-                .trim_end_matches("/actions/execute-local-shell");
-            if session_id.is_empty() || session_id.contains('/') {
-                return (404, json_error("not_found", "unknown control-plane route"));
-            }
-            execute_local_shell_route(store, session_id, request)
-        }
         ("GET" | "POST", _) => (404, json_error("not_found", "unknown control-plane route")),
         _ => (
             405,
             json_error("method_not_allowed", "unsupported method for route"),
         ),
     }
+}
+
+fn parse_action_claim_path(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/v1/sessions/")?;
+    let (session_id, action_path) = rest.split_once("/actions/")?;
+    let action_id = action_path.strip_suffix("/claims")?;
+    if session_id.is_empty()
+        || action_id.is_empty()
+        || session_id.contains('/')
+        || action_id.contains('/')
+    {
+        return None;
+    }
+    Some((session_id, action_id))
+}
+
+fn parse_action_complete_path(path: &str) -> Option<(&str, &str, &str)> {
+    let rest = path.strip_prefix("/v1/sessions/")?;
+    let (session_id, action_path) = rest.split_once("/actions/")?;
+    let (action_id, lease_path) = action_path.split_once("/claims/")?;
+    let lease_id = lease_path.strip_suffix("/complete")?;
+    if session_id.is_empty()
+        || action_id.is_empty()
+        || lease_id.is_empty()
+        || session_id.contains('/')
+        || action_id.contains('/')
+        || lease_id.contains('/')
+    {
+        return None;
+    }
+    Some((session_id, action_id, lease_id))
 }
 
 struct SchedulerProjection {
@@ -770,6 +812,139 @@ fn execute_local_shell_route(
         Err(ControlExecutionError::Gateway(err)) => {
             (500, json_error("gateway_error", &err.to_string()))
         }
+    }
+}
+
+fn claim_execution_lease_route(
+    store: &Store,
+    session_id: &str,
+    action_id: &str,
+    request: &ControlRequest,
+) -> (u16, String) {
+    if !request.headers.contains_key("content-length") {
+        return (
+            400,
+            json_error("missing_content_length", "POST requires Content-Length"),
+        );
+    }
+    let payload = match serde_json::from_slice::<ClaimExecutionLeaseHttpRequest>(&request.body) {
+        Ok(payload) => payload,
+        Err(err) => return (400, json_error("bad_json", &err.to_string())),
+    };
+    let expected_manifest_hash = payload.expected_manifest_hash;
+    let expected_decision_id = payload.expected_decision_id;
+    let expected_tool_version = payload.expected_tool_version;
+    let expected_tool_digest = payload.expected_tool_digest;
+    let lease_id = payload
+        .lease_id
+        .unwrap_or_else(|| format!("lease-{expected_decision_id}"));
+    match store.claim_execution_lease_from_admission(
+        session_id,
+        ExecutionLeaseClaimRequest {
+            lease_id,
+            action_id: action_id.to_string(),
+            expected_manifest_hash,
+            expected_decision_id,
+            expected_tool_version,
+            expected_tool_digest,
+        },
+        Utc::now(),
+    ) {
+        Ok(outcome) => {
+            let lease = outcome.lease;
+            let lease_hash = outcome.lease_record.hash;
+            serialize_response(
+                201,
+                &ClaimExecutionLeaseResponse {
+                    session_id: lease.session_id,
+                    action_id: lease.action_id,
+                    lease_id: lease.lease_id,
+                    manifest_hash: lease.manifest_hash,
+                    decision_id: lease.decision_id,
+                    tool_id: lease.tool_id,
+                    tool_ref: lease.tool_ref,
+                    target: lease.target,
+                    required_grants: lease.required_grants,
+                    requested_budget: lease.requested_budget,
+                    leased_at: lease.leased_at.to_rfc3339(),
+                    expires_at: lease.expires_at.to_rfc3339(),
+                    lease_seq: outcome.lease_record.seq,
+                    lease_hash: lease_hash.clone(),
+                    journal_root_hash: lease_hash,
+                },
+            )
+        }
+        Err(err) => daemon_error_response(err),
+    }
+}
+
+fn complete_execution_lease_route(
+    store: &Store,
+    session_id: &str,
+    action_id: &str,
+    lease_id: &str,
+    request: &ControlRequest,
+) -> (u16, String) {
+    if !request.headers.contains_key("content-length") {
+        return (
+            400,
+            json_error("missing_content_length", "POST requires Content-Length"),
+        );
+    }
+    let input = match serde_json::from_slice::<CapabilityReceiptInput>(&request.body) {
+        Ok(input) => input,
+        Err(err) => return (400, json_error("bad_json", &err.to_string())),
+    };
+    if input.action_id != action_id {
+        return (
+            400,
+            json_error(
+                "bad_request",
+                "receipt action_id must match the action id in the route",
+            ),
+        );
+    }
+    match store.append_receipt_for_execution_lease(session_id, lease_id, input, Utc::now()) {
+        Ok(outcome) => {
+            let receipt_journal_hash = outcome.receipt_record.hash;
+            serialize_response(
+                200,
+                &CompleteExecutionLeaseResponse {
+                    session_id: session_id.to_string(),
+                    action_id: action_id.to_string(),
+                    lease_id: lease_id.to_string(),
+                    receipt_id: outcome.receipt.receipt_id,
+                    receipt_seq: outcome.receipt.seq,
+                    receipt_hash: outcome.receipt.receipt_hash,
+                    receipt_journal_seq: outcome.receipt_record.seq,
+                    receipt_journal_hash: receipt_journal_hash.clone(),
+                    final_journal_root_hash: receipt_journal_hash,
+                },
+            )
+        }
+        Err(err) => daemon_error_response(err),
+    }
+}
+
+fn serialize_response<T: Serialize>(status: u16, response: &T) -> (u16, String) {
+    (
+        status,
+        serde_json::to_string(response).unwrap_or_else(|err| {
+            json_error(
+                "serialize_error",
+                &format!("could not serialize response: {err}"),
+            )
+        }),
+    )
+}
+
+fn daemon_error_response(err: DaemonError) -> (u16, String) {
+    let message = err.to_string();
+    match err {
+        DaemonError::SessionNotFound(_) => (404, json_error("session_not_found", &message)),
+        DaemonError::Invalid { .. } => (400, json_error("bad_request", &message)),
+        DaemonError::Refused(_) | DaemonError::Core(_) => (403, json_error("refused", &message)),
+        _ => (500, json_error("store_error", &message)),
     }
 }
 
@@ -1046,6 +1221,17 @@ enum ControlExecutionError {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ClaimExecutionLeaseHttpRequest {
+    expected_manifest_hash: String,
+    expected_decision_id: String,
+    expected_tool_version: String,
+    expected_tool_digest: String,
+    #[serde(default)]
+    lease_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ExecuteLocalShellRequest {
     #[serde(default)]
     action_id: Option<String>,
@@ -1084,6 +1270,38 @@ struct ExecuteLocalShellRequest {
     timeout_secs: Option<u64>,
     #[serde(default)]
     max_output_bytes: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaimExecutionLeaseResponse {
+    session_id: String,
+    action_id: String,
+    lease_id: String,
+    manifest_hash: String,
+    decision_id: String,
+    tool_id: String,
+    tool_ref: String,
+    target: CapabilitySelector,
+    required_grants: BTreeSet<String>,
+    requested_budget: Budget,
+    leased_at: String,
+    expires_at: String,
+    lease_seq: u64,
+    lease_hash: String,
+    journal_root_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CompleteExecutionLeaseResponse {
+    session_id: String,
+    action_id: String,
+    lease_id: String,
+    receipt_id: String,
+    receipt_seq: u64,
+    receipt_hash: String,
+    receipt_journal_seq: u64,
+    receipt_journal_hash: String,
+    final_journal_root_hash: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1167,6 +1385,7 @@ impl From<&ExecutionReplayEvidence> for ExecutionEvidenceResponse {
 fn control_response(status: u16, body: String) -> String {
     let reason = match status {
         200 => "OK",
+        201 => "Created",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",

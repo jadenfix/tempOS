@@ -26,12 +26,18 @@ review boundaries.
     for admission decisions).
 - `crates/beater-osd-http`
   - Loopback HTTP control-plane binary over `beater-osd` and the tool gateway,
-    including token-gated local shell execution and hosted runtime bundle
-    submission.
+    including token-gated local shell execution, hosted runtime bundle
+    submission, and scheduler execution-lease claim/completion routes.
   - Session projection responses expose execution-lease recovery blockers so
     operators can distinguish ordinary idle state from runnable pending work,
     paused admission, and unresolved side-effect recovery debt without exporting
     the full journal.
+  - Scheduler claim routes derive execution leases from journaled manifest and
+    policy decision state using expected manifest/decision/tool
+    compare-and-set fields, resolve pinned tool identity through the
+    daemon-owned registry, and return the derived target/grants/budget lease
+    authority; completion requires the exact open lease id before appending a
+    receipt.
   - Local-shell execution can dispatch an existing scheduler-runnable pending
     action only when the journal projection proves it has no receipt, open
     execution lease, or outcome-unknown reconciliation; the daemon execution

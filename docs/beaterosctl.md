@@ -405,6 +405,8 @@ binary that sits above the store and the tool gateway. It preserves the same
 loopback, `Host`/`Origin`, and bearer-token boundary, and adds:
 
 - `POST /v1/sessions/<id>/actions/execute-local-shell`
+- `POST /v1/sessions/<id>/actions/<action_id>/claims`
+- `POST /v1/sessions/<id>/actions/<action_id>/claims/<lease_id>/complete`
 - `POST /v1/runtime/bundles`
 
 That route accepts a bounded JSON request (`command`, `cwd`, `grants`, optional
@@ -461,6 +463,26 @@ include `dispatch: "runnable_pending_action"` for this path and
 `dispatch: "new_action"` for fresh action submission. The durable execution
 lease remains the atomic worker claim, so competing workers cannot both execute
 the same pending action.
+
+Schedulers that split claim from execution use
+`POST /v1/sessions/<id>/actions/<action_id>/claims`. The request carries only
+compare-and-set fields (`expected_manifest_hash`, `expected_decision_id`, and
+`expected_tool_version`, `expected_tool_digest`, and an optional `lease_id`);
+it does not carry target, grant, or budget authority. The daemon rebuilds the
+latest admitted manifest and policy decision from the journal, resolves the
+pinned tool through the daemon-owned registry, derives the execution lease from
+that state, fsyncs `ExecutionLeaseIssued`, and returns the lease id, manifest
+hash, decision id, pinned `tool_id@version#digest`, target, required grants,
+budget, lease journal sequence/hash, expiration, and journal root hash with
+`201 Created`.
+
+Workers complete claimed work with
+`POST /v1/sessions/<id>/actions/<action_id>/claims/<lease_id>/complete` and a
+receipt-shaped body. The receipt `action_id` must match the route action id,
+and the store accepts it only if `<lease_id>` is the exact currently open lease
+for that action. Generic receipt append paths refuse to complete open execution
+leases, so scheduler workers cannot bypass the claim token by posting a receipt
+that only matches the action id.
 
 ## Scope boundary
 
