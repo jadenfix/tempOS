@@ -819,10 +819,8 @@ fn public_receipt_append_cannot_backdate_expired_execution_lease() {
     let admission = store
         .admit_action(session_id, execute_manifest.clone())
         .unwrap();
-    let now = Utc::now();
     let mut lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-backdate");
-    lease.leased_at = now;
-    lease.expires_at = now + TimeDelta::milliseconds(1);
+    lease.expires_at = lease.leased_at + TimeDelta::milliseconds(1);
 
     let failed = store.execute_and_append_receipt(
         session_id,
@@ -838,15 +836,26 @@ fn public_receipt_append_cannot_backdate_expired_execution_lease() {
         matches!(failed, Err(DaemonError::Refused(ref message)) if message.contains("simulated crash after lease")),
         "{failed:?}"
     );
+    let journal = store.load_journal(session_id).unwrap();
+    let issued_lease = journal
+        .records()
+        .iter()
+        .find_map(|record| match &record.event {
+            JournalEvent::ExecutionLeaseIssued { lease } if lease.lease_id == "lease-backdate" => {
+                Some(lease.clone())
+            }
+            _ => None,
+        })
+        .expect("issued execution lease");
     thread::sleep(Duration::from_millis(5));
 
     let mut backdated = receipt_input("act-backdate-lease");
-    backdated.started_at = now;
-    backdated.finished_at = now;
-    let result = store.append_receipt(session_id, backdated, now);
+    backdated.started_at = issued_lease.leased_at;
+    backdated.finished_at = issued_lease.leased_at;
+    let result = store.append_receipt(session_id, backdated, issued_lease.leased_at);
 
     assert!(
-        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("execution lease lease-backdate")),
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("journaled after execution lease")),
         "{result:?}"
     );
     assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
