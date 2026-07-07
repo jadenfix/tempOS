@@ -631,19 +631,55 @@ pub struct RuntimeBundleProjectionSummary {
     pub active_grants: usize,
     pub actions: usize,
     pub decisions: usize,
+    #[serde(default)]
+    pub execution_leases: usize,
+    #[serde(default)]
+    pub open_execution_leases: usize,
+    #[serde(default)]
+    pub open_execution_lease_ids: Vec<String>,
+    #[serde(default)]
+    pub execution_reconciliations: usize,
+    #[serde(default)]
+    pub recovery_blocked: bool,
     pub receipts: usize,
 }
 
 impl RuntimeBundleProjectionSummary {
     fn from_projection(projection: &SessionProjection) -> Self {
+        let open_execution_lease_ids = open_execution_lease_ids(projection);
         Self {
             grants: projection.grants.len(),
             active_grants: projection.active_grants(Utc::now()).len(),
             actions: projection.manifests.len(),
             decisions: projection.decisions.len(),
+            execution_leases: projection.execution_leases.len(),
+            open_execution_leases: open_execution_lease_ids.len(),
+            recovery_blocked: !open_execution_lease_ids.is_empty(),
+            open_execution_lease_ids,
+            execution_reconciliations: projection.execution_reconciliations.len(),
             receipts: projection.receipts.len(),
         }
     }
+}
+
+fn open_execution_lease_ids(projection: &SessionProjection) -> Vec<String> {
+    let mut closed_actions: BTreeSet<&str> = projection
+        .receipts
+        .iter()
+        .map(|receipt| receipt.action_id.as_str())
+        .collect();
+    closed_actions.extend(
+        projection
+            .execution_reconciliations
+            .iter()
+            .map(|reconciliation| reconciliation.action_id.as_str()),
+    );
+    projection
+        .execution_leases
+        .iter()
+        .filter(|lease| !closed_actions.contains(lease.action_id.as_str()))
+        .map(|lease| lease.lease_id.clone())
+        .collect()
 }
 
 /// Deterministic replay anchor for one runtime step.
@@ -816,6 +852,9 @@ mod tests {
         assert_eq!(outcome.projection.grants, 1);
         assert_eq!(outcome.projection.actions, 1);
         assert_eq!(outcome.projection.decisions, 1);
+        assert_eq!(outcome.projection.execution_leases, 0);
+        assert_eq!(outcome.projection.open_execution_leases, 0);
+        assert!(!outcome.projection.recovery_blocked);
         assert_eq!(outcome.projection.receipts, 1);
 
         let _ = fs::remove_dir_all(root);

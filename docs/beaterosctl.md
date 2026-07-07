@@ -380,6 +380,11 @@ For read-only session projection, `beater-osd serve` exposes the first
 long-running local surface over the same daemon-owned store. It is intentionally
 small: `/healthz` is the only unauthenticated route, while `/v1/sessions` and
 `/v1/sessions/<id>` require a bearer token loaded from `--token-file`.
+Session projection responses include recovery fields:
+`execution_leases`, `open_execution_leases`, `open_execution_lease_ids`,
+`execution_reconciliations`, and `recovery_blocked`, so operators can see when
+runtime admission or resume is blocked by an unresolved execution lease without
+requesting a full trace export.
 
 ```console
 $ printf '%s\n' 'replace-with-operator-token' > .beateros/token
@@ -426,16 +431,19 @@ giving callers a direct store mutation API. The bundle path is smoke-gated by
 `POST /v1/runtime/bundles` is the daemon HTTP service boundary for the same
 contract. The route accepts a bounded JSON `RuntimeBundle`, runs it through
 `AgentRuntime::run_bundle` over the daemon store, and returns the full
-`RuntimeBundleOutcome` including step replay evidence. It does not import trace
-exports or replay historical journals into live state: each submitted bundle is
-new runtime work that must pass the current daemon admission path. Observation
-receipts remain limited to no-side-effect steps and are bound to the dedicated
-`tool:beater-os-runtime` observation tool; bundle submissions cannot mint
-receipts for gateway tools such as `shell`. Real process/tool side effects still
-belong behind `execute-local-shell`, the gateway, sandbox confinement, and
-receipt path. A token-authorized bundle may bootstrap a new session and its
-declared root capability, so this route is an authenticated authority-minting
-surface for new runtime work, not a read-only replay or import API.
+`RuntimeBundleOutcome` including step replay evidence and the same recovery
+summary counts (`open_execution_leases`, `open_execution_lease_ids`,
+`execution_reconciliations`, `recovery_blocked`) in its projection summary. It
+does not import trace exports or replay historical journals into live state:
+each submitted bundle is new runtime work that must pass the current daemon
+admission path. Observation receipts remain limited to no-side-effect steps and
+are bound to the dedicated `tool:beater-os-runtime` observation tool; bundle
+submissions cannot mint receipts for gateway tools such as `shell`. Real
+process/tool side effects still belong behind `execute-local-shell`, the
+gateway, sandbox confinement, and receipt path. A token-authorized bundle may
+bootstrap a new session and its declared root capability, so this route is an
+authenticated authority-minting surface for new runtime work, not a read-only
+replay or import API.
 
 ## Scope boundary
 

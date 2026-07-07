@@ -579,20 +579,29 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
                 return (404, json_error("not_found", "unknown control-plane route"));
             }
             match store.project(session_id) {
-                Ok(projection) => (
-                    200,
-                    serde_json::json!({
-                        "session_id": projection.session.session_id,
-                        "agent_id": projection.session.agent_id,
-                        "workspace_id": projection.session.workspace_id,
-                        "status": projection.session.status,
-                        "grants": projection.grants.len(),
-                        "actions": projection.manifests.len(),
-                        "decisions": projection.decisions.len(),
-                        "receipts": projection.receipts.len(),
-                    })
-                    .to_string(),
-                ),
+                Ok(projection) => {
+                    let open_execution_lease_ids = open_execution_lease_ids(&projection);
+                    let recovery_blocked = !open_execution_lease_ids.is_empty();
+                    (
+                        200,
+                        serde_json::json!({
+                            "session_id": projection.session.session_id,
+                            "agent_id": projection.session.agent_id,
+                            "workspace_id": projection.session.workspace_id,
+                            "status": projection.session.status,
+                            "grants": projection.grants.len(),
+                            "actions": projection.manifests.len(),
+                            "decisions": projection.decisions.len(),
+                            "execution_leases": projection.execution_leases.len(),
+                            "open_execution_leases": open_execution_lease_ids.len(),
+                            "open_execution_lease_ids": open_execution_lease_ids,
+                            "execution_reconciliations": projection.execution_reconciliations.len(),
+                            "recovery_blocked": recovery_blocked,
+                            "receipts": projection.receipts.len(),
+                        })
+                        .to_string(),
+                    )
+                }
                 Err(DaemonError::SessionNotFound(_)) => (
                     404,
                     json_error("session_not_found", "session does not exist"),
@@ -618,6 +627,26 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
             json_error("method_not_allowed", "unsupported method for route"),
         ),
     }
+}
+
+fn open_execution_lease_ids(projection: &beater_osd::SessionProjection) -> Vec<String> {
+    let mut closed_actions: BTreeSet<&str> = projection
+        .receipts
+        .iter()
+        .map(|receipt| receipt.action_id.as_str())
+        .collect();
+    closed_actions.extend(
+        projection
+            .execution_reconciliations
+            .iter()
+            .map(|reconciliation| reconciliation.action_id.as_str()),
+    );
+    projection
+        .execution_leases
+        .iter()
+        .filter(|lease| !closed_actions.contains(lease.action_id.as_str()))
+        .map(|lease| lease.lease_id.clone())
+        .collect()
 }
 
 fn runtime_bundle_route(store: &Store, request: &ControlRequest) -> (u16, String) {
