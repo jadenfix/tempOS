@@ -97,6 +97,10 @@ review boundaries.
   - Runtime first smoke proof.
 - `scripts/run-beater-os-runtime-smoke.py`
   - Hosted agent runtime bundle smoke proof over `beater-os-runtime`.
+- `scripts/run-beater-os-runtime-worker-smoke.py`
+  - Typed runtime worker-once smoke proving an admitted local-shell action is
+    selected, claimed, executed through the gateway, completed with a receipt,
+    and removed from the runnable queue.
 - `scripts/run-beater-osd-http-execute-smoke.py`
   - Token-gated daemon HTTP execution smoke over the local shell gateway.
 - `scripts/run-beater-osd-http-claims-smoke.py`

@@ -92,6 +92,12 @@ def build_plan(
     )
     gates.append(
         Gate(
+            "beater-os-runtime-worker-smoke",
+            (python, "scripts/run-beater-os-runtime-worker-smoke.py", "--json"),
+        )
+    )
+    gates.append(
+        Gate(
             "beater-osd-http-execute-smoke",
             (python, "scripts/run-beater-osd-http-execute-smoke.py", "--json"),
         )
