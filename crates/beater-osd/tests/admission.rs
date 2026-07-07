@@ -432,6 +432,12 @@ fn execution_lease_for(
     lease_id: &str,
 ) -> ExecutionLease {
     let now = Utc::now();
+    let lease_window_ms: i64 = manifest
+        .requested_budget
+        .max_wall_ms
+        .unwrap_or(10_000)
+        .try_into()
+        .unwrap();
     ExecutionLease {
         lease_id: lease_id.to_string(),
         session_id: manifest.session_id.clone(),
@@ -447,7 +453,7 @@ fn execution_lease_for(
         required_grants: manifest.required_grants.clone(),
         requested_budget: manifest.requested_budget.clone(),
         leased_at: now,
-        expires_at: now + TimeDelta::minutes(5),
+        expires_at: now + TimeDelta::milliseconds(lease_window_ms),
     }
 }
 
