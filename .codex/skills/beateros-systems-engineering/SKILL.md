@@ -16,6 +16,7 @@ For the full doctrine, read
 repo map and `final.md` when product intent or OS-level direction is unclear.
 For performance-sensitive work, language-boundary changes, accelerator paths, or
 optimization claims, also read `docs/optimization-agent-playbook.md`,
+`docs/engineering/metal-os-blueprint.md`,
 `docs/engineering/optimization-evidence-runbook.md`, and `docs/source-matrix.md`.
 
 This skill is paired with `beateros-pr-review`, which handles the reviewer-facing
@@ -70,6 +71,8 @@ contract and non-author merge process.
    - Keep `cargo fmt --all -- --check`, `cargo test --workspace --locked`, and
      `cargo clippy --workspace --all-targets --locked -- -D warnings` passing.
    - Do not add Linux-only APIs without a platform abstraction or macOS path.
+   - Keep hosted compatibility, Linux add-on, and true metal-lane work separate
+     unless evidence proves a layer transition.
 
 ## Optimization Priorities
 
@@ -107,4 +110,6 @@ contract and non-author merge process.
 - Repository `docs/optimization-agent-playbook.md`: optimization workflow,
   bottleneck taxonomy, language/toolchain discipline, and accelerator review
   packet.
+- Repository `docs/engineering/metal-os-blueprint.md`: hosted/Linux/metal lane
+  split, first-principles OS shape, and accelerator fabric.
 - Repository `docs/governance/coordination-ledger.md`: reviewer and merge evidence.

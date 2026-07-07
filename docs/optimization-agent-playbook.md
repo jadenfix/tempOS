@@ -10,6 +10,8 @@ accepted until a reviewer can replay the workload, identify the bottleneck, and
 see that authority, receipts, and macOS compatibility were preserved.
 Use `docs/engineering/optimization-evidence-runbook.md` for the compact packet
 shape that PR authors and reviewers should fill out.
+Use `docs/engineering/metal-os-blueprint.md` when the optimization changes the
+hosted compatibility, Linux add-on, or future metal lane boundary.
 
 ## Current Toolchain Discipline
 
@@ -182,11 +184,16 @@ Required infrastructure for serious performance work:
   budget, syscall budget, queue bounds, cancellation, fallback, and rollback
 - source note: current compiler/runtime/backend versions and links when the
   performance claim depends on toolchain or accelerator behavior
+- lane note: hosted compatibility, Linux add-on, or metal-touching lane, with
+  the reason this work belongs at that layer and the fallback path if the layer
+  is unavailable
 
 Expected repository locations as this infrastructure grows:
 
 - `docs/engineering/optimization-evidence-runbook.md`: human replay packet and
   reviewer questions.
+- `docs/engineering/metal-os-blueprint.md`: first-principles OS target, lane
+  split, language boundaries, accelerator fabric, and optimization infra.
 - `scripts/check-optimization-docs.py`: lightweight doctrine/source-matrix
   health gate.
 - `benchmarks/manifest.json`: future benchmark registry for workload, fixture,

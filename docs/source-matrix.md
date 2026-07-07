@@ -2,9 +2,9 @@
 
 Status: living verification artifact for `final.md` section 27.
 
-Last checked: 2026-07-06 from the macOS repository checkout for source-list
-shape and newly added systems inputs. The last full URL reachability pass was
-2026-07-03.
+Last checked: 2026-07-07 from the macOS repository checkout for source-list
+shape, toolchain/source freshness, and newly added systems inputs. The last full
+URL reachability pass was 2026-07-03.
 
 ## Purpose
 
@@ -133,9 +133,29 @@ portable contracts, not reasons to bind beaterOS to one vendor SDK.
 These sources support `docs/optimization-agent-playbook.md` and the language
 freshness notes in `docs/sota-systems-engineering.md`. They are not repo pins;
 they tell agents where to verify current facts before making toolchain claims.
-All versions in this table were checked against the linked official sources on
-2026-07-06; re-check those sources before treating any row as a
-current-version claim.
+Rows in this table carry their own `Verified on` dates; re-check the linked
+official sources before treating any row as a current-version claim.
+
+## 2026-07-07 Current-Source Refresh
+
+The following primary-source facts were re-checked for the metal OS blueprint
+and optimization guidance:
+
+- Rust official release feed shows Rust 1.96.1 on 2026-06-30.
+- LLVM project page shows LLVM 22.1.8 released on 2026-06-16.
+- Swift official forum/install pages show Swift 6.3.3 on 2026-06-30.
+- Python official downloads show Python 3.14.6 on 2026-06-10.
+- NVIDIA CUDA Toolkit archive shows CUDA Toolkit 13.3.1 in June 2026.
+- Apple Metal documentation shows Metal 4 and 2026 Apple Silicon ML/tensor
+  acceleration direction.
+- Google Cloud TPU docs show TPU7x/Ironwood as the current TPU architecture.
+- Linux kernel documentation covers `sched_ext`, and Linux/io_uring
+  documentation covers ring-buffer and zero-copy-oriented IO models.
+- Linux kernel Rust documentation and Rust-for-Linux remain the primary source
+  trail for Rust kernel-adjacent work.
+
+These facts are inputs to review. They do not change the repo-pinned Rust
+baseline or create a committed CUDA, Metal, TPU, LPU, NPU, or kernel backend.
 
 ## Toolchain Freshness Ledger
 
@@ -147,16 +167,16 @@ dated source snapshot.
 
 | Component | Upstream version/status | Repo baseline | Primary source | Source type | Source date | Verified on | Optimization relevance | Claim boundary |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Rust | Rust 1.96.1 | `rust-toolchain.toml` pins 1.93.1; `Cargo.toml` declares `rust-version = "1.93"` | https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Official release blog | 2026-06-30 | 2026-07-06 | Compiler, Cargo, stdlib, MIR/LLVM backend behavior, safety fixes | New Rust use is not automatic; benchmark and compatibility evidence required before changing repo baseline |
-| LLVM | LLVM 22.1.8 | Indirect through Rust/Apple/vendor toolchains unless explicitly invoked | https://llvm.org/ | Official project release page | 2026-06-16 | 2026-07-06 | Backend, sanitizer, C/C++ interop, vectorization, target support | LLVM version alone does not prove Rust, Apple Clang, CUDA, or vendor compiler behavior |
+| Rust | Rust 1.96.1 | `rust-toolchain.toml` pins 1.93.1; `Cargo.toml` declares `rust-version = "1.93"` | https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Official release blog | 2026-06-30 | 2026-07-07 | Compiler, Cargo, stdlib, MIR/LLVM backend behavior, safety fixes | New Rust use is not automatic; benchmark and compatibility evidence required before changing repo baseline |
+| LLVM | LLVM 22.1.8 | Indirect through Rust/Apple/vendor toolchains unless explicitly invoked | https://llvm.org/ | Official project release page | 2026-06-16 | 2026-07-07 | Backend, sanitizer, C/C++ interop, vectorization, target support | LLVM version alone does not prove Rust, Apple Clang, CUDA, or vendor compiler behavior |
 | Zig | 0.16.0 release; 0.17.0-dev snapshots visible on download page | No beaterOS TCB baseline | https://ziglang.org/download/ | Official download page | 2026-07-05 snapshot observed | 2026-07-06 | Freestanding and cross-compilation probes | Experimental only until toolchain stability and reviewer depth are proven |
-| Swift | Swift 6.3.3 | No authority-path baseline; Apple-native/platform integration only | https://forums.swift.org/t/announcing-swift-6-3-3/87888 | Official project forum announcement | 2026-06-30 | 2026-07-06 | Apple platform APIs, UI/platform integration, possible embedded/platform experiments | Swift is not the policy, journal, receipt, or scheduler authority boundary |
+| Swift | Swift 6.3.3 | No authority-path baseline; Apple-native/platform integration only | https://forums.swift.org/t/announcing-swift-6-3-3/87888 | Official project forum announcement | 2026-06-30 | 2026-07-07 | Apple platform APIs, UI/platform integration, possible embedded/platform experiments | Swift is not the policy, journal, receipt, or scheduler authority boundary |
 | Go | Go 1.26.4 artifacts on download page | No beaterOS authority baseline | https://go.dev/dl/ | Official download page | Dynamic release page | 2026-07-06 | Non-TCB infrastructure daemon/tooling checks | Not for policy, journals, receipts, or scheduler authority |
-| Python | Python 3.14.6 | Host `python3` for bounded scripts and local gates | https://www.python.org/downloads/ | Official download page | 2026-06-10 | 2026-07-06 | Audit, validation, research, replay scripts | Python scripts must remain bounded and non-authoritative |
-| CUDA Toolkit | CUDA Toolkit 13.3.1 shown in CUDA archive/download surfaces | No committed CUDA backend; Linux CUDA lane is experimental readiness metadata | https://developer.nvidia.com/cuda-toolkit-archive | Official vendor archive | 2026-06 | 2026-07-06 | GPU kernels, streams, launch overhead, occupancy, memory movement, profiler compatibility | CUDA is a backend behind beaterOS admission/telemetry/receipt contracts, not the OS contract |
+| Python | Python 3.14.6 | Host `python3` for bounded scripts and local gates | https://www.python.org/downloads/ | Official download page | 2026-06-10 | 2026-07-07 | Audit, validation, research, replay scripts | Python scripts must remain bounded and non-authoritative |
+| CUDA Toolkit | CUDA Toolkit 13.3.1 shown in CUDA archive/download surfaces | No committed CUDA backend; Linux CUDA lane is experimental readiness metadata | https://developer.nvidia.com/cuda-toolkit-archive | Official vendor archive | 2026-06 | 2026-07-07 | GPU kernels, streams, launch overhead, occupancy, memory movement, profiler compatibility | CUDA is a backend behind beaterOS admission/telemetry/receipt contracts, not the OS contract |
 | NVIDIA MIG | Latest MIG guide | No committed MIG backend; partitioning input for future GPU lanes | https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/index.html | Official vendor documentation | Dynamic latest page | 2026-07-06 | Hardware GPU partitioning and tenant isolation | Only certain NVIDIA datacenter GPUs support it; fallback isolation required |
-| Apple Metal | Metal 4 direction on Apple Developer "What's new" page | Apple Silicon readiness lane is metadata only; no committed Metal backend | https://developer.apple.com/metal/whats-new/ | Official vendor documentation | Dynamic 2026 page | 2026-07-06 | Local GPU, tensors, quantization, MPS/Core ML adjacent placement, Apple Silicon profiling | Framework placement can be opaque; record limitations and CPU fallback |
-| Cloud TPU | Cloud TPU docs and TPU7x/Ironwood architecture pages | No committed TPU backend | https://docs.cloud.google.com/tpu/docs | Official cloud/provider documentation | Dynamic documentation | 2026-07-06 | Matrix-heavy ML accelerator scheduling, pod/VM/GKE provider constraints | Provider-specific; admission, spend, telemetry, and receipts remain beaterOS-owned |
+| Apple Metal | Metal 4 direction on Apple Developer "What's new" page | Apple Silicon readiness lane is metadata only; no committed Metal backend | https://developer.apple.com/metal/whats-new/ | Official vendor documentation | Dynamic 2026 page | 2026-07-07 | Local GPU, tensors, quantization, MPS/Core ML adjacent placement, Apple Silicon profiling | Framework placement can be opaque; record limitations and CPU fallback |
+| Cloud TPU | Cloud TPU docs and TPU7x/Ironwood architecture pages | No committed TPU backend | https://docs.cloud.google.com/tpu/docs | Official cloud/provider documentation | Dynamic documentation | 2026-07-07 | Matrix-heavy ML accelerator scheduling, pod/VM/GKE provider constraints | Provider-specific; admission, spend, telemetry, and receipts remain beaterOS-owned |
 | Groq LPU | LPU architecture documentation | No committed LPU backend | https://groq.com/lpu-architecture | Vendor architecture documentation | Dynamic vendor page | 2026-07-06 | Deterministic low-jitter inference silicon as a distinct accelerator class | Vendor claims require measured validation and fallback |
 | OpenXLA/StableHLO/JAX | Portable compiler/interchange and array execution docs | No committed XLA backend | https://openxla.org/ and https://openxla.org/stablehlo/spec and https://docs.jax.dev/ | Official project documentation | Dynamic documentation | 2026-07-06 | TPU/GPU compiler portability, graph lowering, backend placement vocabulary | Local conformance and backend telemetry required before claims |
 

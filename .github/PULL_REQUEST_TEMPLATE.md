@@ -43,6 +43,8 @@ Use `docs/engineering/optimization-evidence-runbook.md` and
 workflow.
 
 - [ ] Hot path and cold path are named.
+- [ ] Target lane is named using `docs/engineering/metal-os-blueprint.md`:
+      hosted compatibility, Linux add-on, or metal-touching OS.
 - [ ] Bottleneck class is identified (contract, algorithm, layout, copy/encoding,
       syscall/IO, concurrency, scheduler/platform, accelerator, provider/runtime).
 - [ ] Baseline, target budget, replay command, workload/fixture, and regression

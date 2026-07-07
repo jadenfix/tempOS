@@ -92,6 +92,9 @@ compiler/runtime, accelerator, scheduler, or close-to-metal value. Mark it
       regression gate, macOS path, fallback, and rollback story.
 - [ ] Current language/compiler/backend claims cite `docs/source-matrix.md` or a
       newer primary source with verification date.
+- [ ] Lane placement is explicit and matches
+      `docs/engineering/metal-os-blueprint.md`: hosted compatibility, Linux
+      add-on, or metal-touching OS work.
 - [ ] The optimization attacks the named bottleneck class and does not add FFI,
       unsafe code, assembly, accelerator dependencies, or vendor lock-in before
       simpler contract, algorithm, layout, batching, caching, indexing, or

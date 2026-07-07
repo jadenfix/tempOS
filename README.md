@@ -1,21 +1,29 @@
-# beaterOS
+# tempOS / beaterOS
 
-beaterOS is a long-horizon, agent-first operating-system project. The end state
-is an OS stack that can touch metal where agents need new scheduler, memory, IO,
-device, isolation, authority, audit, and recovery boundaries. The first target is
-the hosted agent kernel that proves those contracts on macOS, Linux, containers,
-browsers, and cloud VMs before the project moves low-level components into a
-kernel, hypervisor, library OS, microVM, or hardware-backed appliance.
+tempOS is the long-horizon, agent-first operating-system program currently
+implemented in this repository under the beaterOS crate and binary names. The
+end state is not an app shell or agent framework. It is an OS stack that can
+touch metal where agents need native scheduler, memory, IO, device, isolation,
+authority, audit, accelerator, payment, and recovery boundaries. The first
+target is the hosted Rust agent kernel that proves those contracts on macOS,
+Linux, containers, browsers, and cloud VMs before any low-level component moves
+into a Linux add-on, kernel, hypervisor, library OS, microVM, or
+hardware-backed appliance.
 
-The project has two explicit lanes:
+The project has three explicit lanes:
 
 - **Compatibility lane:** a local-first Rust agent kernel for explicit
   authority, deterministic policy, sandboxed execution, receipts, memory
   provenance, eval gates, and auditable side effects on existing operating
   systems.
+- **Linux add-on lane:** optional Linux-native scheduler, IO, sandbox,
+  observability, microVM, and accelerator experiments using mechanisms such as
+  `sched_ext`, cgroups, namespaces, seccomp, eBPF/XDP, `io_uring`, DPDK, SPDK,
+  KVM, and Rust-for-Linux when traces prove they help.
 - **Metal lane:** a measured, multi-year path toward first-principles OS
-  components for agent workloads, using the most appropriate language and
-  platform boundary for each subsystem.
+  components for agent workloads: policy-aware scheduling, bounded memory and
+  context tiers, zero-copy evidence paths, high-assurance sandboxing,
+  accelerator fabric, crash recovery, and hardware-backed authority.
 
 Start with [AGENTS.md](AGENTS.md) for agent-facing repo context. The
 close-to-the-metal systems engineering rules are in
@@ -41,6 +49,7 @@ that a real metal-touching agent OS would need.
 | Systems skill | [beateros-systems-engineering SKILL](.codex/skills/beateros-systems-engineering/SKILL.md) | Runtime and systems engineering doctrine |
 | Implementation sequence | [docs/implementation-backlog.md](docs/implementation-backlog.md) | PR-sized slices and no-self-merge review rules |
 | Runtime-to-metal architecture | [docs/architecture-runtime-to-metal-path.md](docs/architecture-runtime-to-metal-path.md) | Runtime-first migration map, layer boundaries, and migration-gate expectations |
+| Metal OS blueprint | [docs/engineering/metal-os-blueprint.md](docs/engineering/metal-os-blueprint.md) | First-principles 2026 OS shape, Linux add-on split, accelerator fabric, and optimization evidence |
 | Systems engineering | [docs/sota-systems-engineering.md](docs/sota-systems-engineering.md) | Hot-path, Rust/C/assembly, security, and macOS doctrine |
 | Optimization infrastructure | [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md) | Bottleneck taxonomy, benchmarks, language baselines, and accelerator review gates |
 | Optimization evidence | [docs/engineering/optimization-evidence-runbook.md](docs/engineering/optimization-evidence-runbook.md) | Replay packet, language-boundary review, and accelerator evidence requirements |
@@ -70,20 +79,24 @@ Important `final.md` sections:
 
 ## First-Principles Direction
 
-beaterOS starts from scarce resources and trust boundaries, not from app
-features. Every serious subsystem should state its hot path, allocation budget,
-copy budget, syscall budget, queue bounds, p95/p99 target, authority boundary,
-and regression test before it claims to be optimized.
+tempOS starts from scarce resources and trust boundaries, not from app features.
+Every serious subsystem should state its hot path, allocation budget, copy
+budget, syscall budget, queue bounds, p95/p99 target, authority boundary, and
+regression test before it claims to be optimized.
 Agents doing performance-sensitive work should use
 [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md) for
 toolchain freshness checks, bottleneck classification, benchmark packets,
 language-boundary review, and accelerator evidence.
 
-The default implementation language is Rust. C is for stable ABI, driver,
-hypervisor, browser/embedder interop, existing high-quality C libraries, or a
-measured hot path where safe Rust cannot meet the requirement. Assembly is for
-unavoidable hardware entry points. TypeScript is acceptable for UI and agent
-ergonomics, but not as the authority boundary.
+The default implementation language is Rust because the authority path needs
+native performance, explicit ownership, strong concurrency checks, and a small
+unsafe surface. C is for stable ABI, driver, hypervisor, browser/embedder
+interop, existing high-quality C libraries, or a measured hot path where safe
+Rust cannot meet the requirement. C++ is for isolated vendor SDK and embedder
+surfaces when replacement is riskier than containment. Assembly is for
+unavoidable hardware entry points. TypeScript, Swift, Go, and Python are useful
+at product, platform, and tooling seams, but not as the policy, journal,
+receipt, scheduler, payment, or memory-provenance authority boundary.
 
 Accelerators are first-class OS resources. GPU, TPU, LPU, NPU, Apple
 Silicon-style local accelerators, media engines, enclaves, and future agent ASICs
@@ -96,6 +109,13 @@ Tempo and the rest of the ecosystem should run on beaterOS contracts: browser
 actions, sandboxed tools, model calls, memory projections, and receipts all flow
 through native policy, journal, and audit services. The UI can stay high-level;
 the OS boundary stays explicit, typed, measured, and replayable.
+
+The Linux add-on path and the true metal path are deliberately separate. Linux
+experiments can use the best current kernel primitives to learn quickly, but a
+Linux-specific API never becomes the portable OS contract unless macOS,
+fallback, and replay behavior are explicit. True metal work begins only after
+hosted traces prove the required boundary cannot be expressed cleanly above an
+existing kernel.
 
 ## Non-Goals
 

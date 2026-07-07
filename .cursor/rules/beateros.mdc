@@ -8,6 +8,7 @@ alwaysApply: true
 Read `AGENTS.md` first. It maps the repo, links to `final.md`, and points to the
 systems-engineering doctrine in `docs/sota-systems-engineering.md`.
 Use `docs/optimization-agent-playbook.md`,
+`docs/engineering/metal-os-blueprint.md`,
 `docs/engineering/optimization-evidence-runbook.md`, and
 `docs/source-matrix.md` for performance-sensitive work, replay packets, and
 current language/backend source snapshots.
@@ -31,6 +32,9 @@ Key rules:
   receipts, journals, memory, payments, and tool/model calls must fail closed.
 - Keep macOS and Apple Silicon working. Linux-only APIs require an abstraction or
   a documented macOS path.
+- Keep hosted compatibility, Linux add-on, and true metal-lane work separate.
+  Linux primitives can be measured add-ons, but they are not the portable
+  authority contract.
 - Treat GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, and future ASIC
   paths as scheduled OS resources behind beaterOS admission, memory, queue,
   telemetry, receipt, and fallback contracts.

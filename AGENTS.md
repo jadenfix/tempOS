@@ -1,11 +1,13 @@
-# beaterOS Agent Context
+# tempOS Agent Context
 
 Use this file as startup context for Codex, Claude Code, Cursor, Copilot, and
 other coding agents working in this repository.
 
-## What beaterOS Is
+## What tempOS Is
 
-beaterOS is an agent-first operating-system research and implementation repo.
+tempOS is an agent-first operating-system research and implementation repo.
+Current repo/path: `jadenfix/tempOS` and local path `beaterOS`; migrate package/binary
+naming explicitly when the Tempera rename work starts.
 The source-of-truth product plan is [final.md](final.md). Implementation must
 turn that plan into reviewed, measurable, macOS-compatible slices without
 shortening or weakening the plan.
@@ -24,14 +26,14 @@ agent sessions, capability grants, action manifests, policy decisions, receipts,
 and append-only journals. Future runtime work must preserve those contracts as
 authority and audit boundaries, not merely as serialization types.
 
-Tempo, beater.js, beatbox, beater-memory, and future ecosystem components should
+tempo, temp.js, cradle, remi, and future Tempera ecosystem components should
 run on these contracts. UI and agent ergonomics may live in higher-level
 languages, but authority, admission, journaling, receipt verification, memory
-projection, and scheduler-facing paths terminate in native beaterOS services.
+projection, and scheduler-facing paths terminate in native tempOS services.
 
 GPU, TPU, LPU, NPU, Apple Silicon-style local accelerators, enclaves, media
 engines, and future agent ASICs are first-class OS resources. Accelerator work
-must stay behind beaterOS admission, scheduling, memory, receipt, telemetry,
+must stay behind tempOS admission, scheduling, memory, receipt, telemetry,
 data-class, and fallback contracts; do not let a vendor SDK become the authority
 boundary.
 
@@ -54,6 +56,9 @@ boundary.
   performance-sensitive implementation, language-boundary decisions, compiler
   freshness checks, bottleneck analysis, accelerator review packets, and
   benchmark/trace evidence.
+- `docs/engineering/metal-os-blueprint.md` is the first-principles target for
+  the full OS program: hosted compatibility, Linux add-ons, future metal work,
+  language boundaries, accelerator fabric, and optimization infrastructure.
 - `docs/engineering/optimization-evidence-runbook.md` is the compact replay
   packet, language-boundary, and accelerator evidence runbook for optimization
   PRs.
@@ -92,6 +97,9 @@ boundary.
   syscalls, improve layout, then specialize. Move closer to metal only with a
   trace, benchmark, profile, or security proof that the current boundary cannot
   satisfy.
+- Keep the Linux add-on lane separate from the full metal OS lane. Linux
+  primitives can accelerate learning and deployment, but portable authority,
+  receipts, telemetry, fallback, and macOS behavior remain explicit contracts.
 - For accelerator paths, account for host-device copies, HBM/VRAM/SRAM
   residency, pinned memory, queue delay, kernel launch overhead, model/artifact
   digests, partitioning, thermals, power, cancellation, and fallback routes.
@@ -116,6 +124,8 @@ be able to answer:
   copy/encoding, syscall/IO, concurrency, scheduler/platform, accelerator, or
   provider/runtime?
 - What benchmark, trace, property test, or scenario would catch a regression?
+- Is this hosted compatibility work, Linux add-on work, or true metal-lane work,
+  and what evidence justifies that layer?
 - Why is the chosen language boundary the best fit, and if the tradeoff was
   close, why not Rust?
 - If this touches GPU, TPU, NPU, LPU, or future silicon acceleration, what
@@ -132,6 +142,13 @@ git diff --check
 python3 scripts/check-optimization-docs.py
 TMPDIR=/private/tmp python3 scripts/local-e2e.py
 ```
+
+## Storage
+
+Durable state is an authority boundary. Prefer append-only, checksummed,
+replayable journals and explicit local indexed state; use SQLite only when it is
+the right embedded index/store and keep receipt/audit semantics authoritative.
+Server databases must follow the root ecosystem storage split.
 
 ## Performance-Sensitive PR Packet
 
@@ -157,3 +174,27 @@ runtime, accelerator, or close-to-metal improvement must answer:
 - Regression gate:
 - Independent reviewer for performance + authority:
 ```
+
+## Ecosystem Migration Tasks
+
+Delete each item only after it is fully migrated and verified in this repo.
+
+- [ ] Migrate `rust-toolchain.toml` from `1.93.1` to `1.96.1` with `rustfmt`
+  and `clippy`, and update workspace `rust-version` from `1.93` to `1.96`.
+- [ ] Keep workspace edition `2024` and `rustfmt.toml` `style_edition = "2024"`.
+  Run `cargo fmt --all` after the toolchain bump.
+- [ ] Keep SOTA systems-engineering docs current when changing toolchain,
+  runtime, language-boundary, or accelerator assumptions. Update
+  `docs/source-matrix.md` if the migration changes compiler/runtime facts.
+- [ ] Keep uniform workspace lints enforced: `unsafe_code = "forbid"`,
+  `unwrap_used = "deny"`, and `expect_used = "deny"`. Add member
+  `lints.workspace = true` where Cargo requires it.
+- [ ] Migrate user-facing product naming from beaterOS to tempOS across docs,
+  packages, binaries, fixtures, and generated clients. Keep the local checkout
+  path stable until an explicit filesystem rename is requested.
+- [ ] Update local git remotes from `jadenfix/beaterOS` to `jadenfix/tempOS`
+  where checkouts still use the old remote.
+- [ ] Verification before deleting this queue: `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --locked -- -D warnings`,
+  `cargo test --workspace --locked`, `git diff --check`, and
+  `python3 scripts/check-optimization-docs.py`.

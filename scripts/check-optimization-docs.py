@@ -19,6 +19,14 @@ REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "## Required Optimization Packet",
         "## Portable Accelerator Contract Sketch",
         "## Accelerator Review Packet",
+        "docs/engineering/metal-os-blueprint.md",
+    ),
+    "docs/engineering/metal-os-blueprint.md": (
+        "## First-Principles OS Shape",
+        "## Three Engineering Lanes",
+        "## Accelerator Fabric",
+        "## Optimization Infrastructure For Agents",
+        "## Review Gate",
     ),
     "docs/engineering/optimization-evidence-runbook.md": (
         "## First-Principles Start",
@@ -41,35 +49,43 @@ REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "Before optimizing, classify the bottleneck:",
         "Accelerator engineering rules:",
         "Toolchain facts are temporal.",
+        "docs/engineering/metal-os-blueprint.md",
     ),
     "AGENTS.md": (
+        "docs/engineering/metal-os-blueprint.md",
         "docs/engineering/optimization-evidence-runbook.md",
         "Performance-Sensitive PR Packet",
     ),
     ".codex/skills/beateros-systems-engineering/SKILL.md": (
+        "docs/engineering/metal-os-blueprint.md",
         "docs/engineering/optimization-evidence-runbook.md",
         "docs/source-matrix.md",
     ),
     "CLAUDE.md": (
+        "docs/engineering/metal-os-blueprint.md",
         "docs/engineering/optimization-evidence-runbook.md",
         "docs/source-matrix.md",
         "GPU, TPU, LPU, NPU",
     ),
     ".cursor/rules/beateros.mdc": (
+        "docs/engineering/metal-os-blueprint.md",
         "docs/engineering/optimization-evidence-runbook.md",
         "docs/source-matrix.md",
         "GPU, TPU, LPU, NPU",
     ),
     "README.md": (
+        "docs/engineering/metal-os-blueprint.md",
         "docs/engineering/optimization-evidence-runbook.md",
         "python3 scripts/check-optimization-docs.py",
     ),
     ".github/PULL_REQUEST_TEMPLATE.md": (
+        "docs/engineering/metal-os-blueprint.md",
         "docs/engineering/optimization-evidence-runbook.md",
         "python3 scripts/check-optimization-docs.py",
     ),
     "docs/governance/review-checklist.md": (
         "## D. Optimization and metal-readiness review",
+        "docs/engineering/metal-os-blueprint.md",
         "docs/engineering/optimization-evidence-runbook.md",
         "docs/source-matrix.md",
     ),

@@ -1,10 +1,12 @@
-# beaterOS Claude Code Rules
+# tempOS Claude Code Rules
 
 Start with [AGENTS.md](AGENTS.md). It is the compact repo map and cross-agent
 context. The full plan is [final.md](final.md), and the systems-engineering
 doctrine is [docs/sota-systems-engineering.md](docs/sota-systems-engineering.md).
 Optimization workflow lives in
 [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md),
+the full OS lane blueprint lives in
+[docs/engineering/metal-os-blueprint.md](docs/engineering/metal-os-blueprint.md),
 replay packet rules live in
 [docs/engineering/optimization-evidence-runbook.md](docs/engineering/optimization-evidence-runbook.md),
 and temporal language/backend source snapshots live in
@@ -18,7 +20,7 @@ it, then keep changes PR-scoped and reviewed by a non-author.
 
 ## SOTA Systems Rule
 
-beaterOS should be designed like close-to-metal systems software:
+tempOS should be designed like close-to-metal systems software:
 
 - Start from invariants, budgets, and bottlenecks, not framework preference.
 - Prefer simple data layouts, bounded queues, explicit ownership, and measurable
@@ -36,8 +38,11 @@ beaterOS should be designed like close-to-metal systems software:
 - Keep macOS and Apple Silicon as first-class development targets. Linux-specific
   mechanisms need an abstraction, a macOS fallback, or an explicit future-target
   label.
+- Keep hosted compatibility, Linux add-on, and true metal-lane work separate.
+  Linux primitives are allowed when measured; they are not the portable
+  authority contract.
 - GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, and future ASIC paths
-  are OS resources behind beaterOS admission, queues, telemetry, receipts, and
+  are OS resources behind tempOS admission, queues, telemetry, receipts, and
   fallback contracts.
 
 ## Before Coding

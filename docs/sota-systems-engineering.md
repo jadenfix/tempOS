@@ -5,7 +5,9 @@ It applies to architecture docs, Rust code, future C/assembly boundaries,
 sandboxing, model routing, payment rails, journals, memory, and release gates.
 For detailed optimization-agent workflow, bottleneck taxonomy, toolchain
 freshness rules, and accelerator review packets, also use
-`docs/optimization-agent-playbook.md`.
+`docs/optimization-agent-playbook.md`. For the first-principles OS split
+between hosted compatibility, Linux add-ons, and future metal work, use
+`docs/engineering/metal-os-blueprint.md`.
 
 ## First Principles
 
@@ -97,6 +99,20 @@ Operational replay packets live in
 `docs/engineering/optimization-evidence-runbook.md` and the detailed workflow
 lives in `docs/optimization-agent-playbook.md`; this file owns doctrine, not
 per-PR evidence format.
+
+The project has three engineering lanes:
+
+- Hosted compatibility lane: portable Rust authority contracts on macOS, Linux,
+  containers, browsers, and cloud VMs.
+- Linux add-on lane: optional Linux-native scheduler, IO, sandbox, tracing,
+  microVM, and accelerator experiments when a trace proves they help.
+- Metal-touching OS lane: new low-level OS pieces only when hosted evidence
+  proves the host substrate cannot express the needed boundary.
+
+Linux add-ons can use `sched_ext`, eBPF/XDP, cgroups, namespaces, seccomp,
+`io_uring`, DPDK, SPDK, KVM, microVMs, Rust-for-Linux, or C kernel boundaries.
+They still implement beaterOS contracts; they do not become the portable
+authority model.
 
 Default choices:
 
