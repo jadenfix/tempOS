@@ -41,6 +41,9 @@ sed -n '/^## 27\\. Source Matrix/,/^## 28\\. Final Strategic Recommendation/p' f
 Current result:
 
 - 86 URLs are extracted from the current `final.md` section 27.
+- The 2026-07-03 full reachability pass covered an earlier 51-URL source list.
+  URLs added after that pass must not be described as fully reachability-audited
+  until a new pass records them.
 
 ## 2026-07-03 Reachability Pass
 
@@ -123,6 +126,8 @@ portable contracts, not reasons to bind beaterOS to one vendor SDK.
 | --- | --- | --- |
 | NVIDIA CUDA Programming Guide and CUDA Toolkit pages: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html and https://developer.nvidia.com/cuda/toolkit | GPU execution model, streams, memory movement, launch overhead, kernel optimization vocabulary, and CUDA 13.x feature tracking | CUDA-specific; keep OS contract vendor-neutral |
 | NVIDIA MIG User Guide: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/index.html | Hardware GPU partitioning and tenant isolation model for accelerator scheduling | Only supported on specific NVIDIA datacenter GPUs |
+| AMD ROCm and HIP documentation: https://rocm.docs.amd.com/en/latest/index.html and https://rocm.docs.amd.com/projects/HIP/en/latest/index.html | Portable GPU backend input for AMD devices, HIP/CUDA portability, profiling, compatibility, and isolation review | Linux/device matrix matters; keep OS contract vendor-neutral |
+| Intel oneAPI Level Zero specification: https://oneapi-src.github.io/level-zero-spec/ | Low-level direct-to-device runtime vocabulary for discovery, memory, command queues, and explicit accelerator control | Vendor/runtime-specific; SYCL/Level Zero behavior must be locally measured |
 | OpenXLA, StableHLO, and JAX docs: https://openxla.org/ and https://openxla.org/stablehlo/spec and https://docs.jax.dev/ | Portable accelerator compiler shape, StableHLO as an ML compiler interchange layer, and CPU/GPU/TPU array execution vocabulary | Framework/compiler behavior changes; conformance must be local |
 | Google Cloud TPU documentation and TPU architecture docs: https://docs.cloud.google.com/tpu/docs and https://docs.cloud.google.com/tpu/docs/system-architecture-tpu-vm | TPU as custom ASIC/pod resource for matrix-heavy ML workloads through VM/GKE/Vertex surfaces | Cloud/provider-specific; APIs and generations change |
 | Groq LPU architecture documentation: https://groq.com/lpu-architecture | Deterministic token-generation silicon and low-jitter inference as a distinct accelerator class | Vendor-specific claims need benchmarked local validation |
@@ -146,6 +151,10 @@ and optimization guidance:
 - Swift official forum/install pages show Swift 6.3.3 on 2026-06-30.
 - Python official downloads show Python 3.14.6 on 2026-06-10.
 - NVIDIA CUDA Toolkit archive shows CUDA Toolkit 13.3.1 in June 2026.
+- AMD ROCm/HIP documentation shows HIP 7.x material and current ROCm
+  programming, profiling, compatibility, and isolation guidance.
+- Intel oneAPI Level Zero documentation shows the current low-level direct
+  device runtime specification.
 - Apple Metal documentation shows Metal 4 and 2026 Apple Silicon ML/tensor
   acceleration direction.
 - Google Cloud TPU docs show TPU7x/Ironwood as the current TPU architecture.
@@ -169,16 +178,27 @@ dated source snapshot.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Rust | Rust 1.96.1 | `rust-toolchain.toml` pins 1.93.1; `Cargo.toml` declares `rust-version = "1.93"` | https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Official release blog | 2026-06-30 | 2026-07-07 | Compiler, Cargo, stdlib, MIR/LLVM backend behavior, safety fixes | New Rust use is not automatic; benchmark and compatibility evidence required before changing repo baseline |
 | LLVM | LLVM 22.1.8 | Indirect through Rust/Apple/vendor toolchains unless explicitly invoked | https://llvm.org/ | Official project release page | 2026-06-16 | 2026-07-07 | Backend, sanitizer, C/C++ interop, vectorization, target support | LLVM version alone does not prove Rust, Apple Clang, CUDA, or vendor compiler behavior |
-| Zig | 0.16.0 release; 0.17.0-dev snapshots visible on download page | No beaterOS TCB baseline | https://ziglang.org/download/ | Official download page | 2026-07-05 snapshot observed | 2026-07-06 | Freestanding and cross-compilation probes | Experimental only until toolchain stability and reviewer depth are proven |
+| Zig | 0.16.0 release; 0.17.0-dev snapshots visible on download page | No beaterOS TCB baseline | https://ziglang.org/download/ | Official download page | 2026-07-05 snapshot observed | 2026-07-07 | Freestanding and cross-compilation probes | Experimental only until toolchain stability and reviewer depth are proven |
 | Swift | Swift 6.3.3 | No authority-path baseline; Apple-native/platform integration only | https://forums.swift.org/t/announcing-swift-6-3-3/87888 | Official project forum announcement | 2026-06-30 | 2026-07-07 | Apple platform APIs, UI/platform integration, possible embedded/platform experiments | Swift is not the policy, journal, receipt, or scheduler authority boundary |
-| Go | Go 1.26.4 artifacts on download page | No beaterOS authority baseline | https://go.dev/dl/ | Official download page | Dynamic release page | 2026-07-06 | Non-TCB infrastructure daemon/tooling checks | Not for policy, journals, receipts, or scheduler authority |
+| Go | Go 1.26.4 artifacts on download page | No beaterOS authority baseline | https://go.dev/dl/ | Official download page | Dynamic release page | 2026-07-07 | Non-TCB infrastructure daemon/tooling checks | Not for policy, journals, receipts, or scheduler authority |
 | Python | Python 3.14.6 | Host `python3` for bounded scripts and local gates | https://www.python.org/downloads/ | Official download page | 2026-06-10 | 2026-07-07 | Audit, validation, research, replay scripts | Python scripts must remain bounded and non-authoritative |
 | CUDA Toolkit | CUDA Toolkit 13.3.1 shown in CUDA archive/download surfaces | No committed CUDA backend; Linux CUDA lane is experimental readiness metadata | https://developer.nvidia.com/cuda-toolkit-archive | Official vendor archive | 2026-06 | 2026-07-07 | GPU kernels, streams, launch overhead, occupancy, memory movement, profiler compatibility | CUDA is a backend behind beaterOS admission/telemetry/receipt contracts, not the OS contract |
-| NVIDIA MIG | Latest MIG guide | No committed MIG backend; partitioning input for future GPU lanes | https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/index.html | Official vendor documentation | Dynamic latest page | 2026-07-06 | Hardware GPU partitioning and tenant isolation | Only certain NVIDIA datacenter GPUs support it; fallback isolation required |
+| NVIDIA MIG | Latest MIG guide | No committed MIG backend; partitioning input for future GPU lanes | https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/index.html | Official vendor documentation | Dynamic latest page | 2026-07-07 | Hardware GPU partitioning and tenant isolation | Only certain NVIDIA datacenter GPUs support it; fallback isolation required |
+| AMD ROCm/HIP | ROCm/HIP latest documentation includes HIP 7.x material | No committed ROCm backend | https://rocm.docs.amd.com/en/latest/index.html and https://rocm.docs.amd.com/projects/HIP/en/latest/index.html | Official vendor documentation | Dynamic documentation | 2026-07-07 | AMD GPU backend vocabulary, HIP portability, profiler/isolation/compatibility review | ROCm/HIP is a backend behind beaterOS contracts, not the OS contract |
+| Intel Level Zero | oneAPI Level Zero 1.17.24 specification | No committed Level Zero backend | https://oneapi-src.github.io/level-zero-spec/ | Official specification | Dynamic latest page | 2026-07-07 | Low-level direct-to-device runtime, command queues, memory, device discovery | Vendor/runtime-specific; require local telemetry and fallback |
 | Apple Metal | Metal 4 direction on Apple Developer "What's new" page | Apple Silicon readiness lane is metadata only; no committed Metal backend | https://developer.apple.com/metal/whats-new/ | Official vendor documentation | Dynamic 2026 page | 2026-07-07 | Local GPU, tensors, quantization, MPS/Core ML adjacent placement, Apple Silicon profiling | Framework placement can be opaque; record limitations and CPU fallback |
 | Cloud TPU | Cloud TPU docs and TPU7x/Ironwood architecture pages | No committed TPU backend | https://docs.cloud.google.com/tpu/docs | Official cloud/provider documentation | Dynamic documentation | 2026-07-07 | Matrix-heavy ML accelerator scheduling, pod/VM/GKE provider constraints | Provider-specific; admission, spend, telemetry, and receipts remain beaterOS-owned |
-| Groq LPU | LPU architecture documentation | No committed LPU backend | https://groq.com/lpu-architecture | Vendor architecture documentation | Dynamic vendor page | 2026-07-06 | Deterministic low-jitter inference silicon as a distinct accelerator class | Vendor claims require measured validation and fallback |
-| OpenXLA/StableHLO/JAX | Portable compiler/interchange and array execution docs | No committed XLA backend | https://openxla.org/ and https://openxla.org/stablehlo/spec and https://docs.jax.dev/ | Official project documentation | Dynamic documentation | 2026-07-06 | TPU/GPU compiler portability, graph lowering, backend placement vocabulary | Local conformance and backend telemetry required before claims |
+| Groq LPU | LPU architecture documentation | No committed LPU backend | https://groq.com/lpu-architecture | Vendor architecture documentation | Dynamic vendor page | 2026-07-07 | Deterministic low-jitter inference silicon as a distinct accelerator class | Vendor claims require measured validation and fallback |
+| OpenXLA/StableHLO/JAX | Portable compiler/interchange and array execution docs | No committed XLA backend | https://openxla.org/ and https://openxla.org/stablehlo/spec and https://docs.jax.dev/ | Official project documentation | Dynamic documentation | 2026-07-07 | TPU/GPU compiler portability, graph lowering, backend placement vocabulary | Local conformance and backend telemetry required before claims |
+
+## Upcoming Or Breaking Target Changes
+
+Track announced language/compiler/backend changes that are not beaterOS pins but
+can invalidate optimization assumptions.
+
+| Component | Effective window | Source | Verified on | Impact | Required response |
+| --- | --- | --- | --- | --- | --- |
+| Rust `nvptx64-nvidia-cuda` target | Announced 2026-05-01; scheduled for Rust 1.97 | https://blog.rust-lang.org/2026/05/01/nvptx-baseline-update/ | 2026-07-07 | Raises PTX ISA and GPU architecture baselines for Rust-generated NVIDIA GPU PTX, affecting older CUDA drivers and GPUs | Any Rust GPU backend PR must record target CPU/PTX ISA, CUDA driver floor, supported GPU floor, scalar/CPU fallback, and rollback plan before changing repo baseline |
 
 | Source | beaterOS use | Caveat |
 | --- | --- | --- |
@@ -189,6 +209,8 @@ dated source snapshot.
 | Go downloads page, Go 1.26.4 artifacts: https://go.dev/dl/ | Non-TCB infrastructure daemon/tooling version checks | Go is not used for policy, journals, receipts, or scheduler authority paths |
 | Python downloads page, Python 3.14.6, 2026-06-10: https://www.python.org/downloads/ | Audit/research script runtime freshness | Python scripts must remain bounded and non-authoritative |
 | NVIDIA CUDA Programming Guide: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html | GPU programming model, memory hierarchy, streams, launch/occupancy vocabulary | CUDA is a backend, not the OS contract |
+| AMD ROCm/HIP documentation: https://rocm.docs.amd.com/en/latest/index.html and https://rocm.docs.amd.com/projects/HIP/en/latest/index.html | AMD GPU backend and HIP portability checks | ROCm/HIP claims need local compatibility, profiler, isolation, and fallback evidence |
+| Intel Level Zero specification: https://oneapi-src.github.io/level-zero-spec/ | Low-level accelerator runtime and command-queue vocabulary | Level Zero claims need local device/runtime telemetry and fallback evidence |
 
 ## Eval Statistics Inputs
 

@@ -80,6 +80,17 @@ pub fn help_text() -> String {
          \x20                 [--revocation-handle <h>] [--reason <text>]\n\
          \x20 grant revoke    --session <id> --grant-id <id> --reason <text>\n\
          \x20                 [--revoked-by <id>]\n\
+         \x20 payment-mandate issue --session <id> --mandate <id> --rail <rail>\n\
+         \x20                 --asset <asset> --max-minor-units <n>\n\
+         \x20                 --counterparty-policy <policy> --purpose <text>\n\
+         \x20                 --expires-at <rfc3339> --payment-idempotency-key <key>\n\
+         \x20                 [--approval-threshold-minor-units <n>]\n\
+         \x20                 --adapter <id>... --envelope-format <fmt>...\n\
+         \x20 payment-spend propose --session <id> --action-id <id> --mandate <id>\n\
+         \x20                 --grants <g1,g2> --amount-minor-units <n>\n\
+         \x20                 --adapter-id <id> --counterparty-ref <ref>\n\
+         \x20                 --counterparty-binding-hash <hex64>\n\
+         \x20                 --envelope-format <fmt> --envelope-hash <hex64>\n\
          \x20 action propose  --session <id> --tool <id> --kind <action>\n\
          \x20                 --target-kind <kind> --target <id> --grants <g1,g2>\n\
          \x20                 [--risk <r>] [--side-effects <s,..>] [--data-classes <d,..>]\n\
@@ -92,7 +103,12 @@ pub fn help_text() -> String {
          \x20                 [--idempotency-key <k>]\n\
          \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\
          \x20                 [--env <NAME=VALUE>]...\n\
+         \x20 simulation record --session <id> --action <id>\n\
+         \x20                 [--simulation-id <id>] [--scenario-id <id>]\n\
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\
+         \x20                 [--rail-receipt-hash <hex64>]\n\
+         \x20                 [--settlement-status <submitted|settled|failed|canceled>]\n\
+         \x20                 [--settled-at <rfc3339>] # required only for settled\n\
          \x20 journal verify  --session <id>\n\
          \x20 trace show      --session <id>\n\
          \x20 trace export    --session <id> [--bundle-id <id>] [--description <text>]\n\

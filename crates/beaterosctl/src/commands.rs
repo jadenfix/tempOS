@@ -3,8 +3,9 @@ use std::path::{Component, Path};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
-    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, GrantConstraints, ResourceKind,
-    RiskClass, SessionStatus, SideEffectClass, hash_json,
+    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, GrantConstraints, HashValue,
+    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus, ResourceKind,
+    RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, hash_json,
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
@@ -41,8 +42,11 @@ pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         ("session", "cancel") => session_transition(store, args, SessionTransition::Cancel),
         ("grant", "issue") => grant_issue(store, args),
         ("grant", "revoke") => grant_revoke(store, args),
+        ("payment-mandate", "issue") => payment_mandate_issue(store, args),
+        ("payment-spend", "propose") => payment_spend_propose(store, args),
         ("action", "propose") => action_propose(store, args),
         ("action", "execute") => action_execute(store, args),
+        ("simulation", "record") => simulation_record(store, args),
         ("receipt", "record") => receipt_record(store, args),
         ("journal", "verify") => journal_verify(store, args),
         ("trace", "show") => trace_show(store, args),
@@ -51,6 +55,223 @@ pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             "unknown command '{group} {sub}'. Run `beaterosctl help` for usage."
         ))),
     }
+}
+
+fn payment_mandate_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
+    let now = Utc::now();
+    let session_id = require_session(store, args)?;
+    let projection = store.project(&session_id)?;
+
+    let max_minor_units = require_positive_u64(args, "max-minor-units")?;
+    let approval_threshold_minor_units =
+        args::get_u64_or(args, "approval-threshold-minor-units", max_minor_units)?;
+    if approval_threshold_minor_units > max_minor_units {
+        return Err(CliError::Refused(format!(
+            "payment mandate approval threshold {approval_threshold_minor_units} exceeds ceiling {max_minor_units}"
+        )));
+    }
+    let expires_at = parse_rfc3339(args.require("expires-at")?, "expires-at")?;
+    if expires_at <= now {
+        return Err(CliError::Refused(
+            "payment mandate expiry must be in the future".to_string(),
+        ));
+    }
+
+    let counterparty_policy = args.require("counterparty-policy")?.to_string();
+    validate_counterparty_policy(&counterparty_policy)?;
+    let allowed_adapter_ids = required_non_empty_set(args.csv("adapter"), "adapter")?;
+    let allowed_envelope_formats =
+        required_non_empty_set(args.csv("envelope-format"), "envelope-format")?;
+
+    let mandate = PaymentMandate {
+        mandate_id: require_non_empty(args, "mandate")?.to_string(),
+        issuer: args
+            .get("issuer")
+            .unwrap_or(projection.session.created_by.as_str())
+            .to_string(),
+        holder: projection.session.agent_id.clone(),
+        session_id: session_id.clone(),
+        rail: require_non_empty(args, "rail")?.to_string(),
+        asset: require_non_empty(args, "asset")?.to_string(),
+        max_minor_units,
+        counterparty_policy,
+        purpose: require_non_empty(args, "purpose")?.to_string(),
+        expires_at,
+        approval_threshold_minor_units,
+        idempotency_key: require_non_empty(args, "payment-idempotency-key")?.to_string(),
+        receipt_requirement: "required".to_string(),
+        allowed_adapter_ids,
+        allowed_envelope_formats,
+    };
+
+    let record = store.issue_payment_mandate(&session_id, mandate.clone(), now)?;
+    Ok(format!(
+        "issued payment mandate {}\n  rail:       {}\n  asset:      {}\n  ceiling:    {}\n  receipt:    {}\n  journal seq: {}",
+        mandate.mandate_id,
+        mandate.rail,
+        mandate.asset,
+        mandate.max_minor_units,
+        mandate.receipt_requirement,
+        record.seq
+    ))
+}
+
+fn payment_spend_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
+    let session_id = require_session(store, args)?;
+    let projection = store.project(&session_id)?;
+    let now = Utc::now();
+    let action_id = args
+        .get_or("action-id", &Uuid::new_v4().to_string())
+        .to_string();
+    let mandate_id = require_non_empty(args, "mandate")?;
+    let mandate = projection
+        .mandates
+        .iter()
+        .find(|mandate| mandate.mandate_id == mandate_id)
+        .ok_or_else(|| {
+            CliError::Refused(format!(
+                "payment mandate {mandate_id} has not been issued in session {session_id}"
+            ))
+        })?;
+    if mandate.expires_at <= now {
+        return Err(CliError::Refused(format!(
+            "payment mandate {} is expired",
+            mandate.mandate_id
+        )));
+    }
+    if mandate.receipt_requirement != "required" {
+        return Err(CliError::Refused(format!(
+            "payment mandate {} has unsupported receipt_requirement {}",
+            mandate.mandate_id, mandate.receipt_requirement
+        )));
+    }
+
+    let amount_minor_units = require_positive_u64(args, "amount-minor-units")?;
+    if amount_minor_units > mandate.max_minor_units {
+        return Err(CliError::Refused(format!(
+            "payment amount {amount_minor_units} exceeds mandate ceiling {}",
+            mandate.max_minor_units
+        )));
+    }
+    let adapter_id = require_non_empty(args, "adapter-id")?.to_string();
+    if !mandate.allowed_adapter_ids.is_empty() && !mandate.allowed_adapter_ids.contains(&adapter_id)
+    {
+        return Err(CliError::Refused(format!(
+            "adapter {adapter_id} is not allowed by payment mandate {}",
+            mandate.mandate_id
+        )));
+    }
+    let envelope_format = require_non_empty(args, "envelope-format")?.to_string();
+    if !mandate.allowed_envelope_formats.is_empty()
+        && !mandate.allowed_envelope_formats.contains(&envelope_format)
+    {
+        return Err(CliError::Refused(format!(
+            "envelope format {envelope_format} is not allowed by payment mandate {}",
+            mandate.mandate_id
+        )));
+    }
+
+    let counterparty_ref = require_non_empty(args, "counterparty-ref")?.to_string();
+    let counterparty_binding_hash = require_lower_hex_hash(args, "counterparty-binding-hash")?;
+    if !counterparty_allowed(
+        &mandate.counterparty_policy,
+        &counterparty_ref,
+        &counterparty_binding_hash,
+    ) {
+        return Err(CliError::Refused(format!(
+            "counterparty {counterparty_ref} is not allowed by payment mandate {}",
+            mandate.mandate_id
+        )));
+    }
+
+    let envelope_hash = require_lower_hex_hash(args, "envelope-hash")?;
+    let envelope_expires_at = match args.get("envelope-expires-at") {
+        Some(value) => Some(parse_rfc3339(value, "envelope-expires-at")?),
+        None => None,
+    };
+    if matches!(envelope_expires_at, Some(expires_at) if expires_at <= now) {
+        return Err(CliError::Refused(
+            "payment envelope expiry must be in the future".to_string(),
+        ));
+    }
+
+    let required_grants: BTreeSet<String> = args.csv("grants").into_iter().collect();
+    if required_grants.is_empty() {
+        return Err(CliError::Usage(
+            "payment-spend propose requires at least one --grants value".to_string(),
+        ));
+    }
+
+    let summary = args
+        .get_or("summary", "payment spend proposed via beaterosctl")
+        .to_string();
+    let manifest = ActionManifest {
+        action_id: action_id.clone(),
+        session_id: session_id.clone(),
+        tool_id: args.get_or("tool", "tool:payment").to_string(),
+        action_kind: ActionKind::Spend,
+        target: CapabilitySelector {
+            resource_kind: ResourceKind::PaymentRail,
+            resource_id: mandate.rail.clone(),
+        },
+        resolved_target: None,
+        inputs_digest: hash_json(&summary)?,
+        inputs_summary: summary,
+        expected_outputs: Vec::new(),
+        expected_side_effects: BTreeSet::from([SideEffectClass::Payment]),
+        required_grants,
+        requested_budget: Budget {
+            max_payment_minor_units: Some(amount_minor_units),
+            ..Budget::default()
+        },
+        risk_class: RiskClass::Critical,
+        data_classes: BTreeSet::from([DataClass::Financial]),
+        taint: BTreeSet::new(),
+        idempotency_key: Some(mandate.idempotency_key.clone()),
+        payment_intent: Some(PaymentIntent {
+            mandate_id: mandate.mandate_id.clone(),
+            rail: mandate.rail.clone(),
+            adapter_id,
+            adapter_version: args.get("adapter-version").map(str::to_string),
+            asset: mandate.asset.clone(),
+            amount_minor_units,
+            counterparty_ref,
+            counterparty_binding_hash,
+            purpose: mandate.purpose.clone(),
+            payment_idempotency_key: mandate.idempotency_key.clone(),
+            envelope_format,
+            envelope_hash,
+            envelope_expires_at,
+        }),
+        compensation_plan: args.get("compensation-plan").map(str::to_string),
+        human_explanation: args
+            .get_or("explanation", "payment spend proposed via beaterosctl")
+            .to_string(),
+    };
+
+    let decision = store
+        .admit_action_with_revoked_handles(&session_id, manifest.clone(), revoked_handles(args))?
+        .decision;
+    let mut out = vec![
+        format!("payment action {}", manifest.action_id),
+        format!("  mandate:    {}", mandate.mandate_id),
+        format!("  amount:     {} {}", amount_minor_units, mandate.asset),
+        format!("  decision:   {:?}", decision.result),
+        format!("  explanation: {}", decision.explanation),
+    ];
+    if !decision.matched_rules.is_empty() {
+        out.push(format!(
+            "  rules:      {}",
+            decision.matched_rules.join(", ")
+        ));
+    }
+    if let Some(review) = &decision.required_review {
+        out.push(format!("  needs review:     {review}"));
+    }
+    if let Some(sim) = &decision.required_simulation {
+        out.push(format!("  needs simulation: {sim}"));
+    }
+    Ok(out.join("\n"))
 }
 
 fn session_create(store: &Store, args: &ParsedArgs) -> CliResult<String> {
@@ -113,7 +334,7 @@ fn session_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let now = Utc::now();
     let session = &projection.session;
     Ok(format!(
-        "session {}\n  agent:      {}\n  created_by: {}\n  workspace:  {}\n  status:     {:?}\n  policy:     {}\n  goal:       {}\n  grants:     {} ({} active)\n  actions:    {}\n  decisions:  {}\n  receipts:   {}",
+        "session {}\n  agent:      {}\n  created_by: {}\n  workspace:  {}\n  status:     {:?}\n  policy:     {}\n  goal:       {}\n  grants:     {} ({} active)\n  mandates:   {}\n  actions:    {}\n  decisions:  {}\n  receipts:   {}",
         session.session_id,
         session.agent_id,
         session.created_by,
@@ -123,6 +344,7 @@ fn session_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         session.goal,
         projection.grants.len(),
         projection.active_grants(now).len(),
+        projection.mandates.len(),
         projection.manifests.len(),
         projection.decisions.len(),
         projection.receipts.len(),
@@ -628,6 +850,57 @@ fn parse_env_assignment(raw: &str) -> CliResult<(String, String)> {
     Ok((name.to_string(), value.to_string()))
 }
 
+fn simulation_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
+    let now = Utc::now();
+    let session_id = require_session(store, args)?;
+    let projection = store.project(&session_id)?;
+    let action_id = args.require("action")?.to_string();
+    let manifest = projection
+        .manifest(&action_id)
+        .ok_or_else(|| CliError::Refused(format!("action {action_id} was never proposed")))?
+        .clone();
+    let latest_decision = projection.latest_decision(&action_id).ok_or_else(|| {
+        CliError::Refused(format!(
+            "action {action_id} has no policy decision requiring simulation"
+        ))
+    })?;
+    if latest_decision.result != DecisionResult::NeedsSimulation {
+        return Err(CliError::Refused(format!(
+            "action {action_id} latest decision is {:?}, not NeedsSimulation",
+            latest_decision.result
+        )));
+    }
+    let scenario_id = match args.get("scenario-id") {
+        Some(value) if !value.trim().is_empty() => value.to_string(),
+        Some(value) => return Err(CliError::invalid("scenario-id", value)),
+        None => latest_decision.required_simulation.clone().ok_or_else(|| {
+            CliError::Refused(format!(
+                "action {action_id} latest NeedsSimulation decision has no scenario id"
+            ))
+        })?,
+    };
+    let passed_at = match args.get("passed-at") {
+        Some(value) => parse_rfc3339(value, "passed-at")?,
+        None => now,
+    };
+    let simulation = SimulationEvidence {
+        simulation_id: args
+            .get("simulation-id")
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("sim-{action_id}")),
+        action_id: action_id.clone(),
+        manifest_hash: manifest.digest()?,
+        scenario_id,
+        passed_at,
+        policy_version: POLICY_VERSION.to_string(),
+    };
+    let record = store.record_simulation(&session_id, simulation.clone(), now)?;
+    Ok(format!(
+        "recorded simulation {} for action {}\n  scenario:   {}\n  journal seq: {}",
+        simulation.simulation_id, simulation.action_id, simulation.scenario_id, record.seq
+    ))
+}
+
 fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let now = Utc::now();
     let session_id = require_session(store, args)?;
@@ -660,6 +933,8 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         Some(value) => value.to_string(),
         None => hash_json(&format!("{status}:{side_effect_summary}"))?,
     };
+
+    let payment_receipt = payment_receipt_from_args(args, &projection, &manifest)?;
 
     // Receipts may only declare side effects the manifest predeclared. Core's
     // causality verifier rejects any receipt whose effects are not a subset of
@@ -710,7 +985,7 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             side_effects,
             external_ids: args.csv("external-id"),
             artifact_refs: args.csv("artifact"),
-            payment_receipt: None,
+            payment_receipt,
         },
         now,
     )?;
@@ -783,6 +1058,19 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     }
 
     lines.push(String::new());
+    lines.push(format!("payment mandates ({}):", projection.mandates.len()));
+    for mandate in &projection.mandates {
+        lines.push(format!(
+            "  - {} rail={} asset={} ceiling={} receipt={}",
+            mandate.mandate_id,
+            mandate.rail,
+            mandate.asset,
+            mandate.max_minor_units,
+            mandate.receipt_requirement
+        ));
+    }
+
+    lines.push(String::new());
     lines.push(format!("actions ({}):", projection.manifests.len()));
     for manifest in &projection.manifests {
         lines.push(format!(
@@ -796,6 +1084,12 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             lines.push(format!(
                 "      resolved: {:?} {}",
                 resolved_target.resource_kind, resolved_target.resource_id
+            ));
+        }
+        if let Some(intent) = &manifest.payment_intent {
+            lines.push(format!(
+                "      payment:  mandate={} amount={} {} adapter={}",
+                intent.mandate_id, intent.amount_minor_units, intent.asset, intent.adapter_id
             ));
         }
         if let Some(decision) = projection.latest_decision(&manifest.action_id) {
@@ -813,6 +1107,12 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
                 "      receipt:  {} status={} effects={:?}",
                 receipt.receipt_id, receipt.status, receipt.side_effects
             ));
+            if let Some(payment_receipt) = &receipt.payment_receipt {
+                lines.push(format!(
+                    "        payment receipt: status={:?} rail_hash={}",
+                    payment_receipt.settlement_status, payment_receipt.rail_receipt_hash
+                ));
+            }
         }
     }
 
@@ -904,4 +1204,191 @@ fn describe_decision(decision: Option<&DecisionResult>) -> String {
         Some(result) => format!("{result:?}"),
         None => "missing".to_string(),
     }
+}
+
+fn payment_receipt_from_args(
+    args: &ParsedArgs,
+    projection: &beater_osd::SessionProjection,
+    manifest: &ActionManifest,
+) -> CliResult<Option<Box<PaymentReceiptEvidence>>> {
+    let has_payment_flags = args.has_flag("rail-receipt-hash")
+        || args.has_flag("settlement-status")
+        || args.has_flag("settled-at");
+    let Some(intent) = manifest.payment_intent.as_ref() else {
+        if has_payment_flags {
+            return Err(CliError::Refused(
+                "payment receipt flags are only valid for payment actions".to_string(),
+            ));
+        }
+        return Ok(None);
+    };
+    if !manifest
+        .expected_side_effects
+        .contains(&SideEffectClass::Payment)
+    {
+        return Err(CliError::Refused(format!(
+            "payment action {} must declare the payment side effect before receipt recording",
+            manifest.action_id
+        )));
+    }
+    let mandate = projection
+        .mandates
+        .iter()
+        .find(|mandate| mandate.mandate_id == intent.mandate_id)
+        .ok_or_else(|| {
+            CliError::Refused(format!(
+                "payment action {} references missing mandate {}",
+                manifest.action_id, intent.mandate_id
+            ))
+        })?;
+    if mandate.receipt_requirement != "required" {
+        return Err(CliError::Refused(format!(
+            "payment mandate {} has unsupported receipt_requirement {}",
+            mandate.mandate_id, mandate.receipt_requirement
+        )));
+    }
+    let settlement_status_raw = require_non_empty(args, "settlement-status")?;
+    let settlement_status =
+        args::parse_enum::<PaymentSettlementStatus>("settlement-status", settlement_status_raw)?;
+    let settled_at = match args.get("settled-at") {
+        Some(value) => Some(parse_rfc3339(value, "settled-at")?),
+        None => None,
+    };
+    match settlement_status {
+        PaymentSettlementStatus::Settled if settled_at.is_none() => {
+            return Err(CliError::MissingFlag("settled-at".to_string()));
+        }
+        PaymentSettlementStatus::Submitted
+        | PaymentSettlementStatus::Failed
+        | PaymentSettlementStatus::Canceled
+            if settled_at.is_some() =>
+        {
+            return Err(CliError::Refused(format!(
+                "settled-at is only valid when settlement-status is settled, got {settlement_status_raw}"
+            )));
+        }
+        _ => {}
+    }
+    let rail_receipt_hash = require_lower_hex_hash(args, "rail-receipt-hash")?;
+    Ok(Some(Box::new(PaymentReceiptEvidence {
+        manifest_hash: manifest.digest()?,
+        mandate_id: intent.mandate_id.clone(),
+        rail: intent.rail.clone(),
+        adapter_id: intent.adapter_id.clone(),
+        adapter_version: intent.adapter_version.clone(),
+        asset: intent.asset.clone(),
+        amount_minor_units: intent.amount_minor_units,
+        counterparty_ref: intent.counterparty_ref.clone(),
+        counterparty_binding_hash: intent.counterparty_binding_hash.clone(),
+        purpose: intent.purpose.clone(),
+        payment_idempotency_key: intent.payment_idempotency_key.clone(),
+        envelope_format: intent.envelope_format.clone(),
+        envelope_hash: intent.envelope_hash.clone(),
+        rail_receipt_hash,
+        settlement_status,
+        settled_at,
+    })))
+}
+
+fn require_non_empty<'a>(args: &'a ParsedArgs, field: &str) -> CliResult<&'a str> {
+    let value = args.require(field)?;
+    if value.trim().is_empty() || value == "true" {
+        return Err(CliError::invalid(field, value));
+    }
+    Ok(value)
+}
+
+fn require_positive_u64(args: &ParsedArgs, field: &str) -> CliResult<u64> {
+    let raw = args.require(field)?;
+    let value = raw
+        .parse::<u64>()
+        .map_err(|_| CliError::invalid(field, raw))?;
+    if value == 0 {
+        return Err(CliError::invalid(field, raw));
+    }
+    Ok(value)
+}
+
+fn parse_rfc3339(value: &str, field: &str) -> CliResult<DateTime<Utc>> {
+    value
+        .parse::<DateTime<Utc>>()
+        .map_err(|_| CliError::invalid(field, value))
+}
+
+fn require_lower_hex_hash(args: &ParsedArgs, field: &str) -> CliResult<HashValue> {
+    let value = require_non_empty(args, field)?;
+    if !is_lower_hex_hash(value) {
+        return Err(CliError::invalid(field, value));
+    }
+    Ok(value.to_string())
+}
+
+fn is_lower_hex_hash(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn required_non_empty_set(values: Vec<String>, field: &str) -> CliResult<BTreeSet<String>> {
+    if values.is_empty() {
+        return Err(CliError::MissingFlag(field.to_string()));
+    }
+    let mut set = BTreeSet::new();
+    for value in values {
+        if value.trim().is_empty() {
+            return Err(CliError::invalid(field, value));
+        }
+        set.insert(value);
+    }
+    Ok(set)
+}
+
+fn validate_counterparty_policy(policy: &str) -> CliResult<()> {
+    if policy == "any" {
+        return Ok(());
+    }
+    if let Some(value) = policy.strip_prefix("exact:")
+        && !value.is_empty()
+    {
+        return Ok(());
+    }
+    if let Some(value) = policy.strip_prefix("prefix:")
+        && !value.is_empty()
+    {
+        return Ok(());
+    }
+    if let Some(value) = policy.strip_prefix("hash:")
+        && is_lower_hex_hash(value)
+    {
+        return Ok(());
+    }
+    if let Some(value) = policy.strip_prefix("allowlist:") {
+        let entries: Vec<&str> = value.split(',').collect();
+        if !entries.is_empty() && entries.iter().all(|entry| !entry.trim().is_empty()) {
+            return Ok(());
+        }
+    }
+    Err(CliError::invalid("counterparty-policy", policy))
+}
+
+fn counterparty_allowed(policy: &str, counterparty_ref: &str, binding_hash: &str) -> bool {
+    if policy == "any" {
+        return true;
+    }
+    if let Some(value) = policy.strip_prefix("exact:") {
+        return counterparty_ref == value;
+    }
+    if let Some(value) = policy.strip_prefix("prefix:") {
+        return counterparty_ref.starts_with(value);
+    }
+    if let Some(value) = policy.strip_prefix("hash:") {
+        return binding_hash == value;
+    }
+    if let Some(value) = policy.strip_prefix("allowlist:") {
+        return value
+            .split(',')
+            .any(|entry| counterparty_ref == entry.trim());
+    }
+    false
 }

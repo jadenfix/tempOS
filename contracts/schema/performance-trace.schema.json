@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "performance-trace.schema.json",
+  "title": "PerformanceTrace",
+  "description": "Portable trace envelope for optimization evidence. It records hot-path spans and aggregate budgets without granting authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["trace_id", "workload", "recorded_at", "host", "spans"],
+  "properties": {
+    "trace_id": { "type": "string", "minLength": 1 },
+    "workload": { "type": "string", "minLength": 1 },
+    "recorded_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch"],
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "kernel": { "type": "string" },
+        "cpu": { "type": "string" },
+        "memory_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+        "power_mode": { "type": "string" },
+        "thermal_state": { "type": "string" }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Compiler/runtime/backend versions such as rustc -vV, cargo -vV, CUDA, ROCm, Metal, XLA, or provider runtime."
+    },
+    "spans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "started_at", "duration_ms"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "started_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "duration_ms": { "$ref": "common.schema.json#/$defs/uint" },
+          "manifest_hash": { "$ref": "common.schema.json#/$defs/hash_value" },
+          "queue_depth": { "$ref": "common.schema.json#/$defs/uint" },
+          "allocation_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+          "copy_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+          "syscalls": { "$ref": "common.schema.json#/$defs/uint" },
+          "model_calls": { "$ref": "common.schema.json#/$defs/uint" },
+          "tool_calls": { "$ref": "common.schema.json#/$defs/uint" },
+          "provider_calls": { "$ref": "common.schema.json#/$defs/uint" },
+          "accelerator_job_id": { "type": "string" }
+        }
+      }
+    },
+    "aggregates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "p50_ms": { "$ref": "common.schema.json#/$defs/uint" },
+        "p95_ms": { "$ref": "common.schema.json#/$defs/uint" },
+        "p99_ms": { "$ref": "common.schema.json#/$defs/uint" },
+        "throughput_per_second": { "type": "number", "minimum": 0 },
+        "peak_rss_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+        "total_copy_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+        "total_syscalls": { "$ref": "common.schema.json#/$defs/uint" },
+        "max_queue_depth": { "$ref": "common.schema.json#/$defs/uint" }
+      }
+    }
+  }
+}

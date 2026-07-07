@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "accelerator-telemetry.schema.json",
+  "title": "AcceleratorTelemetry",
+  "description": "Vendor-neutral telemetry envelope for GPU, TPU, LPU, NPU, Apple Silicon, media-engine, enclave, and future ASIC jobs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "manifest_hash", "device_class", "backend", "queued_at", "finished_at", "status", "fallback"],
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "manifest_hash": { "$ref": "common.schema.json#/$defs/hash_value" },
+    "device_class": {
+      "type": "string",
+      "enum": ["cpu", "gpu", "tpu", "lpu", "npu", "apple_gpu", "apple_ane", "media_engine", "secure_enclave", "custom_asic"]
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "driver": { "type": "string" },
+        "framework": { "type": "string" },
+        "compiler": { "type": "string" },
+        "device_capability": { "type": "string" },
+        "partition_or_slice": { "type": "string" }
+      }
+    },
+    "artifact_digest": { "$ref": "common.schema.json#/$defs/hash_value" },
+    "precision": { "type": "string" },
+    "quantization": { "type": "string" },
+    "deterministic_seed": { "type": "string" },
+    "queued_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "started_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "finished_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "queue_delay_ms": { "$ref": "common.schema.json#/$defs/uint" },
+    "execution_ms": { "$ref": "common.schema.json#/$defs/uint" },
+    "launch_count": { "$ref": "common.schema.json#/$defs/uint" },
+    "copy_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+    "map_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+    "sync_count": { "$ref": "common.schema.json#/$defs/uint" },
+    "host_memory_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+    "device_memory_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+    "pinned_memory_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+    "unified_memory_bytes": { "$ref": "common.schema.json#/$defs/uint" },
+    "occupancy": { "type": "number", "minimum": 0 },
+    "throttling": { "type": "string" },
+    "status": { "type": "string", "enum": ["completed", "failed", "canceled", "timed_out", "fallback_used"] },
+    "fallback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "route": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "receipt_id": { "type": "string" },
+    "input_digest": { "$ref": "common.schema.json#/$defs/hash_value" },
+    "output_digest": { "$ref": "common.schema.json#/$defs/hash_value" },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -83,9 +83,11 @@ contract and non-author merge process.
 - Use bounded queues, structured concurrency, cancellation, and backpressure.
 - Keep hot records compact; move diagnostics, strings, and large blobs out of
   hot structs.
-- For accelerator paths, account for host-device copies, queue delay, model
-  residency, unified-memory pressure, partitioning, precision, throttling,
-  cancellation, telemetry, and fallback routes.
+- For accelerator paths, account for backend identity, driver/framework version,
+  partition/slice identity, precision/quantization, deterministic seed where
+  meaningful, host-device copies, queue delay, model residency,
+  unified-memory pressure, throttling, cancellation, telemetry, receipt fields,
+  and fallback routes.
 - For Apple Silicon and SIMD paths, require placement/fallback clarity, feature
   detection, scalar fallback, alignment rules, precision/determinism checks, and
   evidence that vectorization or accelerator placement helps.

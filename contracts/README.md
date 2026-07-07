@@ -21,6 +21,8 @@ should serialize to and validate against.
 | `common.schema.json` | Shared enums + sub-structures | — |
 | `trace-bundle.schema.json` | A full end-to-end run (harness input) | §24 |
 | `security-scenario.schema.json` | Adversarial eval + admission probe | §14.5 |
+| `performance-trace.schema.json` | Optimization trace evidence envelope | §8, §13 |
+| `accelerator-telemetry.schema.json` | Vendor-neutral accelerator job telemetry | §8, §13 |
 
 ## Versioning & provenance
 

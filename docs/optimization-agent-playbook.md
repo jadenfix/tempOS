@@ -150,6 +150,26 @@ Benchmark hygiene:
 - include p95/p99 for latency-sensitive paths and throughput plus tail latency
   for batched paths
 
+## Benchmark Acceptance Policy
+
+Performance evidence should be strong enough to survive review without turning
+every PR into a research project.
+
+- Use at least 5 measured samples for local micro/workflow benchmarks unless the
+  workload takes more than 2 minutes per run; for longer workloads, use at least
+  3 samples and report why more would be wasteful.
+- Treat a result as inconclusive when the coefficient of variation exceeds 10%
+  or when the before/after confidence intervals materially overlap. Increase
+  samples, isolate machine load, or report no claim.
+- Do not claim a win smaller than 5% unless the budget is an externally defined
+  latency, memory, syscall, queue, spend, or device-residency ceiling.
+- CI benchmark gates should compare against explicit budgets, not noisy
+  before/after percentages. Keep tolerances wide enough to avoid platform noise
+  but tight enough to catch the regression class named in the PR.
+- Always record host architecture, OS, power/thermal state where available,
+  toolchain/backend versions, replay command, sample count, warmup, fixture, and
+  whether the result is accepted or inconclusive.
+
 Stop conditions:
 
 - do not optimize cold paths unless they block correctness, security, or a
@@ -188,7 +208,7 @@ Required infrastructure for serious performance work:
   the reason this work belongs at that layer and the fallback path if the layer
   is unavailable
 
-Expected repository locations as this infrastructure grows:
+Repository optimization infrastructure:
 
 - `docs/engineering/optimization-evidence-runbook.md`: human replay packet and
   reviewer questions.
@@ -196,14 +216,14 @@ Expected repository locations as this infrastructure grows:
   split, language boundaries, accelerator fabric, and optimization infra.
 - `scripts/check-optimization-docs.py`: lightweight doctrine/source-matrix
   health gate.
-- `benchmarks/manifest.json`: future benchmark registry for workload, fixture,
+- `benchmarks/manifest.json`: benchmark registry for workload, fixture,
   warmup, sample count, timeout, and target budget.
-- `scripts/run-optimization-benchmarks.py`: future replay runner for benchmark
+- `scripts/run-optimization-benchmarks.py`: replay runner for benchmark
   manifests and budget validation.
-- `contracts/schema/performance-trace.schema.json`: future admission, queue,
+- `contracts/schema/performance-trace.schema.json`: admission, queue,
   execution, journal, receipt, syscall, copy, allocation, p95/p99, and provider
   telemetry schema.
-- `contracts/schema/accelerator-telemetry.schema.json`: future GPU/TPU/LPU/NPU,
+- `contracts/schema/accelerator-telemetry.schema.json`: GPU/TPU/LPU/NPU,
   Apple Silicon, media-engine, enclave, and custom-silicon telemetry schema.
 - `scripts/host-probes/`: future optional probes for macOS Apple Silicon, Linux
   CUDA, provider TPU, provider LPU, and other accelerator hosts.
@@ -286,6 +306,9 @@ must include:
   too expensive
 - receipt fields that prove placement, version, model digest, input/output
   digest, timing, queueing, and observed effects
+- provider architecture or marketing pages may justify a device class, but
+  performance and reliability claims require provider telemetry docs,
+  benchmark replay, or local measurement
 
 Vendor SDKs can provide execution. They cannot provide authority.
 

@@ -86,15 +86,15 @@ That makes Aether native to beaterOS policy without moving chain id, signature
 algorithm, slot expiry, nonce, or settlement proof parsing into the OS authority
 contract. Those fields stay in the Aether envelope and receipt artifacts.
 
-## Deliberately deferred (documented, not coded)
+## Follow-up surface
 
-- **Mandate-driven approval threshold.** `approval_threshold_minor_units` should
-  force human approval above a per-mandate limit. The approval machinery exists
-  on grants; wiring the mandate threshold into it is the next increment.
-- **Typed payment receipts.** `receipt_requirement` should gate completion, and
-  receipts should carry mandate id, rail, adapter id, envelope hash,
-  rail-receipt hash, and settlement status. That belongs to the execution/receipt
-  lane, not pure admission.
+- **Mandate-driven approval threshold.** Implemented in core policy and daemon
+  replay: above-threshold payment actions require action-bound human approval
+  before they can proceed to simulation/admission.
+- **Typed payment receipts.** Implemented in the receipt/journal lane and
+  exposed through `beaterosctl receipt record`: required payment receipts carry
+  mandate id, rail, adapter id, envelope hash, rail-receipt hash, and settlement
+  status. Generic external ids are supplemental only.
 - **Payment release/cancellation semantics.** The current meter reserves capacity
   for every non-denied payment decision. A later slice should add explicit
   release/cancel evidence so abandoned payment attempts can free reserved

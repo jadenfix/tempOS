@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "description": "beaterOS optimization benchmark registry. Entries are replayable workloads with explicit timeout and metric expectations; they do not by themselves prove a performance claim.",
+  "workloads": [
+    {
+      "name": "optimization-doc-health",
+      "class": "contract_work",
+      "command": ["python3", "scripts/check-optimization-docs.py"],
+      "warmup": 0,
+      "samples": 1,
+      "timeout_seconds": 30,
+      "metrics": [
+        {
+          "name": "exit_status",
+          "target": 0,
+          "comparison": "eq"
+        }
+      ],
+      "notes": "Structural gate that keeps optimization doctrine, source matrix, skills, and packet files wired together. This is not a latency benchmark."
+    }
+  ]
+}

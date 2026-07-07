@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use beaterosctl::{CliError, run};
+use chrono::{TimeDelta, Utc};
 use uuid::Uuid;
 
 /// A temporary store directory that cleans itself up.
@@ -56,6 +57,144 @@ fn ok(home: &str, args: &[&str]) -> String {
         Ok(output) => output,
         Err(err) => panic!("expected success for {args:?}, got error: {err}"),
     }
+}
+
+fn future_rfc3339() -> String {
+    (Utc::now() + TimeDelta::hours(1)).to_rfc3339()
+}
+
+fn issue_payment_session_grant_and_mandate(home: &str, session: &str, expires_at: &str) -> String {
+    ok(
+        home,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent:runtime",
+            "--created-by",
+            "human:owner",
+            "--workspace",
+            "ws-payments",
+            "--goal",
+            "pay approved vendor",
+            "--initial-capability-id",
+            "grant-spend",
+        ],
+    );
+    let grant_out = ok(
+        home,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--grant-id",
+            "grant-spend",
+            "--resource-kind",
+            "payment_rail",
+            "--resource-id",
+            "stablecoin:x402",
+            "--actions",
+            "spend",
+            "--max-risk",
+            "critical",
+            "--max-data-class",
+            "financial",
+            "--reason",
+            "payment spend grant",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+    let mandate = ok(
+        home,
+        &[
+            "payment-mandate",
+            "issue",
+            "--session",
+            session,
+            "--mandate",
+            "mandate-spend",
+            "--rail",
+            "stablecoin:x402",
+            "--asset",
+            "USDC",
+            "--max-minor-units",
+            "100",
+            "--counterparty-policy",
+            "prefix:vendor:",
+            "--purpose",
+            "vendor payment",
+            "--expires-at",
+            expires_at,
+            "--approval-threshold-minor-units",
+            "100",
+            "--payment-idempotency-key",
+            "pay-once",
+            "--adapter",
+            "x402",
+            "--envelope-format",
+            "x402-payment-v1",
+        ],
+    );
+    assert!(
+        mandate.contains("issued payment mandate mandate-spend"),
+        "{mandate}"
+    );
+    grant_id
+}
+
+fn payment_spend_args<'a>(session: &'a str, grant_id: &'a str) -> Vec<&'a str> {
+    vec![
+        "payment-spend",
+        "propose",
+        "--session",
+        session,
+        "--action-id",
+        "act-pay",
+        "--mandate",
+        "mandate-spend",
+        "--grants",
+        grant_id,
+        "--amount-minor-units",
+        "100",
+        "--adapter-id",
+        "x402",
+        "--adapter-version",
+        "v1",
+        "--counterparty-ref",
+        "vendor:runtime",
+        "--counterparty-binding-hash",
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        "--envelope-format",
+        "x402-payment-v1",
+        "--envelope-hash",
+        "3333333333333333333333333333333333333333333333333333333333333333",
+        "--summary",
+        "pay vendor runtime",
+    ]
+}
+
+fn admit_payment_action(home: &str, session: &str, grant_id: &str) {
+    ok(home, &payment_spend_args(session, grant_id));
+    ok(
+        home,
+        &[
+            "simulation",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-pay",
+        ],
+    );
+    ok(home, &payment_spend_args(session, grant_id));
 }
 
 #[test]
@@ -346,6 +485,446 @@ fn trace_export_emits_schema_shaped_live_bundle() {
     assert!(
         json["sessions"][0]["memory_scope"].is_null(),
         "trace export should preserve core wire nulls for faithful replay: {exported}"
+    );
+}
+
+#[test]
+fn payment_operator_flow_records_typed_receipt_end_to_end() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-cli";
+    let expires_at = future_rfc3339();
+    let grant_id = issue_payment_session_grant_and_mandate(&h, session, &expires_at);
+
+    let first = ok(&h, &payment_spend_args(session, &grant_id));
+    assert!(
+        first.contains("NeedsSimulation"),
+        "payment should pass mandate admission and require simulation first:\n{first}"
+    );
+    assert!(
+        first.contains("payment_authorized_by_mandate"),
+        "payment mandate rule must be visible:\n{first}"
+    );
+
+    let sim = ok(
+        &h,
+        &[
+            "simulation",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-pay",
+        ],
+    );
+    assert!(sim.contains("recorded simulation"), "{sim}");
+
+    let second = ok(&h, &payment_spend_args(session, &grant_id));
+    assert!(
+        second.contains("Allowed"),
+        "payment should be allowed after action-bound simulation:\n{second}"
+    );
+
+    let receipt = ok(
+        &h,
+        &[
+            "receipt",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-pay",
+            "--status",
+            "submitted",
+            "--summary",
+            "submitted payment",
+            "--rail-receipt-hash",
+            "6666666666666666666666666666666666666666666666666666666666666666",
+            "--settlement-status",
+            "submitted",
+            "--external-id",
+            "rail:receipt:runtime",
+        ],
+    );
+    assert!(receipt.contains("recorded receipt"), "{receipt}");
+
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
+    let trace = ok(&h, &["trace", "show", "--session", session]);
+    assert!(trace.contains("payment mandates (1):"), "{trace}");
+    assert!(trace.contains("mandate=mandate-spend"), "{trace}");
+    assert!(trace.contains("payment receipt:"), "{trace}");
+    assert!(
+        trace.contains("6666666666666666666666666666666666666666666666666666666666666666"),
+        "{trace}"
+    );
+    let show = ok(&h, &["session", "show", "--session", session]);
+    assert!(show.contains("mandates:   1"), "{show}");
+}
+
+#[test]
+fn payment_spend_without_mandate_is_refused_before_append() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-no-mandate";
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent:runtime",
+            "--workspace",
+            "ws-payments",
+            "--goal",
+            "pay vendor",
+        ],
+    );
+    let err = cli(&h, &payment_spend_args(session, "grant-spend"))
+        .expect_err("payment spend without issued mandate must fail closed");
+    assert!(
+        matches!(err, CliError::Refused(ref message) if message.contains("has not been issued")),
+        "unexpected error: {err}"
+    );
+    let trace = ok(&h, &["trace", "show", "--session", session]);
+    assert!(
+        trace.contains("actions (0):"),
+        "refused payment should not append an action:\n{trace}"
+    );
+}
+
+#[test]
+fn payment_mandate_requires_explicit_adapter_and_envelope_allowlists() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-allowlists";
+    let expires_at = future_rfc3339();
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent:runtime",
+            "--created-by",
+            "human:owner",
+            "--workspace",
+            "ws-payments",
+            "--goal",
+            "pay vendor",
+        ],
+    );
+
+    let missing_adapter = cli(
+        &h,
+        &[
+            "payment-mandate",
+            "issue",
+            "--session",
+            session,
+            "--mandate",
+            "mandate-spend",
+            "--rail",
+            "stablecoin:x402",
+            "--asset",
+            "USDC",
+            "--max-minor-units",
+            "100",
+            "--counterparty-policy",
+            "prefix:vendor:",
+            "--purpose",
+            "vendor payment",
+            "--expires-at",
+            &expires_at,
+            "--payment-idempotency-key",
+            "pay-once",
+            "--envelope-format",
+            "x402-payment-v1",
+        ],
+    )
+    .expect_err("missing adapter allowlist must fail closed");
+    assert!(
+        matches!(missing_adapter, CliError::MissingFlag(ref flag) if flag == "adapter"),
+        "unexpected error: {missing_adapter}"
+    );
+
+    let missing_envelope = cli(
+        &h,
+        &[
+            "payment-mandate",
+            "issue",
+            "--session",
+            session,
+            "--mandate",
+            "mandate-spend",
+            "--rail",
+            "stablecoin:x402",
+            "--asset",
+            "USDC",
+            "--max-minor-units",
+            "100",
+            "--counterparty-policy",
+            "prefix:vendor:",
+            "--purpose",
+            "vendor payment",
+            "--expires-at",
+            &expires_at,
+            "--payment-idempotency-key",
+            "pay-once",
+            "--adapter",
+            "x402",
+        ],
+    )
+    .expect_err("missing envelope-format allowlist must fail closed");
+    assert!(
+        matches!(missing_envelope, CliError::MissingFlag(ref flag) if flag == "envelope-format"),
+        "unexpected error: {missing_envelope}"
+    );
+
+    let trace = ok(&h, &["trace", "show", "--session", session]);
+    assert!(
+        trace.contains("payment mandates (0):"),
+        "refused mandates should not append authority:\n{trace}"
+    );
+}
+
+#[test]
+fn payment_mandate_rejects_review_threshold_above_ceiling() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-threshold";
+    let expires_at = future_rfc3339();
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent:runtime",
+            "--created-by",
+            "human:owner",
+            "--workspace",
+            "ws-payments",
+            "--goal",
+            "pay vendor",
+        ],
+    );
+
+    let err = cli(
+        &h,
+        &[
+            "payment-mandate",
+            "issue",
+            "--session",
+            session,
+            "--mandate",
+            "mandate-spend",
+            "--rail",
+            "stablecoin:x402",
+            "--asset",
+            "USDC",
+            "--max-minor-units",
+            "100",
+            "--approval-threshold-minor-units",
+            "10000",
+            "--counterparty-policy",
+            "prefix:vendor:",
+            "--purpose",
+            "vendor payment",
+            "--expires-at",
+            &expires_at,
+            "--payment-idempotency-key",
+            "pay-once",
+            "--adapter",
+            "x402",
+            "--envelope-format",
+            "x402-payment-v1",
+        ],
+    )
+    .expect_err("approval threshold above mandate ceiling must fail closed");
+    assert!(
+        matches!(err, CliError::Refused(ref message) if message.contains("exceeds ceiling")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn payment_receipt_external_id_only_is_refused_and_log_stays_verifiable() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-external-id-only";
+    let expires_at = future_rfc3339();
+    let grant_id = issue_payment_session_grant_and_mandate(&h, session, &expires_at);
+    admit_payment_action(&h, session, &grant_id);
+
+    let err = cli(
+        &h,
+        &[
+            "receipt",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-pay",
+            "--external-id",
+            "rail:receipt:external-only",
+        ],
+    )
+    .expect_err("external-id-only payment receipt must not satisfy required typed evidence");
+    assert!(
+        matches!(err, CliError::MissingFlag(ref flag) if flag == "settlement-status"),
+        "unexpected error: {err}"
+    );
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
+}
+
+#[test]
+fn payment_receipt_settled_at_matches_settlement_status() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-settlement-time";
+    let expires_at = future_rfc3339();
+    let grant_id = issue_payment_session_grant_and_mandate(&h, session, &expires_at);
+    admit_payment_action(&h, session, &grant_id);
+
+    let missing_settled_at = cli(
+        &h,
+        &[
+            "receipt",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-pay",
+            "--rail-receipt-hash",
+            "6666666666666666666666666666666666666666666666666666666666666666",
+            "--settlement-status",
+            "settled",
+        ],
+    )
+    .expect_err("settled receipt must include settled-at");
+    assert!(
+        matches!(missing_settled_at, CliError::MissingFlag(ref flag) if flag == "settled-at"),
+        "unexpected error: {missing_settled_at}"
+    );
+
+    let submitted_with_settled_at = cli(
+        &h,
+        &[
+            "receipt",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-pay",
+            "--rail-receipt-hash",
+            "6666666666666666666666666666666666666666666666666666666666666666",
+            "--settlement-status",
+            "submitted",
+            "--settled-at",
+            &Utc::now().to_rfc3339(),
+        ],
+    )
+    .expect_err("non-settled receipt must not include settled-at");
+    assert!(
+        matches!(submitted_with_settled_at, CliError::Refused(ref message) if message.contains("only valid")),
+        "unexpected error: {submitted_with_settled_at}"
+    );
+
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
+}
+
+#[test]
+fn simulation_record_before_needs_simulation_is_refused() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-sim-before";
+    let expires_at = future_rfc3339();
+    issue_payment_session_grant_and_mandate(&h, session, &expires_at);
+
+    let err = cli(
+        &h,
+        &[
+            "simulation",
+            "record",
+            "--session",
+            session,
+            "--action",
+            "act-pay",
+        ],
+    )
+    .expect_err("simulation evidence before a proposed action must fail closed");
+    assert!(
+        matches!(err, CliError::Refused(ref message) if message.contains("was never proposed")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn paused_session_refuses_payment_mandate_issue() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-payment-paused";
+    let expires_at = future_rfc3339();
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent:runtime",
+            "--created-by",
+            "human:owner",
+            "--workspace",
+            "ws-payments",
+            "--goal",
+            "pay vendor",
+        ],
+    );
+    ok(&h, &["session", "pause", "--session", session]);
+    let err = cli(
+        &h,
+        &[
+            "payment-mandate",
+            "issue",
+            "--session",
+            session,
+            "--mandate",
+            "mandate-spend",
+            "--rail",
+            "stablecoin:x402",
+            "--asset",
+            "USDC",
+            "--max-minor-units",
+            "100",
+            "--counterparty-policy",
+            "prefix:vendor:",
+            "--purpose",
+            "vendor payment",
+            "--expires-at",
+            &expires_at,
+            "--payment-idempotency-key",
+            "pay-once",
+            "--adapter",
+            "x402",
+            "--envelope-format",
+            "x402-payment-v1",
+        ],
+    )
+    .expect_err("paused session must refuse new payment mandate authority");
+    assert!(
+        matches!(err, CliError::Runtime(_)),
+        "unexpected error: {err}"
     );
 }
 

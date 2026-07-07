@@ -44,8 +44,11 @@ receipt ledger.
 | `session cancel` | Cancel a running or paused session through the daemon lifecycle state machine. |
 | `grant issue` | Issue a scoped `CapabilityGrant` and journal `CapabilityGranted`. |
 | `grant revoke` | Resolve an issued grant's stored revocation handle and journal `CapabilityRevoked`. |
+| `payment-mandate issue` | Issue bounded economic authority through `Store::issue_payment_mandate`; receipt requirement is always `required`. |
+| `payment-spend propose` | Derive a typed payment `ActionManifest` from an issued mandate and normalized rail envelope evidence, then run daemon admission. |
 | `action propose` | Journal an `ActionProposed`, run policy admission, journal `PolicyDecided`. |
 | `action execute` | Run a scoped shell action through the **tool gateway lane**: resolve a registered local shell tool, canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
+| `simulation record` | Record passed, action-bound simulation evidence for the latest `NeedsSimulation` decision. |
 | `receipt record` | Record a `CapabilityReceipt` for an **admitted** action (fails closed otherwise). |
 | `journal verify` | Verify the journal and receipt hash chains and causality. |
 | `trace show` | Render the full trace: session, grants, actions, decisions, receipts. |
@@ -113,6 +116,88 @@ $ beaterosctl trace show --session demo
 === beaterOS trace: demo ===
 ...
 ```
+
+## Payment operator flow
+
+Payment actions require two independent authorities:
+
+- a spend `CapabilityGrant`, which authorizes the agent to perform a spend verb
+  on a payment rail; and
+- a `PaymentMandate`, which authorizes the economics: rail, asset, amount
+  ceiling, counterparty policy, purpose, idempotency key, adapter/envelope
+  allowlists, approval threshold, and receipt requirement.
+
+The CLI never asks the operator to retype mandate-owned authority fields during
+spend proposal. `payment-spend propose` derives rail, asset, purpose, and
+payment idempotency key from the stored mandate and only accepts the concrete
+rail attempt fields: amount, adapter id/version, counterparty reference and
+binding hash, envelope format/hash, and optional envelope expiry.
+
+```console
+$ beaterosctl session create --session pay-demo --agent agent:runtime \
+    --created-by human:owner --workspace ws-payments \
+    --goal "pay approved vendor" --initial-capability-id grant-spend
+created session pay-demo
+
+$ beaterosctl grant issue --session pay-demo --grant-id grant-spend \
+    --resource-kind payment_rail --resource-id stablecoin:x402 \
+    --actions spend --max-risk critical --max-data-class financial
+issued grant grant-spend
+
+$ beaterosctl payment-mandate issue --session pay-demo \
+    --mandate mandate-spend --rail stablecoin:x402 --asset USDC \
+    --max-minor-units 100 --counterparty-policy prefix:vendor: \
+    --purpose "vendor payment" --expires-at 2030-01-01T00:00:00Z \
+    --approval-threshold-minor-units 100 \
+    --payment-idempotency-key pay-once \
+    --adapter x402 --envelope-format x402-payment-v1
+issued payment mandate mandate-spend
+
+$ beaterosctl payment-spend propose --session pay-demo --action-id act-pay \
+    --mandate mandate-spend --grants grant-spend --amount-minor-units 100 \
+    --adapter-id x402 --adapter-version v1 --counterparty-ref vendor:runtime \
+    --counterparty-binding-hash 2222222222222222222222222222222222222222222222222222222222222222 \
+    --envelope-format x402-payment-v1 \
+    --envelope-hash 3333333333333333333333333333333333333333333333333333333333333333
+payment action act-pay
+  decision:   NeedsSimulation
+
+$ beaterosctl simulation record --session pay-demo --action act-pay
+recorded simulation sim-act-pay for action act-pay
+
+$ beaterosctl payment-spend propose --session pay-demo --action-id act-pay ...
+payment action act-pay
+  decision:   Allowed
+
+$ beaterosctl receipt record --session pay-demo --action act-pay \
+    --status submitted --rail-receipt-hash 6666666666666666666666666666666666666666666666666666666666666666 \
+    --settlement-status submitted --external-id rail:receipt:runtime
+recorded receipt <receipt-id> for action act-pay
+
+$ beaterosctl journal verify --session pay-demo
+journal OK
+```
+
+Fail-closed payment rules:
+
+- `payment-mandate issue` writes only through `Store::issue_payment_mandate`;
+  raw `PaymentMandateIssued` events are refused by the daemon public append API.
+- Mandates require non-empty rail, asset, counterparty policy, purpose,
+  idempotency key, positive amount ceiling, future expiry, and explicit
+  adapter/envelope-format allowlists. CLI-issued mandates always set
+  `receipt_requirement = required`, and approval thresholds must not exceed the
+  mandate ceiling.
+- `payment-spend propose` refuses missing mandate, expired mandate, zero amount,
+  disallowed adapter/envelope, malformed lowercase 32-byte hashes, disallowed
+  counterparty, and expired envelope before admission. Core policy rechecks the
+  same normalized intent against the mandate.
+- `simulation record` derives the manifest hash from the stored action and
+  defaults the scenario id from the latest `NeedsSimulation` decision.
+- `receipt record` derives typed payment receipt evidence from the stored
+  manifest and mandate. Generic `--external-id` values are supplemental and can
+  never satisfy a required payment receipt without `--rail-receipt-hash` and
+  `--settlement-status`. `settled` receipts require `--settled-at`; non-settled
+  receipts reject `--settled-at`.
 
 ## Tool gateway execution lane
 
@@ -213,6 +298,11 @@ summaries, external IDs, and payment metadata may be present. Use
 - **Session lifecycle gates authority.** New grants, payment mandates, and
   action admissions are refused unless the daemon-projected session status is
   `Running`.
+- **No payment without a mandate.** Spend actions proposed through the payment
+  CLI carry a typed `PaymentIntent` and must be covered by an issued mandate.
+- **Typed payment receipts.** Required payment receipt evidence is recorded as
+  structured `PaymentReceiptEvidence`; external IDs alone do not satisfy the
+  receipt requirement.
 - **Policy outside the model.** Admission is computed by `PolicyEngine`, which
   has no model dependency.
 - **Journal before side effects.** `ActionProposed` and `PolicyDecided` are
