@@ -1268,7 +1268,7 @@ impl Store {
                 })?;
             let lease_issued_at = Utc::now();
             let initial_lease_wall_ms = match request.initial_lease_ms {
-                Some(initial_lease_ms) if initial_lease_ms == 0 => {
+                Some(0) => {
                     return Err(DaemonError::Refused(
                         "initial_lease_ms must be greater than zero".to_string(),
                     ));
