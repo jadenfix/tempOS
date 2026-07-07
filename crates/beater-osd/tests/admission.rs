@@ -744,7 +744,7 @@ fn open_execution_lease_blocks_reexecution_after_callback_failure() {
         },
     );
     assert!(
-        matches!(failed, Err(DaemonError::Refused(message)) if message.contains("simulated crash after lease")),
+        matches!(failed, Err(DaemonError::Refused(ref message)) if message.contains("simulated crash after lease")),
         "{failed:?}"
     );
     assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
@@ -761,7 +761,7 @@ fn open_execution_lease_blocks_reexecution_after_callback_failure() {
     );
 
     assert!(
-        matches!(retry, Err(DaemonError::Refused(message)) if message.contains("already has an open execution lease")),
+        matches!(retry, Err(DaemonError::Refused(ref message)) if message.contains("already has an open execution lease")),
         "{retry:?}"
     );
     let journal = store.load_journal(session_id).unwrap();
