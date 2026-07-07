@@ -181,6 +181,12 @@ pub struct SchedulerOpenExecutionLease {
     pub status: SchedulerExecutionLeaseStatus,
 }
 
+#[derive(Clone, Debug)]
+pub struct OpenExecutionLeasePreparation {
+    pub projection: SessionProjection,
+    pub lease: ExecutionLease,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SchedulerProjection {
     pub pending_allowed_action_ids: Vec<String>,
@@ -1584,7 +1590,11 @@ impl Store {
     /// Complete a previously claimed execution lease with a receipt. The lease
     /// must still be open and match `lease_id`; core journal causality verifies
     /// timing, target, tool, input digest, side-effect, and receipt-chain
-    /// compatibility before the append is accepted.
+    /// compatibility before the append is accepted. Completion intentionally
+    /// does not require the session to still be running: the lease is durable
+    /// proof that execution authority was acquired while the session was live,
+    /// and pause/cancel after lease start must not block a terminal receipt for
+    /// already-started side effects.
     pub fn append_receipt_for_execution_lease(
         &self,
         session_id: &str,
@@ -1594,8 +1604,6 @@ impl Store {
     ) -> DaemonResult<ReceiptAppendOutcome> {
         self.with_session_lock(session_id, || {
             let journal = self.load_journal_unlocked(session_id)?;
-            let projection = project_journal(session_id, &journal)?;
-            ensure_session_running(&projection.session)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
             let open_lease = admission_state
                 .open_execution_leases
@@ -1623,6 +1631,36 @@ impl Store {
                 receipt_record,
                 receipt,
             })
+        })
+    }
+
+    /// Snapshot the open execution lease and projection needed for worker
+    /// pre-execution checks, then release the session lock before any blocking
+    /// sandbox work starts.
+    ///
+    /// New execution starts still require a running session here. Later receipt
+    /// completion is allowed through [`Self::append_receipt_for_execution_lease`]
+    /// even if local lifecycle controls pause or cancel the session while the
+    /// sandboxed process is already running.
+    pub fn prepare_open_execution_lease(
+        &self,
+        session_id: &str,
+        lease_id: &str,
+    ) -> DaemonResult<OpenExecutionLeasePreparation> {
+        self.with_session_lock(session_id, || {
+            let journal = self.load_journal_unlocked(session_id)?;
+            let projection = project_journal(session_id, &journal)?;
+            ensure_session_running(&projection.session)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let lease = admission_state
+                .open_execution_leases
+                .values()
+                .find(|lease| lease.lease_id == lease_id)
+                .cloned()
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!("execution lease {lease_id} is not open"))
+                })?;
+            Ok(OpenExecutionLeasePreparation { projection, lease })
         })
     }
 
