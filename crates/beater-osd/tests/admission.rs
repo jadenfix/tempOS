@@ -904,6 +904,10 @@ fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecut
     ));
     assert!(store.open_execution_leases(session_id).unwrap().is_empty());
 
+    store
+        .transition_session(session_id, SessionTransition::Resume, Utc::now())
+        .unwrap();
+
     let receipt_after_reconcile =
         store.append_receipt(session_id, receipt_input("act-lease-reconcile"), Utc::now());
     assert!(
@@ -911,9 +915,6 @@ fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecut
         "{receipt_after_reconcile:?}"
     );
 
-    store
-        .transition_session(session_id, SessionTransition::Resume, Utc::now())
-        .unwrap();
     let new_admission = store
         .admit_action(session_id, manifest(session_id, "act-after-reconcile"))
         .unwrap();
