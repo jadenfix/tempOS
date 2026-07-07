@@ -125,6 +125,10 @@ review boundaries.
   - Token-gated HTTP proof that an external runner can drive the bounded
     runtime local-shell worker loop over multiple admitted actions without
     receiving direct store authority.
+- `scripts/run-beater-osd-http-supervised-worker-smoke.py`
+  - Token-gated HTTP proof that opt-in supervised recovery blocks on live
+    leases, reconciles expired lost leases as `outcome_unknown`, and dispatches
+    later admitted work without retrying the reconciled action.
 - `scripts/run-beater-osd-http-claims-smoke.py`
   - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned
     tool compare-and-set refusal, exact lease-id completion, live-lease

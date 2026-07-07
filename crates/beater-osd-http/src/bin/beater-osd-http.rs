@@ -30,7 +30,7 @@ use beater_os_core::{
 };
 use beater_os_runtime::{
     AgentRuntime, RuntimeBundle, RuntimeError, RuntimeLocalShellWorkerLoopRequest,
-    RuntimeLocalShellWorkerRequest,
+    RuntimeLocalShellWorkerRequest, RuntimeSupervisedLocalShellWorkerCycleRequest,
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
@@ -93,6 +93,7 @@ const MIN_CONTROL_TOKEN_BYTES: usize = 16;
 const DEFAULT_EXECUTE_TIMEOUT_SECS: u64 = 30;
 const MAX_EXECUTE_TIMEOUT_SECS: u64 = 30;
 const MAX_HTTP_WORKER_LOOP_ACTIONS: usize = 16;
+const MAX_HTTP_WORKER_LOOP_RECOVERIES: usize = 16;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -887,6 +888,52 @@ fn runtime_local_shell_worker_loop_route(
             ),
         );
     }
+    if payload.recover_expired_leases {
+        if payload.max_recoveries == 0 || payload.max_recoveries > MAX_HTTP_WORKER_LOOP_RECOVERIES {
+            return (
+                400,
+                json_error(
+                    "bad_request",
+                    &format!(
+                        "max_recoveries must be between 1 and {MAX_HTTP_WORKER_LOOP_RECOVERIES} when recover_expired_leases is true"
+                    ),
+                ),
+            );
+        }
+        if let Some(reason) = payload.recovery_reason.as_deref()
+            && reason.trim().is_empty()
+        {
+            return (
+                400,
+                json_error("bad_request", "recovery_reason must not be empty"),
+            );
+        }
+        if payload
+            .recovery_evidence_refs
+            .iter()
+            .any(|reference| reference.trim().is_empty())
+        {
+            return (
+                400,
+                json_error(
+                    "bad_request",
+                    "recovery_evidence_refs must not contain empty references",
+                ),
+            );
+        }
+    } else if payload.max_recoveries != 0
+        || payload.recovery_reason.is_some()
+        || payload.reconciled_by.is_some()
+        || !payload.recovery_evidence_refs.is_empty()
+    {
+        return (
+            400,
+            json_error(
+                "bad_request",
+                "recovery fields require recover_expired_leases=true",
+            ),
+        );
+    }
     let runtime = AgentRuntime::from_store(store.clone());
     let request = RuntimeLocalShellWorkerLoopRequest {
         max_actions: payload.max_actions,
@@ -908,9 +955,25 @@ fn runtime_local_shell_worker_loop_route(
             max_output_bytes: payload.max_output_bytes,
         },
     };
-    match runtime.run_local_shell_worker_loop(request) {
-        Ok(outcome) => serialize_response(200, &outcome),
-        Err(err) => runtime_error_response(err),
+    if payload.recover_expired_leases {
+        let supervised = RuntimeSupervisedLocalShellWorkerCycleRequest {
+            worker_loop: request,
+            max_recoveries: payload.max_recoveries,
+            recovery_reason: payload.recovery_reason.unwrap_or_else(|| {
+                "HTTP supervised worker loop found an expired open execution lease".to_string()
+            }),
+            reconciled_by: payload.reconciled_by,
+            recovery_evidence_refs: payload.recovery_evidence_refs,
+        };
+        match runtime.run_supervised_local_shell_worker_cycle(supervised) {
+            Ok(outcome) => serialize_response(200, &outcome),
+            Err(err) => runtime_error_response(err),
+        }
+    } else {
+        match runtime.run_local_shell_worker_loop(request) {
+            Ok(outcome) => serialize_response(200, &outcome),
+            Err(err) => runtime_error_response(err),
+        }
     }
 }
 
@@ -1608,6 +1671,16 @@ struct RuntimeLocalShellWorkerLoopHttpRequest {
     #[serde(default)]
     max_output_bytes: Option<usize>,
     max_actions: usize,
+    #[serde(default)]
+    recover_expired_leases: bool,
+    #[serde(default)]
+    max_recoveries: usize,
+    #[serde(default)]
+    recovery_reason: Option<String>,
+    #[serde(default)]
+    reconciled_by: Option<String>,
+    #[serde(default)]
+    recovery_evidence_refs: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

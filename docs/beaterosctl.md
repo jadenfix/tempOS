@@ -56,6 +56,35 @@ Example body:
 The response is the serialized runtime worker-loop outcome, including
 `stop_reason`, executed action reports, and the final projection summary.
 
+Callers may explicitly opt into supervised recovery before the loop runs:
+
+```json
+{
+  "tool": "shell",
+  "tool_digest": "<sha256>",
+  "command": "sh",
+  "args": ["-c", "printf ok > out.txt"],
+  "cwd": "/workspace/project",
+  "side_effects": ["local_write"],
+  "timeout_secs": 30,
+  "max_actions": 8,
+  "recover_expired_leases": true,
+  "max_recoveries": 1,
+  "recovery_reason": "runner observed expired worker lease",
+  "reconciled_by": "agent:local-runner",
+  "recovery_evidence_refs": ["runner://pid/1234/dead"]
+}
+```
+
+Supervised recovery is opt-in only. When `recover_expired_leases` is absent or
+false, the route returns the plain worker-loop outcome and refuses recovery
+fields. When true, `max_recoveries` must be between 1 and 16. The route returns
+the serialized supervised-cycle outcome: `recoveries`, `worker_loop`, and final
+`projection`. Live leases are not recovered; they return a successful supervised
+outcome with zero recoveries and `worker_loop.stop_reason = "recovery_blocked"`.
+Recovered leases are reconciled only as `outcome_unknown`; the reconciled action
+is closed and not retried.
+
 ## Store layout
 
 The store root is chosen by, in order of precedence: the `--home` flag, the
