@@ -16,8 +16,9 @@ use std::process::Command;
 use beater_os_core::{
     ActionKind, ActionManifest, ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DecisionResult,
-    DelegationMode, GrantConstraints, InMemoryJournal, JournalEvent, JournalSnapshot, ModelPolicy,
-    PolicyDecision, ReceiptLedger, ResourceKind, RiskClass, SessionStatus,
+    DelegationMode, ExecutionLease, ExecutionLeaseHeartbeat, ExecutionLeaseReconciliation,
+    ExecutionLeaseResolution, GrantConstraints, InMemoryJournal, JournalEvent, JournalSnapshot,
+    ModelPolicy, PolicyDecision, ReceiptLedger, ResourceKind, RiskClass, SessionStatus,
 };
 use chrono::{DateTime, Utc};
 
@@ -106,6 +107,19 @@ fn manifest(action_id: &str, session_id: &str, tool: &str, grants: &[&str]) -> A
     }
 }
 
+fn execute_manifest(
+    action_id: &str,
+    session_id: &str,
+    tool: &str,
+    grants: &[&str],
+) -> ActionManifest {
+    let mut manifest = manifest(action_id, session_id, tool, grants);
+    manifest.action_kind = ActionKind::Execute;
+    manifest.expected_side_effects = BTreeSet::from([beater_os_core::SideEffectClass::LocalWrite]);
+    manifest.requested_budget.max_wall_ms = Some(5_000);
+    manifest
+}
+
 fn decision(
     id: &str,
     manifest: &ActionManifest,
@@ -146,6 +160,72 @@ fn receipt(id: &str, manifest: &ActionManifest) -> Result<CapabilityReceipt, Bea
         artifact_refs: Vec::new(),
         payment_receipt: None,
     })
+}
+
+fn execution_lease(
+    id: &str,
+    manifest: &ActionManifest,
+    decision: &PolicyDecision,
+) -> Result<ExecutionLease, BeaterOsError> {
+    Ok(ExecutionLease {
+        lease_id: id.to_string(),
+        session_id: manifest.session_id.clone(),
+        action_id: manifest.action_id.clone(),
+        manifest_hash: manifest.digest()?,
+        decision_id: decision.decision_id.clone(),
+        tool_id: manifest.tool_id.clone(),
+        tool_ref: format!("{}@test#digest", manifest.tool_id),
+        target: manifest
+            .resolved_target
+            .as_ref()
+            .unwrap_or(&manifest.target)
+            .clone(),
+        required_grants: manifest.required_grants.clone(),
+        requested_budget: manifest.requested_budget.clone(),
+        leased_at: ts(1_003),
+        expires_at: ts(1_004),
+    })
+}
+
+fn execution_lease_heartbeat(
+    id: &str,
+    lease: &ExecutionLease,
+    previous_expires_at: DateTime<Utc>,
+    extended_expires_at: DateTime<Utc>,
+) -> ExecutionLeaseHeartbeat {
+    ExecutionLeaseHeartbeat {
+        heartbeat_id: id.to_string(),
+        lease_id: lease.lease_id.clone(),
+        session_id: lease.session_id.clone(),
+        action_id: lease.action_id.clone(),
+        manifest_hash: lease.manifest_hash.clone(),
+        decision_id: lease.decision_id.clone(),
+        previous_expires_at,
+        extended_expires_at,
+        observed_by: "worker:audit-test".to_string(),
+        evidence_refs: vec!["audit-test://heartbeat".to_string()],
+        heartbeat_at: ts(1_003),
+    }
+}
+
+fn execution_lease_reconciliation(
+    id: &str,
+    lease: &ExecutionLease,
+    reason: &str,
+) -> ExecutionLeaseReconciliation {
+    ExecutionLeaseReconciliation {
+        reconciliation_id: id.to_string(),
+        lease_id: lease.lease_id.clone(),
+        session_id: lease.session_id.clone(),
+        action_id: lease.action_id.clone(),
+        manifest_hash: lease.manifest_hash.clone(),
+        decision_id: lease.decision_id.clone(),
+        resolution: ExecutionLeaseResolution::OutcomeUnknown,
+        reconciled_by: "operator:audit-test".to_string(),
+        reason: reason.to_string(),
+        evidence_refs: vec!["audit-test://reconciliation".to_string()],
+        reconciled_at: ts(1_006),
+    }
 }
 
 /// A full, valid session → grant → action → decision → receipt trace.
@@ -273,7 +353,7 @@ fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
         report.failures().collect::<Vec<_>>()
     );
     assert_eq!(report.records, 5);
-    assert_eq!(report.checks.len(), 10);
+    assert_eq!(report.checks.len(), 11);
     assert_eq!(report.failures().count(), 0);
     Ok(())
 }
@@ -407,9 +487,244 @@ fn metrics_report_full_coverage_for_valid_trace() -> Result<(), BeaterOsError> {
     assert_eq!(metrics.decisions, 1);
     assert_eq!(metrics.allowed_actions, 1);
     assert_eq!(metrics.receipts, 1);
+    assert_eq!(metrics.execution_leases_issued, 0);
+    assert_eq!(metrics.execution_lease_heartbeats, 0);
+    assert_eq!(metrics.execution_leases_open, 0);
+    assert!(metrics.execution_lease_closure_coverage.is_complete());
     assert!(metrics.decision_coverage.is_complete());
     assert!(metrics.receipt_coverage.is_complete());
     assert!(metrics.denial_explanation_coverage.is_complete());
+    Ok(())
+}
+
+#[test]
+fn execution_lease_lifecycle_accepts_heartbeat_and_receipt() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    journal.append(
+        JournalEvent::CapabilityGranted {
+            grant: grant("G1", "S1", "agent:coder"),
+        },
+        ts(1_001),
+    )?;
+    let m = execute_manifest("A1", "S1", "tool:fs", &["G1"]);
+    let d = decision("D1", &m, DecisionResult::Allowed, "admitted by grant G1")?;
+    let l = execution_lease("L1", &m, &d)?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: Box::new(m.clone()),
+        },
+        ts(1_002),
+    )?;
+    journal.append(JournalEvent::PolicyDecided { decision: d }, ts(1_002))?;
+    journal.append(
+        JournalEvent::ExecutionLeaseIssued { lease: l.clone() },
+        ts(1_003),
+    )?;
+    journal.append(
+        JournalEvent::ExecutionLeaseHeartbeated {
+            heartbeat: execution_lease_heartbeat("H1", &l, l.expires_at, ts(1_005)),
+        },
+        ts(1_003),
+    )?;
+    journal.append(
+        JournalEvent::ReceiptAppended {
+            receipt: receipt("R1", &m)?,
+        },
+        ts(1_004),
+    )?;
+
+    let snapshot = journal.snapshot();
+    let report = verify_snapshot(&snapshot);
+    assert!(
+        report.ok,
+        "expected pass, failures: {:?}",
+        report.failures().collect::<Vec<_>>()
+    );
+    let metrics = compute_metrics(&snapshot);
+    assert_eq!(metrics.execution_leases_issued, 1);
+    assert_eq!(metrics.execution_lease_heartbeats, 1);
+    assert_eq!(metrics.execution_leases_open, 0);
+    assert!(metrics.execution_lease_closure_coverage.is_complete());
+    Ok(())
+}
+
+#[test]
+fn execution_lease_lifecycle_accepts_expired_reconciliation() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    journal.append(
+        JournalEvent::CapabilityGranted {
+            grant: grant("G1", "S1", "agent:coder"),
+        },
+        ts(1_001),
+    )?;
+    let m = execute_manifest("A1", "S1", "tool:fs", &["G1"]);
+    let d = decision("D1", &m, DecisionResult::Allowed, "admitted by grant G1")?;
+    let l = execution_lease("L1", &m, &d)?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: Box::new(m.clone()),
+        },
+        ts(1_002),
+    )?;
+    journal.append(JournalEvent::PolicyDecided { decision: d }, ts(1_002))?;
+    journal.append(
+        JournalEvent::ExecutionLeaseIssued { lease: l.clone() },
+        ts(1_003),
+    )?;
+    journal.append(
+        JournalEvent::ExecutionLeaseReconciled {
+            reconciliation: execution_lease_reconciliation(
+                "X1",
+                &l,
+                "worker expired before receipt",
+            ),
+        },
+        ts(1_006),
+    )?;
+
+    let report = verify_snapshot(&journal.snapshot());
+    assert!(
+        report.ok,
+        "expected pass, failures: {:?}",
+        report.failures().collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[test]
+fn execution_lease_lifecycle_rejects_unresolved_open_lease() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    journal.append(
+        JournalEvent::CapabilityGranted {
+            grant: grant("G1", "S1", "agent:coder"),
+        },
+        ts(1_001),
+    )?;
+    let m = execute_manifest("A1", "S1", "tool:fs", &["G1"]);
+    let d = decision("D1", &m, DecisionResult::Allowed, "admitted by grant G1")?;
+    let l = execution_lease("L1", &m, &d)?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: Box::new(m),
+        },
+        ts(1_002),
+    )?;
+    journal.append(JournalEvent::PolicyDecided { decision: d }, ts(1_002))?;
+    journal.append(JournalEvent::ExecutionLeaseIssued { lease: l }, ts(1_003))?;
+
+    let snapshot = journal.snapshot();
+    let report = verify_snapshot(&snapshot);
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("execution_lease_lifecycle"));
+    let metrics = compute_metrics(&snapshot);
+    assert_eq!(metrics.execution_leases_issued, 1);
+    assert_eq!(metrics.execution_leases_open, 1);
+    assert!(!metrics.execution_lease_closure_coverage.is_complete());
+    Ok(())
+}
+
+#[test]
+fn execution_lease_lifecycle_rejects_stale_heartbeat_expiry() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    journal.append(
+        JournalEvent::CapabilityGranted {
+            grant: grant("G1", "S1", "agent:coder"),
+        },
+        ts(1_001),
+    )?;
+    let m = execute_manifest("A1", "S1", "tool:fs", &["G1"]);
+    let d = decision("D1", &m, DecisionResult::Allowed, "admitted by grant G1")?;
+    let l = execution_lease("L1", &m, &d)?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: Box::new(m),
+        },
+        ts(1_002),
+    )?;
+    journal.append(JournalEvent::PolicyDecided { decision: d }, ts(1_002))?;
+    journal.append(
+        JournalEvent::ExecutionLeaseIssued { lease: l.clone() },
+        ts(1_003),
+    )?;
+    journal.append(
+        JournalEvent::ExecutionLeaseHeartbeated {
+            heartbeat: execution_lease_heartbeat("H1", &l, ts(1_099), ts(1_100)),
+        },
+        ts(1_003),
+    )?;
+
+    let report = verify_snapshot(&journal.snapshot());
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("execution_lease_lifecycle"));
+    Ok(())
+}
+
+#[test]
+fn execution_lease_lifecycle_rejects_empty_reconciliation_reason() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    journal.append(
+        JournalEvent::CapabilityGranted {
+            grant: grant("G1", "S1", "agent:coder"),
+        },
+        ts(1_001),
+    )?;
+    let m = execute_manifest("A1", "S1", "tool:fs", &["G1"]);
+    let d = decision("D1", &m, DecisionResult::Allowed, "admitted by grant G1")?;
+    let l = execution_lease("L1", &m, &d)?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: Box::new(m),
+        },
+        ts(1_002),
+    )?;
+    journal.append(JournalEvent::PolicyDecided { decision: d }, ts(1_002))?;
+    journal.append(
+        JournalEvent::ExecutionLeaseIssued { lease: l.clone() },
+        ts(1_003),
+    )?;
+    journal.append(
+        JournalEvent::ExecutionLeaseReconciled {
+            reconciliation: execution_lease_reconciliation("X1", &l, "   "),
+        },
+        ts(1_006),
+    )?;
+
+    let report = verify_snapshot(&journal.snapshot());
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("execution_lease_lifecycle"));
     Ok(())
 }
 

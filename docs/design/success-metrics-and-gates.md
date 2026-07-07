@@ -51,6 +51,10 @@ reconciled action.
 Runtime worker watchdogs may emit those heartbeats while a sandboxed command is
 still running, but release gates must continue to derive the lifecycle from
 durable journal records rather than trusting worker self-report.
+`beater-os-audit` reports issued lease, heartbeat, open lease, and closure
+coverage counters and fails verification when a snapshot ends with unresolved
+execution-lease authority or when heartbeat/reconciliation events do not bind
+to the issued lease and allowed decision.
 
 ## 3. Tracked trends (targets set from baseline)
 

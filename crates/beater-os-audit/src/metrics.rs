@@ -51,6 +51,9 @@ pub struct AuditMetrics {
     pub allowed_actions: usize,
     pub gated_or_denied_decisions: usize,
     pub receipts: usize,
+    pub execution_leases_issued: usize,
+    pub execution_lease_heartbeats: usize,
+    pub execution_leases_open: usize,
     pub execution_lease_reconciliations: usize,
     /// Fraction of proposed actions that received at least one policy decision.
     pub decision_coverage: Coverage,
@@ -58,6 +61,10 @@ pub struct AuditMetrics {
     /// that is allowed and later re-decided as not-allowed is dropped from the
     /// denominator (it is no longer an allowed action), by design.
     pub receipt_coverage: Coverage,
+    /// Fraction of execution leases closed by either receipt or explicit
+    /// reconciliation. Metrics report durable evidence; correctness remains in
+    /// `verify_snapshot`.
+    pub execution_lease_closure_coverage: Coverage,
     /// Fraction of non-allowed decisions that carry a non-empty explanation.
     pub denial_explanation_coverage: Coverage,
 }
@@ -67,6 +74,8 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
     let mut sessions = 0usize;
     let mut grants = 0usize;
     let mut receipts = 0usize;
+    let mut execution_leases_issued = 0usize;
+    let mut execution_lease_heartbeats = 0usize;
     let mut execution_lease_reconciliations = 0usize;
 
     let mut proposed_actions: BTreeSet<&str> = BTreeSet::new();
@@ -74,6 +83,9 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
     let mut allowed_actions: BTreeSet<&str> = BTreeSet::new();
     let mut receipted_actions: BTreeSet<&str> = BTreeSet::new();
     let mut reconciled_actions: BTreeSet<&str> = BTreeSet::new();
+    let mut issued_execution_leases: BTreeSet<(&str, &str)> = BTreeSet::new();
+    let mut open_execution_leases: BTreeSet<(&str, &str)> = BTreeSet::new();
+    let mut closed_execution_leases: BTreeSet<(&str, &str)> = BTreeSet::new();
 
     let mut decisions = 0usize;
     let mut gated_or_denied = 0usize;
@@ -103,17 +115,40 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
             }
             JournalEvent::ReceiptAppended { receipt } => {
                 receipts += 1;
+                let matching_open_leases: Vec<_> = open_execution_leases
+                    .iter()
+                    .filter(|(_, action_id)| *action_id == receipt.action_id.as_str())
+                    .copied()
+                    .collect();
+                for lease in matching_open_leases {
+                    open_execution_leases.remove(&lease);
+                    closed_execution_leases.insert(lease);
+                }
                 if !reconciled_actions.contains(receipt.action_id.as_str()) {
                     receipted_actions.insert(receipt.action_id.as_str());
                 }
             }
+            JournalEvent::ExecutionLeaseIssued { lease } => {
+                execution_leases_issued += 1;
+                issued_execution_leases.insert((lease.lease_id.as_str(), lease.action_id.as_str()));
+                open_execution_leases.insert((lease.lease_id.as_str(), lease.action_id.as_str()));
+            }
+            JournalEvent::ExecutionLeaseHeartbeated { .. } => {
+                execution_lease_heartbeats += 1;
+            }
             JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
                 execution_lease_reconciliations += 1;
+                let lease = (
+                    reconciliation.lease_id.as_str(),
+                    reconciliation.action_id.as_str(),
+                );
+                if open_execution_leases.remove(&lease) {
+                    closed_execution_leases.insert(lease);
+                }
                 reconciled_actions.insert(reconciliation.action_id.as_str());
                 allowed_actions.remove(reconciliation.action_id.as_str());
                 receipted_actions.remove(reconciliation.action_id.as_str());
             }
-            JournalEvent::ExecutionLeaseHeartbeated { .. } => {}
             _ => {}
         }
     }
@@ -136,9 +171,16 @@ pub fn compute_metrics(snapshot: &JournalSnapshot) -> AuditMetrics {
         allowed_actions: allowed_actions.len(),
         gated_or_denied_decisions: gated_or_denied,
         receipts,
+        execution_leases_issued,
+        execution_lease_heartbeats,
+        execution_leases_open: open_execution_leases.len(),
         execution_lease_reconciliations,
         decision_coverage: Coverage::new(decisions_for_proposed, proposed_actions.len()),
         receipt_coverage: Coverage::new(receipts_for_allowed, allowed_actions.len()),
+        execution_lease_closure_coverage: Coverage::new(
+            closed_execution_leases.len(),
+            issued_execution_leases.len(),
+        ),
         denial_explanation_coverage: Coverage::new(gated_or_denied_explained, gated_or_denied),
     }
 }

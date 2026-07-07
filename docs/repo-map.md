@@ -95,6 +95,9 @@ review boundaries.
 - `crates/beater-os-audit`
   - Trace/receipt validation, integrity reporting, read-only verification
     tooling, and full trace/action bundle serialization.
+  - Independent execution-lease lifecycle audit gate derives issued, heartbeat,
+    receipt-closed, reconciliation-closed, and still-open lease state from the
+    journal rather than trusting daemon or worker self-report.
   - `verify-trace` checks exported full trace bundles offline without importing
     them into daemon state.
 

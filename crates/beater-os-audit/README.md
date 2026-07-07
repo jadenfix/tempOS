@@ -24,7 +24,8 @@ the same code path that *produced* it. It re-derives the audit invariants from
 - **Trace rendering** (`render_trace`) — a legible, deterministic timeline of a
   session (`final.md` §25 step 9, §17.4).
 - **Audit metrics** (`compute_metrics`) — exact coverage ratios for reviewers:
-  decision coverage, receipt coverage, and denial-explanation coverage
+  decision coverage, receipt coverage, execution-lease closure coverage,
+  heartbeat counts, open lease counts, and denial-explanation coverage
   (`final.md` §23.3).
 - **Audit bundle export** (`build_bundle`) — a redaction-safe, digest-anchored
   export for incident response and hand-off: it carries per-record hashes,

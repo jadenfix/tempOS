@@ -13,10 +13,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    ActionManifest, CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot,
-    SessionStatus,
+    ActionKind, ActionManifest, CapabilityGrant, DecisionResult, ExecutionLeaseResolution,
+    JournalEvent, JournalRecord, JournalSnapshot, PolicyDecision, SessionStatus,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 /// Hardcoded here on purpose: an independent auditor must not import the
 /// constant it is checking against from the code under audit.
 pub const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const EXECUTION_LEASE_OVERHEAD_GRACE_MS: u64 = 2_000;
 
 /// Outcome of a single audit check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -94,6 +95,7 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
         check_sequence_contiguous(snapshot),
         check_hash_linkage(snapshot),
         check_receipt_causality(snapshot),
+        check_execution_lease_lifecycle(snapshot),
         check_lifecycle_causality(snapshot),
         check_memory_provenance(snapshot),
         // Novel gap-fillers — invariants the core journal verifier does NOT check.
@@ -108,6 +110,313 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
         ok,
         checks,
     }
+}
+
+#[derive(Clone, Debug)]
+struct AuditedOpenExecutionLease {
+    lease_id: String,
+    session_id: String,
+    manifest_hash: String,
+    decision_id: String,
+    leased_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    requested_wall_ms: Option<u64>,
+}
+
+/// Execution leases are worker authority, not just trace decoration.
+///
+/// This check independently replays lease lifecycle state from durable journal
+/// records. It intentionally fails any snapshot that ends with unresolved
+/// worker authority, because release/audit gates need either a receipt or an
+/// explicit `outcome_unknown` reconciliation before treating the run as closed.
+fn check_execution_lease_lifecycle(snapshot: &JournalSnapshot) -> CheckResult {
+    let mut proposed: BTreeMap<&str, &ActionManifest> = BTreeMap::new();
+    let mut allowed: BTreeMap<&str, &PolicyDecision> = BTreeMap::new();
+    let mut open: BTreeMap<String, AuditedOpenExecutionLease> = BTreeMap::new();
+
+    for record in &snapshot.records {
+        match &record.event {
+            JournalEvent::ActionProposed { manifest } => {
+                proposed.insert(manifest.action_id.as_str(), manifest);
+            }
+            JournalEvent::PolicyDecided { decision } => {
+                if decision.result == DecisionResult::Allowed {
+                    allowed.insert(decision.action_id.as_str(), decision);
+                } else {
+                    allowed.remove(decision.action_id.as_str());
+                }
+            }
+            JournalEvent::ExecutionLeaseIssued { lease } => {
+                if let Some(existing) = open.get(lease.action_id.as_str()) {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease {} opened while lease {} for action {} was unresolved",
+                            lease.lease_id, existing.lease_id, lease.action_id
+                        ),
+                    );
+                }
+                let Some(manifest) = proposed.get(lease.action_id.as_str()) else {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease {} references action {} that was never proposed",
+                            lease.lease_id, lease.action_id
+                        ),
+                    );
+                };
+                if manifest.action_kind != ActionKind::Execute {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease {} references non-execute action {}",
+                            lease.lease_id, lease.action_id
+                        ),
+                    );
+                }
+                let manifest_hash = match manifest.digest() {
+                    Ok(hash) => hash,
+                    Err(err) => {
+                        return CheckResult::fail(
+                            "execution_lease_lifecycle",
+                            format!(
+                                "execution lease {} manifest hash could not be recomputed: {err}",
+                                lease.lease_id
+                            ),
+                        );
+                    }
+                };
+                let Some(decision) = allowed.get(lease.action_id.as_str()) else {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease {} references action {} without an allowed decision",
+                            lease.lease_id, lease.action_id
+                        ),
+                    );
+                };
+                let expected_target = manifest
+                    .resolved_target
+                    .as_ref()
+                    .unwrap_or(&manifest.target);
+                if lease.session_id != manifest.session_id
+                    || lease.action_id != manifest.action_id
+                    || lease.tool_id != manifest.tool_id
+                    || &lease.target != expected_target
+                    || lease.required_grants != manifest.required_grants
+                    || lease.requested_budget != manifest.requested_budget
+                    || lease.decision_id != decision.decision_id
+                    || lease.manifest_hash != manifest_hash
+                    || decision.manifest_hash != lease.manifest_hash
+                {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease {} does not match manifest and decision authority for action {}",
+                            lease.lease_id, lease.action_id
+                        ),
+                    );
+                }
+                if lease.expires_at <= lease.leased_at {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease {} expires at or before it was issued",
+                            lease.lease_id
+                        ),
+                    );
+                }
+                open.insert(
+                    lease.action_id.clone(),
+                    AuditedOpenExecutionLease {
+                        lease_id: lease.lease_id.clone(),
+                        session_id: lease.session_id.clone(),
+                        manifest_hash: lease.manifest_hash.clone(),
+                        decision_id: lease.decision_id.clone(),
+                        leased_at: lease.leased_at,
+                        expires_at: lease.expires_at,
+                        requested_wall_ms: lease.requested_budget.max_wall_ms,
+                    },
+                );
+            }
+            JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => {
+                let Some(open_lease) = open.get_mut(heartbeat.action_id.as_str()) else {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease heartbeat {} references action {} without an open lease",
+                            heartbeat.heartbeat_id, heartbeat.action_id
+                        ),
+                    );
+                };
+                if heartbeat.lease_id != open_lease.lease_id
+                    || heartbeat.session_id != open_lease.session_id
+                    || heartbeat.manifest_hash != open_lease.manifest_hash
+                    || heartbeat.decision_id != open_lease.decision_id
+                {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease heartbeat {} does not match open lease {} authority",
+                            heartbeat.heartbeat_id, open_lease.lease_id
+                        ),
+                    );
+                }
+                if heartbeat.observed_by.trim().is_empty()
+                    || heartbeat
+                        .evidence_refs
+                        .iter()
+                        .any(|reference| reference.trim().is_empty())
+                {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease heartbeat {} has empty observer or evidence",
+                            heartbeat.heartbeat_id
+                        ),
+                    );
+                }
+                if heartbeat.previous_expires_at != open_lease.expires_at {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease heartbeat {} expected previous expiry {}, found {}",
+                            heartbeat.heartbeat_id,
+                            heartbeat.previous_expires_at,
+                            open_lease.expires_at
+                        ),
+                    );
+                }
+                if heartbeat.heartbeat_at >= open_lease.expires_at
+                    || record.created_at >= open_lease.expires_at
+                {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease heartbeat {} occurred after lease {} expired",
+                            heartbeat.heartbeat_id, open_lease.lease_id
+                        ),
+                    );
+                }
+                if heartbeat.extended_expires_at <= open_lease.expires_at {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease heartbeat {} did not extend lease {}",
+                            heartbeat.heartbeat_id, open_lease.lease_id
+                        ),
+                    );
+                }
+                if let Some(max_expires_at) = execution_lease_max_expires_at(open_lease) {
+                    if heartbeat.extended_expires_at > max_expires_at {
+                        return CheckResult::fail(
+                            "execution_lease_lifecycle",
+                            format!(
+                                "execution lease heartbeat {} extends lease {} beyond action wall budget",
+                                heartbeat.heartbeat_id, open_lease.lease_id
+                            ),
+                        );
+                    }
+                } else {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease heartbeat {} cannot prove a finite wall-budget cap",
+                            heartbeat.heartbeat_id
+                        ),
+                    );
+                }
+                open_lease.expires_at = heartbeat.extended_expires_at;
+            }
+            JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
+                let Some(open_lease) = open.get(reconciliation.action_id.as_str()) else {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease reconciliation {} references action {} without an open lease",
+                            reconciliation.reconciliation_id, reconciliation.action_id
+                        ),
+                    );
+                };
+                if reconciliation.lease_id != open_lease.lease_id
+                    || reconciliation.session_id != open_lease.session_id
+                    || reconciliation.manifest_hash != open_lease.manifest_hash
+                    || reconciliation.decision_id != open_lease.decision_id
+                {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease reconciliation {} does not match open lease {} authority",
+                            reconciliation.reconciliation_id, open_lease.lease_id
+                        ),
+                    );
+                }
+                if reconciliation.resolution != ExecutionLeaseResolution::OutcomeUnknown {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease reconciliation {} does not record outcome_unknown",
+                            reconciliation.reconciliation_id
+                        ),
+                    );
+                }
+                if reconciliation.reconciled_by.trim().is_empty()
+                    || reconciliation.reason.trim().is_empty()
+                    || reconciliation
+                        .evidence_refs
+                        .iter()
+                        .any(|reference| reference.trim().is_empty())
+                {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease reconciliation {} has empty operator, reason, or evidence",
+                            reconciliation.reconciliation_id
+                        ),
+                    );
+                }
+                if reconciliation.reconciled_at < open_lease.expires_at {
+                    return CheckResult::fail(
+                        "execution_lease_lifecycle",
+                        format!(
+                            "execution lease reconciliation {} closed live lease {} before expiry",
+                            reconciliation.reconciliation_id, open_lease.lease_id
+                        ),
+                    );
+                }
+                open.remove(reconciliation.action_id.as_str());
+            }
+            JournalEvent::ReceiptAppended { receipt } => {
+                open.remove(receipt.action_id.as_str());
+            }
+            _ => {}
+        }
+    }
+
+    if let Some((action_id, lease)) = open.iter().next() {
+        return CheckResult::fail(
+            "execution_lease_lifecycle",
+            format!(
+                "execution lease {} for action {} remains unresolved without receipt or reconciliation",
+                lease.lease_id, action_id
+            ),
+        );
+    }
+
+    CheckResult::pass(
+        "execution_lease_lifecycle",
+        "execution leases are resolved by receipt or explicit outcome_unknown reconciliation",
+    )
+}
+
+fn execution_lease_max_expires_at(lease: &AuditedOpenExecutionLease) -> Option<DateTime<Utc>> {
+    let max_wall_ms = lease
+        .requested_wall_ms?
+        .checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS)?;
+    let max_wall_ms = i64::try_from(max_wall_ms).ok()?;
+    lease
+        .leased_at
+        .checked_add_signed(TimeDelta::milliseconds(max_wall_ms))
 }
 
 fn check_lifecycle_causality(snapshot: &JournalSnapshot) -> CheckResult {
@@ -806,7 +1115,7 @@ mod tests {
         let report = verify_snapshot(&snapshot);
         assert_eq!(report.records, 0);
         assert!(report.ok, "empty journal should pass: {:?}", report.checks);
-        assert_eq!(report.checks.len(), 10);
+        assert_eq!(report.checks.len(), 11);
         assert_eq!(report.failures().count(), 0);
     }
 }
