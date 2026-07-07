@@ -46,6 +46,7 @@ pub fn dispatch(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         ("receipt", "record") => receipt_record(store, args),
         ("journal", "verify") => journal_verify(store, args),
         ("trace", "show") => trace_show(store, args),
+        ("trace", "export") => trace_export(store, args),
         _ => Err(CliError::Usage(format!(
             "unknown command '{group} {sub}'. Run `beaterosctl help` for usage."
         ))),
@@ -816,6 +817,56 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     }
 
     Ok(lines.join("\n"))
+}
+
+fn trace_export(store: &Store, args: &ParsedArgs) -> CliResult<String> {
+    let session_id = args.require("session")?.to_string();
+    let export = store.export_session_trace(&session_id)?;
+    let journal_root_hash = export
+        .journal
+        .records
+        .last()
+        .map(|record| record.hash.as_str())
+        .unwrap_or("empty");
+    let bundle_id = args
+        .get("bundle-id")
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{session_id}:{journal_root_hash}"));
+    if bundle_id.trim().is_empty() {
+        return Err(CliError::Invalid {
+            field: "bundle-id".to_string(),
+            value: bundle_id,
+        });
+    }
+    let description = args.get("description").map(str::to_string);
+    let policy_version = export
+        .projection
+        .decisions
+        .last()
+        .map(|decision| decision.policy_version.clone())
+        .or_else(|| {
+            export
+                .projection
+                .grants
+                .last()
+                .map(|grant| grant.policy_version.clone())
+        })
+        .unwrap_or_else(|| POLICY_VERSION.to_string());
+    let bundle = beater_os_audit::TraceBundle {
+        bundle_id,
+        description,
+        policy_version,
+        sessions: vec![export.projection.session],
+        grants: export.projection.grants,
+        payment_mandates: export.projection.mandates,
+        approvals: export.projection.approvals,
+        simulations: export.projection.simulations,
+        manifests: export.projection.manifests,
+        decisions: export.projection.decisions,
+        receipts: export.projection.receipts,
+        journal: export.journal.records,
+    };
+    Ok(beater_os_audit::trace_bundle_to_json(&bundle)?)
 }
 
 /// Resolve the `--session` flag, verifying the session exists.

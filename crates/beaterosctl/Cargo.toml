@@ -16,6 +16,7 @@ name = "beaterosctl"
 path = "src/lib.rs"
 
 [dependencies]
+beater-os-audit = { path = "../beater-os-audit" }
 beater-os-core = { path = "../beater-os-core" }
 beater-osd = { path = "../beater-osd" }
 beater-os-sandbox = { path = "../beater-os-sandbox" }

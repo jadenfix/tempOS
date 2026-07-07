@@ -21,11 +21,13 @@ mod bundle;
 mod events;
 mod metrics;
 mod trace;
+mod trace_bundle;
 mod verify;
 
 pub use bundle::{AuditBundle, RecordDigest, build_bundle, bundle_to_json};
 pub use metrics::{AuditMetrics, Coverage, compute_metrics};
 pub use trace::render_trace;
+pub use trace_bundle::{TraceBundle, trace_bundle_to_json};
 pub use verify::{
     AuditReport, CheckOutcome, CheckResult, GENESIS_HASH, snapshot_root_hash, verify_expected_root,
     verify_snapshot,

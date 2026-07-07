@@ -49,6 +49,7 @@ receipt ledger.
 | `receipt record` | Record a `CapabilityReceipt` for an **admitted** action (fails closed otherwise). |
 | `journal verify` | Verify the journal and receipt hash chains and causality. |
 | `trace show` | Render the full trace: session, grants, actions, decisions, receipts. |
+| `trace export` | Export a full core-wire trace/action bundle for one live session. |
 
 Enum-valued flags use the snake_case names from `beater-os-core`
 (e.g. `file_path`, `read`, `write`, `execute`, `low`, `medium`, `high`,
@@ -187,6 +188,24 @@ the confined target starts.
 Number of sandbox lanes is a compromise beaterOS accepts (§26); this is the
 macOS local lane. Linux `seccomp`/Landlock/cgroups and container/VM lanes
 (§10.6, §13.8) are explicit future targets, not silently assumed here.
+
+## Live trace bundle export
+
+`trace export --session <id>` emits the full core-wire replay artifact for one
+session: session, grants, payment mandates, approvals, simulations, manifests,
+policy decisions, receipts, and journal records. `--bundle-id <id>` overrides
+the default `<session>:<journal-root-hash>`; `--description <text>` adds an
+optional human note.
+
+The export is read-only and holds the daemon session lock once, so projection
+arrays and journal records come from the same verified journal snapshot. It
+does not read `receipts.jsonl`; receipt state remains projected from
+`ReceiptAppended` journal events. It preserves daemon-native journal and receipt
+hashes and the core serde wire shape, including `null` where `null` carries
+contract meaning such as an explicit unbounded grant ceiling. This is a full
+replay/debug artifact, not a redaction-safe incident handoff: goals, paths,
+summaries, external IDs, and payment metadata may be present. Use
+`beateros-audit bundle` when a digest-only redaction-safe bundle is required.
 
 ## Invariants preserved
 

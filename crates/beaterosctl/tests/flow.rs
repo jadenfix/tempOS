@@ -243,6 +243,113 @@ fn full_coding_workflow_end_to_end() {
 }
 
 #[test]
+fn trace_export_emits_schema_shaped_live_bundle() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let file = PathBuf::from(&repo).join("README.md").display().to_string();
+    let session = "sess-export";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent-export",
+            "--workspace",
+            "ws-export",
+            "--goal",
+            "export a live trace bundle",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "read",
+            "--path-prefix",
+            &repo,
+            "--reason",
+            "trace export test",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .expect("grant id in output");
+    ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "tool:beater-os-runtime",
+            "--kind",
+            "read",
+            "--target-kind",
+            "file_path",
+            "--target",
+            &file,
+            "--resolved-target",
+            &file,
+            "--grants",
+            grant_id,
+            "--action-id",
+            "act-export",
+            "--summary",
+            "read export fixture",
+        ],
+    );
+
+    let exported = ok(
+        &h,
+        &[
+            "trace",
+            "export",
+            "--session",
+            session,
+            "--bundle-id",
+            "export-bundle",
+            "--description",
+            "live export smoke",
+        ],
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&exported).expect("trace export should be JSON");
+    assert_eq!(json["bundle_id"], "export-bundle");
+    assert_eq!(json["description"], "live export smoke");
+    assert_eq!(json["sessions"][0]["session_id"], session);
+    assert_eq!(json["grants"].as_array().expect("grants array").len(), 1);
+    assert_eq!(
+        json["manifests"].as_array().expect("manifests array").len(),
+        1
+    );
+    assert_eq!(
+        json["decisions"].as_array().expect("decisions array").len(),
+        1
+    );
+    assert!(json["journal"].as_array().expect("journal array").len() >= 4);
+    assert!(
+        json["sessions"][0]["memory_scope"].is_null(),
+        "trace export should preserve core wire nulls for faithful replay: {exported}"
+    );
+}
+
+#[test]
 fn file_path_prefix_grant_defaults_to_wildcard_selector_when_resource_id_is_omitted() {
     let home = TempHome::new();
     let h = home.as_str();

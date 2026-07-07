@@ -24,9 +24,9 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
-    HashValue, InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision,
-    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
-    SimulationEvidence, ToolManifest,
+    HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot, PaymentMandate,
+    PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus,
+    SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
@@ -157,6 +157,13 @@ pub struct SessionProjection {
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
     pub receipts: Vec<CapabilityReceipt>,
+}
+
+/// Consistent read-only export inputs for one live session trace.
+#[derive(Debug, Clone)]
+pub struct SessionTraceExport {
+    pub projection: SessionProjection,
+    pub journal: JournalSnapshot,
 }
 
 /// Exact local-shell tool version to persist in the daemon-owned tool registry.
@@ -864,6 +871,18 @@ impl Store {
         self.with_session_lock(session_id, || self.project_unlocked(session_id))
     }
 
+    /// Export a consistent read-only trace view under one session lock.
+    pub fn export_session_trace(&self, session_id: &str) -> DaemonResult<SessionTraceExport> {
+        self.with_session_lock(session_id, || {
+            let journal = self.load_journal_unlocked(session_id)?;
+            let projection = project_journal(session_id, &journal)?;
+            Ok(SessionTraceExport {
+                projection,
+                journal: journal.snapshot(),
+            })
+        })
+    }
+
     fn append_event_unlocked(
         &self,
         session_id: &str,
@@ -964,85 +983,7 @@ impl Store {
 
     fn project_unlocked(&self, session_id: &str) -> DaemonResult<SessionProjection> {
         let journal = self.load_journal_unlocked(session_id)?;
-        let mut session = None;
-        let mut grants = Vec::new();
-        let mut revoked_handles = BTreeSet::new();
-        let mut mandates = Vec::new();
-        let mut manifests = Vec::new();
-        let mut decisions = Vec::new();
-        let mut approvals = Vec::new();
-        let mut simulations = Vec::new();
-        let mut receipts = Vec::new();
-        for record in journal.records() {
-            match &record.event {
-                JournalEvent::SessionCreated { session: created } => {
-                    if created.session_id != session_id {
-                        return Err(DaemonError::Refused(format!(
-                            "session {session_id} journal contains SessionCreated for {}",
-                            created.session_id
-                        )));
-                    }
-                    if session.is_some() {
-                        return Err(DaemonError::Refused(format!(
-                            "session {session_id} journal contains more than one SessionCreated event"
-                        )));
-                    }
-                    session = Some(created.clone());
-                }
-                JournalEvent::SessionStatusChanged {
-                    session_id: event_session_id,
-                    to,
-                    ..
-                } => {
-                    if event_session_id != session_id {
-                        return Err(DaemonError::Refused(format!(
-                            "session {session_id} journal contains status transition for {event_session_id}"
-                        )));
-                    }
-                    let Some(projected) = session.as_mut() else {
-                        return Err(DaemonError::Refused(format!(
-                            "session transition for {event_session_id} appears before SessionCreated"
-                        )));
-                    };
-                    projected.status = to.clone();
-                }
-                JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
-                JournalEvent::CapabilityRevoked {
-                    revocation_handle, ..
-                } => {
-                    revoked_handles.insert(revocation_handle.clone());
-                }
-                JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
-                JournalEvent::ActionProposed { manifest } => {
-                    manifests.push(manifest.as_ref().clone())
-                }
-                JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
-                JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
-                JournalEvent::SimulationRecorded { simulation } => {
-                    simulations.push(simulation.clone())
-                }
-                JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
-                JournalEvent::MemoryWritten { .. }
-                | JournalEvent::ScenarioEvaluated { .. }
-                | JournalEvent::IncidentAnnotated { .. } => {}
-            }
-        }
-        let session = session.ok_or_else(|| {
-            DaemonError::Refused(format!(
-                "session {session_id} journal has no SessionCreated event"
-            ))
-        })?;
-        Ok(SessionProjection {
-            session,
-            grants,
-            revoked_handles,
-            mandates,
-            manifests,
-            decisions,
-            approvals,
-            simulations,
-            receipts,
-        })
+        project_journal(session_id, &journal)
     }
 
     fn session_exists_unlocked(&self, session_id: &str) -> DaemonResult<bool> {
@@ -1129,6 +1070,86 @@ impl Store {
             }
         }
     }
+}
+
+fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<SessionProjection> {
+    let mut session = None;
+    let mut grants = Vec::new();
+    let mut revoked_handles = BTreeSet::new();
+    let mut mandates = Vec::new();
+    let mut manifests = Vec::new();
+    let mut decisions = Vec::new();
+    let mut approvals = Vec::new();
+    let mut simulations = Vec::new();
+    let mut receipts = Vec::new();
+    for record in journal.records() {
+        match &record.event {
+            JournalEvent::SessionCreated { session: created } => {
+                if created.session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains SessionCreated for {}",
+                        created.session_id
+                    )));
+                }
+                if session.is_some() {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains more than one SessionCreated event"
+                    )));
+                }
+                session = Some(created.clone());
+            }
+            JournalEvent::SessionStatusChanged {
+                session_id: event_session_id,
+                to,
+                ..
+            } => {
+                if event_session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains status transition for {event_session_id}"
+                    )));
+                }
+                let Some(projected) = session.as_mut() else {
+                    return Err(DaemonError::Refused(format!(
+                        "session transition for {event_session_id} appears before SessionCreated"
+                    )));
+                };
+                projected.status = to.clone();
+            }
+            JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
+            JournalEvent::CapabilityRevoked {
+                revocation_handle, ..
+            } => {
+                revoked_handles.insert(revocation_handle.clone());
+            }
+            JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
+            JournalEvent::ActionProposed { manifest } => {
+                manifests.push(manifest.as_ref().clone());
+            }
+            JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
+            JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
+            JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
+            JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
+            JournalEvent::MemoryWritten { .. }
+            | JournalEvent::ScenarioEvaluated { .. }
+            | JournalEvent::IncidentAnnotated { .. } => {}
+        }
+    }
+    let session = session.ok_or_else(|| {
+        DaemonError::Refused(format!(
+            "session {session_id} journal has no SessionCreated event"
+        ))
+    })?;
+    Ok(SessionProjection {
+        session,
+        grants,
+        revoked_handles,
+        mandates,
+        manifests,
+        decisions,
+        approvals,
+        simulations,
+        receipts,
+    })
 }
 
 fn default_runtime_tool_registry() -> ToolRegistry {

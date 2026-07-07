@@ -150,6 +150,7 @@ dependencies = [
 name = "beaterosctl"
 version = "0.1.0"
 dependencies = [
+ "beater-os-audit",
  "beater-os-core",
  "beater-os-sandbox",
  "beater-os-tool-gateway",

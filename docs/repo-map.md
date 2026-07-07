@@ -43,7 +43,8 @@ review boundaries.
   - Deterministic step replay evidence anchored to proposal, decision, receipt,
     journal-root, and receipt-root hashes.
 - `crates/beater-os-audit`
-  - Trace/receipt validation, integrity reporting, and replay tooling.
+  - Trace/receipt validation, integrity reporting, replay tooling, and full
+    trace/action bundle serialization.
 
 ## 3) Infrastructure and hardening gates
 

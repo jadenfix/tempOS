@@ -95,6 +95,7 @@ pub fn help_text() -> String {
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\
          \x20 journal verify  --session <id>\n\
          \x20 trace show      --session <id>\n\
+         \x20 trace export    --session <id> [--bundle-id <id>] [--description <text>]\n\
          \n\
          Enum values (kinds, actions, risk, data classes, side effects, taint)\n\
          use the snake_case names from beater-os-core, e.g. file_path, read,\n\
