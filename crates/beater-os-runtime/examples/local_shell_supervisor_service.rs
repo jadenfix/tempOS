@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ));
     let workdir = root.join("work");
     fs::create_dir_all(&workdir)?;
+    let workdir = fs::canonicalize(&workdir)?;
 
     let runtime = AgentRuntime::open(&root)?;
     let lost_action_id = "runtime-supervisor-service-lost-action".to_string();
