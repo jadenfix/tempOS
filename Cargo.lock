@@ -131,6 +131,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-osd-http"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "beater-os-sandbox",
+ "beater-os-tool-gateway",
+ "beater-osd",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "beaterosctl"
 version = "0.1.0"
 dependencies = [
