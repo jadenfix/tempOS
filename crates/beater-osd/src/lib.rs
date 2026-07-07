@@ -1050,7 +1050,7 @@ impl Store {
     pub fn execute_and_append_receipt<T, E>(
         &self,
         session_id: &str,
-        mut lease: ExecutionLease,
+        lease: ExecutionLease,
         _created_at: DateTime<Utc>,
         execute: impl FnOnce(&SessionProjection) -> Result<(CapabilityReceiptInput, T), E>,
     ) -> Result<(ExecutionLeaseOutcome, ReceiptAppendOutcome, T), E>
