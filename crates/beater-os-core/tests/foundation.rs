@@ -881,6 +881,162 @@ fn policy_admits_payment_when_cumulative_mandate_capacity_remains() {
 }
 
 #[test]
+fn policy_requires_approval_when_payment_exceeds_mandate_threshold() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.approval_threshold_minor_units = 50;
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+
+    let decision = admit(&spend_manifest(), &ctx);
+
+    assert_eq!(decision.result, DecisionResult::NeedsApproval);
+    assert!(
+        decision
+            .explanation
+            .contains("payment mandate approval threshold"),
+        "{}",
+        decision.explanation
+    );
+    assert_eq!(
+        decision.required_review.as_deref(),
+        Some("action:action-1:payment-mandate-threshold-review")
+    );
+}
+
+#[test]
+fn policy_denies_empty_required_grants_before_payment_threshold_approval() {
+    let now = fixed_time();
+    let mut manifest = spend_manifest();
+    manifest.required_grants.clear();
+    let mut mandate = mandate_for_spend(now);
+    mandate.approval_threshold_minor_units = 50;
+    let mut ctx = admission_context(now, Vec::new());
+    ctx.mandates = vec![mandate];
+
+    let decision = admit(&manifest, &ctx);
+
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(
+        decision.explanation.contains("at least one required grant"),
+        "{}",
+        decision.explanation
+    );
+}
+
+#[test]
+fn policy_payment_threshold_is_exclusive_above_the_configured_amount() {
+    let now = fixed_time();
+    let mut exact_threshold = mandate_for_spend(now);
+    exact_threshold.approval_threshold_minor_units = 100;
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![exact_threshold];
+
+    let exact_decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(exact_decision.result, DecisionResult::NeedsSimulation);
+
+    let mut just_above = mandate_for_spend(now);
+    just_above.approval_threshold_minor_units = 99;
+    ctx.mandates = vec![just_above];
+
+    let above_decision = admit(&spend_manifest(), &ctx);
+    assert_eq!(above_decision.result, DecisionResult::NeedsApproval);
+}
+
+#[test]
+fn policy_accepts_action_bound_grant_approval_for_payment_mandate_threshold() {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let mut mandate = mandate_for_spend(now);
+    mandate.approval_threshold_minor_units = 50;
+    let mut grant = grant_spend(now);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:finance".to_string()],
+    };
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.mandates = vec![mandate];
+    ctx.approvals.push(ApprovalEvidence {
+        review_id: "review-payment-threshold".to_string(),
+        action_id: manifest.action_id.clone(),
+        manifest_hash: manifest_hash(&manifest),
+        grant_id: "grant-spend".to_string(),
+        reviewer_id: "user:finance".to_string(),
+        approved_at: now,
+        policy_version: "policy-v1".to_string(),
+    });
+
+    let decision = admit(&manifest, &ctx);
+
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"payment_mandate_approval_threshold_checked".to_string())
+    );
+}
+
+#[test]
+fn policy_rejects_stale_wrong_or_future_payment_threshold_approval() {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let mut stale_manifest = manifest.clone();
+    stale_manifest.inputs_digest = "sha256:stale".to_string();
+    let mut mandate = mandate_for_spend(now);
+    mandate.approval_threshold_minor_units = 50;
+    let mut grant = grant_spend(now);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:finance".to_string()],
+    };
+
+    let base_approval = ApprovalEvidence {
+        review_id: "review-payment-threshold".to_string(),
+        action_id: manifest.action_id.clone(),
+        manifest_hash: manifest_hash(&manifest),
+        grant_id: "grant-spend".to_string(),
+        reviewer_id: "user:finance".to_string(),
+        approved_at: now,
+        policy_version: "policy-v1".to_string(),
+    };
+
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.mandates = vec![mandate];
+
+    ctx.approvals = vec![ApprovalEvidence {
+        manifest_hash: manifest_hash(&stale_manifest),
+        ..base_approval.clone()
+    }];
+    assert_eq!(admit(&manifest, &ctx).result, DecisionResult::NeedsApproval);
+
+    ctx.approvals = vec![ApprovalEvidence {
+        grant_id: "grant-other".to_string(),
+        ..base_approval.clone()
+    }];
+    assert_eq!(admit(&manifest, &ctx).result, DecisionResult::NeedsApproval);
+
+    ctx.approvals = vec![ApprovalEvidence {
+        reviewer_id: "user:other".to_string(),
+        ..base_approval.clone()
+    }];
+    assert_eq!(admit(&manifest, &ctx).result, DecisionResult::NeedsApproval);
+
+    ctx.approvals = vec![ApprovalEvidence {
+        policy_version: "policy-other".to_string(),
+        ..base_approval.clone()
+    }];
+    assert_eq!(admit(&manifest, &ctx).result, DecisionResult::NeedsApproval);
+
+    ctx.approvals = vec![ApprovalEvidence {
+        approved_at: now + Duration::seconds(1),
+        ..base_approval
+    }];
+    assert_eq!(admit(&manifest, &ctx).result, DecisionResult::NeedsApproval);
+}
+
+#[test]
 fn policy_denies_payment_when_counterparty_policy_does_not_match() {
     let now = fixed_time();
     let mut mandate = mandate_for_spend(now);

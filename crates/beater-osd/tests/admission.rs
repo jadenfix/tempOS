@@ -726,6 +726,54 @@ fn reserving_payment_decision_without_intent_refuses_replay() {
 }
 
 #[test]
+fn durable_approval_satisfies_payment_mandate_threshold() {
+    let (_root, store) = create_store_with_initial(
+        "payment-mandate-threshold",
+        "sess_payment_threshold",
+        ["grant-spend"],
+    );
+    let session_id = "sess_payment_threshold";
+    let mut grant = payment_grant(session_id);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:finance".to_string()],
+    };
+    let mut mandate = payment_mandate(session_id);
+    mandate.approval_threshold_minor_units = 50;
+    store.issue_grant(session_id, grant, Utc::now()).unwrap();
+    store
+        .issue_payment_mandate(session_id, mandate, Utc::now())
+        .unwrap();
+
+    let manifest = payment_manifest(session_id, "act-pay-threshold");
+    let first = store.admit_action(session_id, manifest.clone()).unwrap();
+    assert_eq!(first.decision.result, DecisionResult::NeedsApproval);
+    assert_eq!(
+        first.decision.required_review.as_deref(),
+        Some("action:act-pay-threshold:payment-mandate-threshold-review")
+    );
+
+    store
+        .record_approval(
+            session_id,
+            ApprovalEvidence {
+                review_id: "review-payment-threshold".to_string(),
+                action_id: manifest.action_id.clone(),
+                manifest_hash: manifest.digest().unwrap(),
+                grant_id: "grant-spend".to_string(),
+                reviewer_id: "user:finance".to_string(),
+                approved_at: Utc::now(),
+                policy_version: "beateros-policy-v0".to_string(),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    let second = store.admit_action(session_id, manifest).unwrap();
+    assert_eq!(second.decision.result, DecisionResult::NeedsSimulation);
+}
+
+#[test]
 fn unregistered_tool_denies_through_daemon_admission() {
     let (_root, store) = create_store_with_session("admit-unregistered", "sess_unregistered");
     let session_id = "sess_unregistered";

@@ -56,6 +56,11 @@ struct EffectivePolicy {
     registry_grounded: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PaymentMandateAdmission {
+    approval_required: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PolicyEngine;
 
@@ -235,19 +240,25 @@ impl PolicyEngine {
             ));
         }
 
-        let payment_action = is_payment_action(manifest, &effective.side_effects);
-        if payment_action {
-            if let Err(reason) = payment_authorized_by_mandate(manifest, ctx) {
-                return Ok(decision(
-                    manifest,
-                    manifest_hash,
-                    ctx,
-                    DecisionResult::Denied,
-                    matched_rules,
-                    &reason,
-                    DecisionFollowup::none(),
-                ));
+        let payment_mandate_admission = if is_payment_action(manifest, &effective.side_effects) {
+            match payment_authorized_by_mandate(manifest, ctx) {
+                Ok(admission) => Some(admission),
+                Err(reason) => {
+                    return Ok(decision(
+                        manifest,
+                        manifest_hash,
+                        ctx,
+                        DecisionResult::Denied,
+                        matched_rules,
+                        &reason,
+                        DecisionFollowup::none(),
+                    ));
+                }
             }
+        } else {
+            None
+        };
+        if payment_mandate_admission.is_some() {
             matched_rules.push("payment_authorized_by_mandate".to_string());
         }
 
@@ -305,6 +316,33 @@ impl PolicyEngine {
             ));
         }
         matched_rules.push("all_required_capabilities_allow_action".to_string());
+
+        if payment_mandate_admission
+            .as_ref()
+            .is_some_and(|admission| admission.approval_required)
+            && !all_grants_have_explicit_action_approval(
+                &matching_grants,
+                manifest,
+                &manifest_hash,
+                ctx,
+            )
+        {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::NeedsApproval,
+                matched_rules,
+                "payment mandate approval threshold requires action-bound human approval",
+                DecisionFollowup::review(format!(
+                    "action:{}:payment-mandate-threshold-review",
+                    manifest.action_id
+                )),
+            ));
+        }
+        if payment_mandate_admission.is_some() {
+            matched_rules.push("payment_mandate_approval_threshold_checked".to_string());
+        }
 
         if dangerous_untrusted_instruction(manifest)
             && !all_grants_have_explicit_action_approval(
@@ -493,7 +531,7 @@ fn side_effect_action_violation(
 fn payment_authorized_by_mandate(
     manifest: &ActionManifest,
     ctx: &AdmissionContext,
-) -> Result<(), String> {
+) -> Result<PaymentMandateAdmission, String> {
     let Some(amount) = manifest.requested_budget.max_payment_minor_units else {
         return Err(
             "payment action must declare its amount in requested_budget.max_payment_minor_units"
@@ -613,7 +651,9 @@ fn payment_authorized_by_mandate(
         return Err("payment intent envelope format is not allowed by mandate".to_string());
     }
 
-    Ok(())
+    Ok(PaymentMandateAdmission {
+        approval_required: intent.amount_minor_units > mandate.approval_threshold_minor_units,
+    })
 }
 
 fn counterparty_policy_allows(policy: &str, counterparty_ref: &str, binding_hash: &str) -> bool {
@@ -634,7 +674,6 @@ fn counterparty_policy_allows(policy: &str, counterparty_ref: &str, binding_hash
         _ => false,
     }
 }
-
 fn is_hex_64(value: &str) -> bool {
     value.len() == 64
         && value
@@ -692,12 +731,13 @@ fn all_grants_have_explicit_action_approval(
     manifest_hash: &HashValue,
     ctx: &AdmissionContext,
 ) -> bool {
-    grants.iter().all(|grant| match grant.approval.mode {
-        ApprovalMode::None => false,
-        ApprovalMode::Human | ApprovalMode::MultiParty => {
-            has_approval_for_grant(grant, manifest, manifest_hash, ctx)
-        }
-    })
+    !grants.is_empty()
+        && grants.iter().all(|grant| match grant.approval.mode {
+            ApprovalMode::None => false,
+            ApprovalMode::Human | ApprovalMode::MultiParty => {
+                has_approval_for_grant(grant, manifest, manifest_hash, ctx)
+            }
+        })
 }
 
 fn has_approval_for_grant(
