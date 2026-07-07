@@ -381,10 +381,13 @@ long-running local surface over the same daemon-owned store. It is intentionally
 small: `/healthz` is the only unauthenticated route, while `/v1/sessions` and
 `/v1/sessions/<id>` require a bearer token loaded from `--token-file`.
 Session projection responses include recovery fields:
-`execution_leases`, `open_execution_leases`, `open_execution_lease_ids`,
-`execution_reconciliations`, and `recovery_blocked`, so operators can see when
-runtime admission or resume is blocked by an unresolved execution lease without
-requesting a full trace export.
+`pending_allowed_actions`, `pending_allowed_action_ids`,
+`runnable_pending_actions`, `runnable_pending_action_ids`, `execution_leases`,
+`open_execution_leases`, `open_execution_lease_ids`,
+`execution_reconciliations`, `recovery_blocked`, `admission_blocked`, and
+`admission_blockers`, so operators and schedulers can see when runtime work is
+ready to dispatch, paused by session state, or blocked by an unresolved
+execution lease without requesting a full trace export.
 
 ```console
 $ printf '%s\n' 'replace-with-operator-token' > .beateros/token
@@ -432,10 +435,12 @@ giving callers a direct store mutation API. The bundle path is smoke-gated by
 contract. The route accepts a bounded JSON `RuntimeBundle`, runs it through
 `AgentRuntime::run_bundle` over the daemon store, and returns the full
 `RuntimeBundleOutcome` including step replay evidence and the same recovery
-summary counts (`open_execution_leases`, `open_execution_lease_ids`,
-`execution_reconciliations`, `recovery_blocked`) in its projection summary. It
-does not import trace exports or replay historical journals into live state:
-each submitted bundle is new runtime work that must pass the current daemon
+and scheduler summary counts (`pending_allowed_actions`,
+`runnable_pending_actions`, `open_execution_leases`,
+`open_execution_lease_ids`, `execution_reconciliations`, `recovery_blocked`,
+`admission_blocked`, `admission_blockers`) in its projection summary. It does
+not import trace exports or replay historical journals into live state: each
+submitted bundle is new runtime work that must pass the current daemon
 admission path. Observation receipts remain limited to no-side-effect steps and
 are bound to the dedicated `tool:beater-os-runtime` observation tool; bundle
 submissions cannot mint receipts for gateway tools such as `shell`. Real
