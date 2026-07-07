@@ -879,6 +879,11 @@ fn runtime_local_shell_worker_preflight_route(
             receipt_id: None,
             timeout_secs: payload.timeout_secs,
             max_output_bytes: payload.max_output_bytes,
+            initial_lease_ms: payload.initial_lease_ms,
+            heartbeat_interval_ms: payload.heartbeat_interval_ms,
+            heartbeat_extend_ms: payload.heartbeat_extend_ms,
+            worker_id: payload.worker_id,
+            heartbeat_evidence_refs: payload.heartbeat_evidence_refs,
         },
     };
     match runtime.plan_local_shell_worker(plan) {
@@ -988,6 +993,11 @@ fn runtime_local_shell_worker_loop_route(
             receipt_id: None,
             timeout_secs: payload.timeout_secs,
             max_output_bytes: payload.max_output_bytes,
+            initial_lease_ms: payload.initial_lease_ms,
+            heartbeat_interval_ms: payload.heartbeat_interval_ms,
+            heartbeat_extend_ms: payload.heartbeat_extend_ms,
+            worker_id: payload.worker_id,
+            heartbeat_evidence_refs: payload.heartbeat_evidence_refs,
         },
     };
     if payload.recover_expired_leases {
@@ -1801,6 +1811,16 @@ struct RuntimeLocalShellWorkerPreflightHttpRequest {
     timeout_secs: Option<u64>,
     #[serde(default)]
     max_output_bytes: Option<usize>,
+    #[serde(default)]
+    initial_lease_ms: Option<u64>,
+    #[serde(default)]
+    heartbeat_interval_ms: Option<u64>,
+    #[serde(default)]
+    heartbeat_extend_ms: Option<u64>,
+    #[serde(default)]
+    worker_id: Option<String>,
+    #[serde(default)]
+    heartbeat_evidence_refs: Vec<String>,
     max_actions: usize,
 }
 
@@ -1829,6 +1849,16 @@ struct RuntimeLocalShellWorkerLoopHttpRequest {
     timeout_secs: Option<u64>,
     #[serde(default)]
     max_output_bytes: Option<usize>,
+    #[serde(default)]
+    initial_lease_ms: Option<u64>,
+    #[serde(default)]
+    heartbeat_interval_ms: Option<u64>,
+    #[serde(default)]
+    heartbeat_extend_ms: Option<u64>,
+    #[serde(default)]
+    worker_id: Option<String>,
+    #[serde(default)]
+    heartbeat_evidence_refs: Vec<String>,
     max_actions: usize,
     #[serde(default)]
     recover_expired_leases: bool,

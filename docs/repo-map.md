@@ -78,8 +78,9 @@ review boundaries.
     receipts.
   - Typed local-shell worker-once API that registers the exact command digest,
     selects a daemon-claimable admitted action, claims a durable execution
-    lease, executes through the gateway, and returns the completed receipt plus
-    projection summary.
+    lease, optionally emits bounded heartbeat renewals while the sandboxed
+    command is still running, executes through the gateway, and returns the
+    completed receipt plus projection summary.
   - Deterministic step replay evidence anchored to proposal, decision, receipt,
     journal-root, and receipt-root hashes.
   - Bundle projection summaries include pending/runnable action queues, open
@@ -140,7 +141,8 @@ review boundaries.
   - Token-gated HTTP proof that opt-in supervised recovery blocks on live
     leases, exposes live versus expired-recoverable open lease state through
     session projection and worker preflight plans, reconciles expired lost
-    leases as `outcome_unknown`, and dispatches later admitted work without
+    leases as `outcome_unknown`, and dispatches later admitted work through a
+    short initial runtime worker lease that emits heartbeat evidence without
     retrying the reconciled action.
 - `scripts/run-beater-osd-http-claims-smoke.py`
   - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned

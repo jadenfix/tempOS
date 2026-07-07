@@ -48,6 +48,9 @@ grace. An `expired_recoverable` lease still blocks admission and dispatch, but
 may be closed only by explicit `ExecutionLeaseReconciled` evidence with
 `outcome_unknown`; the recovery path must not fabricate a receipt or retry the
 reconciled action.
+Runtime worker watchdogs may emit those heartbeats while a sandboxed command is
+still running, but release gates must continue to derive the lifecycle from
+durable journal records rather than trusting worker self-report.
 
 ## 3. Tracked trends (targets set from baseline)
 

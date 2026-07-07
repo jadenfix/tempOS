@@ -112,6 +112,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             receipt_id: Some("runtime-worker-smoke-receipt".to_string()),
             timeout_secs: Some(30),
             max_output_bytes: None,
+            initial_lease_ms: None,
+            heartbeat_interval_ms: None,
+            heartbeat_extend_ms: None,
+            worker_id: None,
+            heartbeat_evidence_refs: Vec::new(),
         })?
         .ok_or("runtime worker found no claimable action")?;
 

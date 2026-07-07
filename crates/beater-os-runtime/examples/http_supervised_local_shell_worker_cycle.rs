@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let command = "sh".to_string();
     let args = vec![
         "-c".to_string(),
-        "printf http-supervised-worker > http-supervised-worker-out.txt".to_string(),
+        "sleep 1; printf http-supervised-worker > http-supervised-worker-out.txt".to_string(),
     ];
     let cwd = workdir.display().to_string();
     let environment = safe_path_environment();
@@ -133,6 +133,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         "side_effects": ["local_write"],
         "timeout_secs": 30,
         "max_actions": 8,
+        "initial_lease_ms": 500,
+        "heartbeat_interval_ms": 100,
+        "heartbeat_extend_ms": 1000,
+        "worker_id": "worker:http-supervised-worker-smoke",
+        "heartbeat_evidence_refs": ["smoke://http-supervised-worker-heartbeat"],
     });
     let dispatch_plan = one_shot_preflight(&root, &token_file, &preflight_body)?;
     if dispatch_plan.status != 200
@@ -205,6 +210,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         "side_effects": ["local_write"],
         "timeout_secs": 30,
         "max_actions": 8,
+        "initial_lease_ms": 500,
+        "heartbeat_interval_ms": 100,
+        "heartbeat_extend_ms": 1000,
+        "worker_id": "worker:http-supervised-worker-smoke",
+        "heartbeat_evidence_refs": ["smoke://http-supervised-worker-heartbeat"],
         "recover_expired_leases": true,
         "max_recoveries": 1,
         "recovery_reason": "HTTP supervised smoke observed expired worker lease",
@@ -291,6 +301,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     if recoveries.len() != 1
         || executions.len() != 1
         || executions[0]["action_id"] != run_action_id
+        || executions[0]["lease_heartbeat"]["heartbeat_count"]
+            .as_u64()
+            .unwrap_or_default()
+            == 0
         || recovered_response.body["worker_loop"]["stop_reason"] != "no_runnable_action"
         || recovered_response.body["projection"]["receipts"] != 1
         || recovered_response.body["projection"]["execution_reconciliations"] != 1
@@ -334,6 +348,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "recoveries": recoveries.len(),
         "executions": executions.len(),
         "executed_action": executions[0]["action_id"],
+        "lease_heartbeats": executions[0]["lease_heartbeat"]["heartbeat_count"],
         "stop_reason": recovered_response.body["worker_loop"]["stop_reason"],
         "receipts": recovered_response.body["projection"]["receipts"],
         "execution_reconciliations": recovered_response.body["projection"]["execution_reconciliations"],

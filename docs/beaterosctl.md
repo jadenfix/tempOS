@@ -589,6 +589,21 @@ include `dispatch: "runnable_pending_action"` for this path and
 lease remains the atomic worker claim, so competing workers cannot both execute
 the same pending action.
 
+`POST /v1/sessions/<id>/actions/execute-local-shell-preflight` and
+`POST /v1/sessions/<id>/actions/execute-local-shell-loop` accept optional
+runtime watchdog fields for workers that want short initial claims with bounded
+lease renewal while a sandboxed command is still running:
+`initial_lease_ms`, `heartbeat_interval_ms`, `heartbeat_extend_ms`,
+`worker_id`, and `heartbeat_evidence_refs`. Supplying any watchdog field
+requires the full watchdog tuple, requires the heartbeat interval to be shorter
+than the initial lease, and caps each extension to the daemon heartbeat limit.
+The watchdog writes `ExecutionLeaseHeartbeated` records only for the exact
+open lease it claimed; it does not admit new actions, mint receipts, reconcile
+unknown outcomes, or extend beyond the original action wall-clock budget plus
+daemon grace. Worker-loop execution responses include `lease_heartbeat` with
+the worker id, heartbeat count, latest renewed expiry, and latest heartbeat
+journal hash when the watchdog was enabled.
+
 Schedulers that split claim from execution use
 `POST /v1/sessions/<id>/actions/<action_id>/claims`. The request carries only
 compare-and-set fields (`expected_manifest_hash`, `expected_decision_id`, and

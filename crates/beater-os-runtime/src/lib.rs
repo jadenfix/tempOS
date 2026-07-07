@@ -17,6 +17,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::{self, JoinHandle};
 use std::time::Duration as StdDuration;
 
 use beater_os_core::{
@@ -33,8 +38,8 @@ use beater_os_tool_gateway::{
 };
 use beater_osd::{
     AdmissionOutcome, ClaimableExecutionAction, DAEMON_POLICY_VERSION, DaemonError,
-    ExecutionLeaseClaimRequest, LocalShellToolRegistration, SchedulerExecutionLeaseStatus,
-    SchedulerOpenExecutionLease, SessionProjection, Store,
+    ExecutionLeaseClaimRequest, ExecutionLeaseHeartbeatRequest, LocalShellToolRegistration,
+    SchedulerExecutionLeaseStatus, SchedulerOpenExecutionLease, SessionProjection, Store,
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -43,6 +48,8 @@ use uuid::Uuid;
 
 const DEFAULT_GRANT_TTL_SECS: u64 = 3600;
 const DEFAULT_RUNTIME_TOOL_ID: &str = "tool:beater-os-runtime";
+const DEFAULT_RUNTIME_WORKER_ID: &str = "worker:beater-os-runtime-local-shell";
+const MAX_RUNTIME_HEARTBEAT_EXTEND_MS: u64 = 5_000;
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
@@ -314,6 +321,7 @@ impl AgentRuntime {
     ) -> RuntimeResult<Option<RuntimeLocalShellWorkerOutcome>> {
         let projection = self.store.project(&request.session_id)?;
         let prepared = prepare_local_shell_worker(&request)?;
+        let heartbeat_config = prepared.heartbeat.clone();
         let registry = self
             .store
             .register_local_shell_tool(LocalShellToolRegistration {
@@ -350,11 +358,27 @@ impl AgentRuntime {
                 expected_decision_id: action.decision_id.clone(),
                 expected_tool_version: action.expected_tool_version.clone(),
                 expected_tool_digest: action.expected_tool_digest.clone(),
-                initial_lease_ms: None,
+                initial_lease_ms: heartbeat_config
+                    .as_ref()
+                    .map(|heartbeat| heartbeat.initial_lease_ms),
             },
             Utc::now(),
         )?;
-        let gateway = execute_claimed_local_tool(
+        let heartbeat_watchdog = heartbeat_config.map(|config| {
+            start_execution_lease_heartbeat_watchdog(
+                self.store.clone(),
+                RuntimeLeaseHeartbeatWatchdogTarget {
+                    session_id: request.session_id.clone(),
+                    action_id: action.action_id.clone(),
+                    lease_id: lease.lease.lease_id.clone(),
+                    manifest_hash: action.manifest_hash.clone(),
+                    decision_id: action.decision_id.clone(),
+                    previous_expires_at: lease.lease.expires_at,
+                },
+                config,
+            )
+        });
+        let gateway_result = execute_claimed_local_tool(
             &self.store,
             &registry,
             &request.session_id,
@@ -367,7 +391,11 @@ impl AgentRuntime {
                 receipt_id: request.receipt_id,
                 limits: prepared.limits,
             },
-        )?;
+        );
+        let lease_heartbeat = heartbeat_watchdog
+            .map(RuntimeLeaseHeartbeatWatchdog::stop)
+            .transpose()?;
+        let gateway = gateway_result?;
         let projection = self.store.project(&request.session_id)?;
         Ok(Some(RuntimeLocalShellWorkerOutcome {
             session_id: request.session_id,
@@ -387,6 +415,7 @@ impl AgentRuntime {
                 modified: gateway.execution.diff.modified,
                 deleted: gateway.execution.diff.deleted,
             },
+            lease_heartbeat,
             receipt: gateway.receipt,
             projection: RuntimeBundleProjectionSummary::from_projection(&projection),
         }))
@@ -1040,6 +1069,16 @@ pub struct RuntimeLocalShellWorkerRequest {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub max_output_bytes: Option<usize>,
+    #[serde(default)]
+    pub initial_lease_ms: Option<u64>,
+    #[serde(default)]
+    pub heartbeat_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub heartbeat_extend_ms: Option<u64>,
+    #[serde(default)]
+    pub worker_id: Option<String>,
+    #[serde(default)]
+    pub heartbeat_evidence_refs: Vec<String>,
 }
 
 /// Result of one lease-bound local-shell worker dispatch.
@@ -1053,6 +1092,8 @@ pub struct RuntimeLocalShellWorkerOutcome {
     pub tool_ref: String,
     pub target: CapabilitySelector,
     pub execution: RuntimeWorkerExecutionReport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_heartbeat: Option<RuntimeLeaseHeartbeatReport>,
     pub receipt: CapabilityReceipt,
     pub projection: RuntimeBundleProjectionSummary,
 }
@@ -1068,6 +1109,17 @@ pub struct RuntimeWorkerExecutionReport {
     pub created: Vec<String>,
     pub modified: Vec<String>,
     pub deleted: Vec<String>,
+}
+
+/// Runtime-managed heartbeat evidence emitted while a claimed worker executes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeLeaseHeartbeatReport {
+    pub worker_id: String,
+    pub heartbeat_count: u64,
+    #[serde(default)]
+    pub latest_renewed_until: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub latest_heartbeat_hash: Option<HashValue>,
 }
 
 /// Bounded worker-loop request over already-admitted local-shell work.
@@ -1397,6 +1449,41 @@ struct RuntimePreparedLocalShellWorker {
     tool_version: String,
     registered_side_effects: BTreeSet<SideEffectClass>,
     risk: RiskClass,
+    heartbeat: Option<RuntimeLeaseHeartbeatConfig>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeLeaseHeartbeatConfig {
+    initial_lease_ms: u64,
+    interval_ms: u64,
+    extend_ms: u64,
+    worker_id: String,
+    evidence_refs: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeLeaseHeartbeatWatchdogTarget {
+    session_id: String,
+    action_id: String,
+    lease_id: String,
+    manifest_hash: HashValue,
+    decision_id: String,
+    previous_expires_at: DateTime<Utc>,
+}
+
+struct RuntimeLeaseHeartbeatWatchdog {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<RuntimeResult<RuntimeLeaseHeartbeatReport>>,
+}
+
+impl RuntimeLeaseHeartbeatWatchdog {
+    fn stop(self) -> RuntimeResult<Option<RuntimeLeaseHeartbeatReport>> {
+        self.stop.store(true, Ordering::SeqCst);
+        let report = self.handle.join().map_err(|_| {
+            RuntimeError::Refused("lease heartbeat watchdog panicked".to_string())
+        })??;
+        Ok(Some(report))
+    }
 }
 
 fn prepare_local_shell_worker(
@@ -1447,6 +1534,7 @@ fn prepare_local_shell_worker(
     let args = request.args.clone();
     let computed_digest =
         local_shell_tool_digest_with_environment(&cwd, &command, &args, &environment)?;
+    let heartbeat = runtime_lease_heartbeat_config(request)?;
     let expected_tool_digest = request
         .tool_digest
         .clone()
@@ -1477,6 +1565,157 @@ fn prepare_local_shell_worker(
         tool_version,
         registered_side_effects,
         risk: request.risk.unwrap_or(RiskClass::Low),
+        heartbeat,
+    })
+}
+
+fn runtime_lease_heartbeat_config(
+    request: &RuntimeLocalShellWorkerRequest,
+) -> RuntimeResult<Option<RuntimeLeaseHeartbeatConfig>> {
+    let heartbeat_requested = request.initial_lease_ms.is_some()
+        || request.heartbeat_interval_ms.is_some()
+        || request.heartbeat_extend_ms.is_some()
+        || request.worker_id.is_some()
+        || !request.heartbeat_evidence_refs.is_empty();
+    if !heartbeat_requested {
+        return Ok(None);
+    }
+    let initial_lease_ms = require_positive_millis(
+        "initial_lease_ms",
+        request.initial_lease_ms,
+        "runtime lease heartbeat requires initial_lease_ms",
+    )?;
+    let interval_ms = require_positive_millis(
+        "heartbeat_interval_ms",
+        request.heartbeat_interval_ms,
+        "runtime lease heartbeat requires heartbeat_interval_ms",
+    )?;
+    let extend_ms = require_positive_millis(
+        "heartbeat_extend_ms",
+        request.heartbeat_extend_ms,
+        "runtime lease heartbeat requires heartbeat_extend_ms",
+    )?;
+    if interval_ms >= initial_lease_ms {
+        return Err(RuntimeError::Refused(
+            "heartbeat_interval_ms must be less than initial_lease_ms".to_string(),
+        ));
+    }
+    if extend_ms <= interval_ms {
+        return Err(RuntimeError::Refused(
+            "heartbeat_extend_ms must be greater than heartbeat_interval_ms".to_string(),
+        ));
+    }
+    if extend_ms > MAX_RUNTIME_HEARTBEAT_EXTEND_MS {
+        return Err(RuntimeError::Refused(format!(
+            "heartbeat_extend_ms must be at most {MAX_RUNTIME_HEARTBEAT_EXTEND_MS}"
+        )));
+    }
+    let worker_id = request
+        .worker_id
+        .clone()
+        .unwrap_or_else(|| DEFAULT_RUNTIME_WORKER_ID.to_string());
+    if worker_id.trim().is_empty() {
+        return Err(RuntimeError::Refused(
+            "worker_id must not be empty when heartbeat is enabled".to_string(),
+        ));
+    }
+    if request
+        .heartbeat_evidence_refs
+        .iter()
+        .any(|reference| reference.trim().is_empty())
+    {
+        return Err(RuntimeError::Refused(
+            "heartbeat_evidence_refs must not contain empty references".to_string(),
+        ));
+    }
+    Ok(Some(RuntimeLeaseHeartbeatConfig {
+        initial_lease_ms,
+        interval_ms,
+        extend_ms,
+        worker_id,
+        evidence_refs: request.heartbeat_evidence_refs.clone(),
+    }))
+}
+
+fn require_positive_millis(field: &str, value: Option<u64>, missing: &str) -> RuntimeResult<u64> {
+    let value = value.ok_or_else(|| RuntimeError::Refused(missing.to_string()))?;
+    if value == 0 {
+        return Err(RuntimeError::Refused(format!(
+            "{field} must be greater than zero"
+        )));
+    }
+    Ok(value)
+}
+
+fn start_execution_lease_heartbeat_watchdog(
+    store: Store,
+    target: RuntimeLeaseHeartbeatWatchdogTarget,
+    config: RuntimeLeaseHeartbeatConfig,
+) -> RuntimeLeaseHeartbeatWatchdog {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        let mut report = RuntimeLeaseHeartbeatReport {
+            worker_id: config.worker_id.clone(),
+            heartbeat_count: 0,
+            latest_renewed_until: None,
+            latest_heartbeat_hash: None,
+        };
+        let mut previous_expires_at = target.previous_expires_at;
+        while !stop_for_thread.load(Ordering::SeqCst) {
+            thread::sleep(StdDuration::from_millis(config.interval_ms));
+            if stop_for_thread.load(Ordering::SeqCst) {
+                break;
+            }
+            let heartbeat_id = format!(
+                "heartbeat-{}-{}",
+                target.lease_id,
+                report.heartbeat_count + 1
+            );
+            match store.heartbeat_execution_lease(
+                &target.session_id,
+                ExecutionLeaseHeartbeatRequest {
+                    heartbeat_id,
+                    lease_id: target.lease_id.clone(),
+                    action_id: target.action_id.clone(),
+                    expected_manifest_hash: target.manifest_hash.clone(),
+                    expected_decision_id: target.decision_id.clone(),
+                    previous_expires_at,
+                    extend_by_ms: config.extend_ms,
+                    observed_by: Some(config.worker_id.clone()),
+                    evidence_refs: config.evidence_refs.clone(),
+                },
+                Utc::now(),
+            ) {
+                Ok(outcome) => {
+                    report.heartbeat_count += 1;
+                    previous_expires_at = outcome.heartbeat.extended_expires_at;
+                    report.latest_renewed_until = Some(outcome.heartbeat.extended_expires_at);
+                    report.latest_heartbeat_hash = Some(outcome.heartbeat_record.hash);
+                }
+                Err(err) => {
+                    if execution_lease_is_closed(&store, &target.session_id, &target.action_id) {
+                        break;
+                    }
+                    return Err(RuntimeError::Daemon(err));
+                }
+            }
+        }
+        Ok(report)
+    });
+    RuntimeLeaseHeartbeatWatchdog { stop, handle }
+}
+
+fn execution_lease_is_closed(store: &Store, session_id: &str, action_id: &str) -> bool {
+    store.project(session_id).ok().is_some_and(|projection| {
+        projection
+            .receipts
+            .iter()
+            .any(|receipt| receipt.action_id == action_id)
+            || projection
+                .execution_reconciliations
+                .iter()
+                .any(|reconciliation| reconciliation.action_id == action_id)
     })
 }
 
