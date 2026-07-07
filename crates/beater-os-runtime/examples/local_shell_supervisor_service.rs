@@ -50,6 +50,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let environment = safe_path_environment();
     let command_digest =
         local_shell_tool_digest_with_environment(&cwd, &command, &args, &environment)?;
+    runtime
+        .store()
+        .register_local_shell_tool(LocalShellToolRegistration {
+            workspace_id: "workspace:runtime-supervisor-service-smoke".to_string(),
+            tool_id: "shell".to_string(),
+            version: format!("local-{}", &command_digest[..16]),
+            content_digest: command_digest.clone(),
+            side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
+            risk_class: RiskClass::Low,
+        })?;
     let target = CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
         resource_id: cwd.clone(),
@@ -110,16 +120,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    runtime
-        .store()
-        .register_local_shell_tool(LocalShellToolRegistration {
-            workspace_id: "workspace:runtime-supervisor-service-smoke".to_string(),
-            tool_id: "shell".to_string(),
-            version: format!("local-{}", &command_digest[..16]),
-            content_digest: command_digest.clone(),
-            side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
-            risk_class: RiskClass::Low,
-        })?;
     let lost_action = runtime
         .store()
         .claimable_execution_actions(SESSION_ID)?
