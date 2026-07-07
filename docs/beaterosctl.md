@@ -240,6 +240,12 @@ still derives the manifest, asks `beater-osd::Store` for admission, executes
 only when policy returns `Allowed`, and appends the receipt through the daemon
 store.
 
+The hosted `beater-os-runtime` crate now exposes a typed runtime bundle for
+future agent workers and service adapters. A bundle can create a session, issue
+bounded grants, admit ordered runtime steps, and return replay evidence without
+giving callers a direct store mutation API. The bundle path is smoke-gated by
+`scripts/run-beater-os-runtime-smoke.py --json`.
+
 ## Scope boundary
 
 `action execute` now routes through the gateway and a daemon-owned durable local
@@ -247,8 +253,8 @@ tool registry file. Richer registry operations (signed remote publishers,
 operator review queues, network/container/VM/browser tool lanes) remain future
 targets. The typed `beater-os-runtime` crate now centralizes the reusable agent
 loop over `beater-osd`: session bootstrap, grant issuance, sequential admission,
-no-side-effect observation receipts, and deterministic step replay evidence
-anchored to journal and receipt-chain hashes. The current CLI still opens the
-`beater-osd` store in-process for write operations, but `beater-osd-http` now
-provides the first token-gated daemon execution route for the same local shell
-gateway lane.
+no-side-effect observation receipts, runtime bundles, and deterministic step
+replay evidence anchored to journal and receipt-chain hashes. The current CLI
+still opens the `beater-osd` store in-process for write operations, but
+`beater-osd-http` now provides the first token-gated daemon execution route for
+the same local shell gateway lane.

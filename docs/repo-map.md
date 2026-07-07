@@ -55,6 +55,10 @@ review boundaries.
   - Multi-host deterministic migration assertions.
 - `scripts/run-beater-osd-runtime-smoke.py`
   - Runtime first smoke proof.
+- `scripts/run-beater-os-runtime-smoke.py`
+  - Hosted agent runtime bundle smoke proof over `beater-os-runtime`.
+- `scripts/run-beater-osd-http-execute-smoke.py`
+  - Token-gated daemon HTTP execution smoke over the local shell gateway.
 - `scripts/local-e2e.py`
   - Aggregate gate when doing full lane validation locally.
 

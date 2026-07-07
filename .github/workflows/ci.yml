@@ -61,6 +61,9 @@ jobs:
       - name: Runtime-first guardrail
         run: python3 scripts/run-beater-osd-runtime-smoke.py --json
 
+      - name: Hosted runtime bundle smoke
+        run: python3 scripts/run-beater-os-runtime-smoke.py --json
+
       - name: Daemon HTTP execution smoke
         run: python3 scripts/run-beater-osd-http-execute-smoke.py --json
 

@@ -11,8 +11,12 @@ description = "Typed agent runtime loop over the beaterOS daemon store."
 beater-os-core = { path = "../beater-os-core" }
 beater-osd = { path = "../beater-osd" }
 chrono.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

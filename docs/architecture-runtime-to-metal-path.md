@@ -123,8 +123,9 @@ A PR must target only one layer unless the release explicitly proves transition.
 
 - **Pre-merge local gate:** `python3 scripts/local-e2e.py` (or equivalent split
   gates) includes daemon smoke, readiness phase, and matrix coverage.
-- **Runtime slice proof:** `scripts/run-beater-osd-runtime-smoke.py --json` must pass
-  on the target environment.
+- **Runtime slice proof:** `scripts/run-beater-osd-runtime-smoke.py --json` and
+  `scripts/run-beater-os-runtime-smoke.py --json` must pass on the target
+  environment when runtime-layer contracts are touched.
 - **Migration proof for this slice:**
   - runtime-only slices: `require_migration_phase=runtime`
   - optional-lane slices: `require_migration_phase=metal-ready` and explicit route/lane assertions
