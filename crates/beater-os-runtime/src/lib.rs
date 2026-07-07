@@ -184,6 +184,7 @@ impl AgentRuntime {
                     step.session_id
                 )));
             }
+            validate_runtime_step_request(step)?;
         }
         let (session_id, created_session) = match session {
             Some(mut start) => {
@@ -249,14 +250,10 @@ impl AgentRuntime {
 
     /// Propose one runtime step through the daemon-owned admission path.
     pub fn admit_step(&self, step: RuntimeStep) -> RuntimeResult<RuntimeStepOutcome> {
+        validate_runtime_step_request(&step)?;
         let observation = step.observation.clone();
         let external_revoked_handles = step.external_revoked_handles.clone();
         let manifest = step.into_manifest()?;
-        if observation.is_some() && !allows_observation_receipt(&manifest) {
-            return Err(RuntimeError::Refused(
-                "runtime observation receipts may only claim no side effects".to_string(),
-            ));
-        }
         let session_id = manifest.session_id.clone();
         let admission = self.store.admit_action_with_revoked_handles(
             &session_id,
@@ -728,10 +725,28 @@ fn expires_at(now: DateTime<Utc>, ttl_secs: u64) -> RuntimeResult<DateTime<Utc>>
         .ok_or(RuntimeError::InvalidTtl(ttl_secs as u64))
 }
 
-fn allows_observation_receipt(manifest: &ActionManifest) -> bool {
-    manifest.expected_side_effects.is_empty()
-        || manifest
-            .expected_side_effects
+fn validate_runtime_step_request(step: &RuntimeStep) -> RuntimeResult<()> {
+    if step.observation.is_none() {
+        return Ok(());
+    }
+    if let Some(tool_id) = step.tool_id.as_deref()
+        && tool_id != DEFAULT_RUNTIME_TOOL_ID
+    {
+        return Err(RuntimeError::Refused(format!(
+            "runtime observation receipts must use {DEFAULT_RUNTIME_TOOL_ID}, not {tool_id}"
+        )));
+    }
+    if !allows_observation_side_effects(&step.expected_side_effects) {
+        return Err(RuntimeError::Refused(
+            "runtime observation receipts may only claim no side effects".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn allows_observation_side_effects(effects: &BTreeSet<SideEffectClass>) -> bool {
+    effects.is_empty()
+        || effects
             .iter()
             .all(|effect| matches!(effect, SideEffectClass::None))
 }
@@ -868,6 +883,63 @@ mod tests {
                 },
                 "observe runtime bundle state",
             )],
+        });
+
+        assert!(matches!(result, Err(RuntimeError::Refused(_))));
+        assert!(!runtime.store().session_exists(&session_id)?);
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_rejects_observation_tool_override_before_persisting() -> Result<(), Box<dyn Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "beater-os-runtime-bundle-tool-reject-{}",
+            Uuid::new_v4()
+        ));
+        let runtime = AgentRuntime::open(&root)?;
+        let session_id = "bundle-session".to_string();
+        let mut start = SessionStart::new(
+            "agent:bundle",
+            "workspace:bundle",
+            "prove observation tool binding",
+        );
+        start.session_id = Some(session_id.clone());
+
+        let result = runtime.run_bundle(RuntimeBundle {
+            session_id: Some(session_id.clone()),
+            session: Some(start),
+            grants: vec![GrantRequest::new(
+                ResourceKind::FilePath,
+                "*",
+                [ActionKind::Read],
+            )],
+            steps: vec![RuntimeStep {
+                session_id: session_id.clone(),
+                action_id: Some("bundle-observe-action".to_string()),
+                tool_id: Some("shell".to_string()),
+                action_kind: ActionKind::Read,
+                target: CapabilitySelector {
+                    resource_kind: ResourceKind::FilePath,
+                    resource_id: "/tmp/beater-os-runtime-bundle-observe".to_string(),
+                },
+                resolved_target: None,
+                inputs_summary: "observe runtime bundle state".to_string(),
+                inputs_digest: None,
+                expected_outputs: Vec::new(),
+                expected_side_effects: BTreeSet::from([SideEffectClass::None]),
+                required_grants: BTreeSet::new(),
+                requested_budget: Budget::default(),
+                risk_class: RiskClass::Low,
+                data_classes: BTreeSet::new(),
+                taint: BTreeSet::new(),
+                idempotency_key: None,
+                compensation_plan: None,
+                human_explanation: "attempt spoofed shell observation receipt".to_string(),
+                external_revoked_handles: BTreeSet::new(),
+                observation: Some(RuntimeObservation::ok("spoofed shell observation")),
+            }],
         });
 
         assert!(matches!(result, Err(RuntimeError::Refused(_))));

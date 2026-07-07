@@ -246,6 +246,7 @@ binary that sits above the store and the tool gateway. It preserves the same
 loopback, `Host`/`Origin`, and bearer-token boundary, and adds:
 
 - `POST /v1/sessions/<id>/actions/execute-local-shell`
+- `POST /v1/runtime/bundles`
 
 That route accepts a bounded JSON request (`command`, `cwd`, `grants`, optional
 `args`, `env`, `tool`, `tool_version`, `tool_digest`, risk/data/taint metadata,
@@ -264,6 +265,20 @@ future agent workers and service adapters. A bundle can create a session, issue
 bounded grants, admit ordered runtime steps, and return replay evidence without
 giving callers a direct store mutation API. The bundle path is smoke-gated by
 `scripts/run-beater-os-runtime-smoke.py --json`.
+
+`POST /v1/runtime/bundles` is the daemon HTTP service boundary for the same
+contract. The route accepts a bounded JSON `RuntimeBundle`, runs it through
+`AgentRuntime::run_bundle` over the daemon store, and returns the full
+`RuntimeBundleOutcome` including step replay evidence. It does not import trace
+exports or replay historical journals into live state: each submitted bundle is
+new runtime work that must pass the current daemon admission path. Observation
+receipts remain limited to no-side-effect steps and are bound to the dedicated
+`tool:beater-os-runtime` observation tool; bundle submissions cannot mint
+receipts for gateway tools such as `shell`. Real process/tool side effects still
+belong behind `execute-local-shell`, the gateway, sandbox confinement, and
+receipt path. A token-authorized bundle may bootstrap a new session and its
+declared root capability, so this route is an authenticated authority-minting
+surface for new runtime work, not a read-only replay or import API.
 
 ## Scope boundary
 

@@ -20,7 +20,8 @@ review boundaries.
     for admission decisions).
 - `crates/beater-osd-http`
   - Loopback HTTP control-plane binary over `beater-osd` and the tool gateway,
-    including token-gated local shell execution.
+    including token-gated local shell execution and hosted runtime bundle
+    submission.
 - `crates/beaterosctl`
   - Operator CLI for session/grant/manifests/receipts.
 
@@ -42,6 +43,8 @@ review boundaries.
     receipts.
   - Deterministic step replay evidence anchored to proposal, decision, receipt,
     journal-root, and receipt-root hashes.
+  - Service-facing `RuntimeBundle` contract used by daemon HTTP adapters without
+    exposing direct store mutation APIs.
 - `crates/beater-os-audit`
   - Trace/receipt validation, integrity reporting, replay tooling, and full
     trace/action bundle serialization.
