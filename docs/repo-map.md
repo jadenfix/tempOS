@@ -18,6 +18,9 @@ review boundaries.
     projection.
   - Canonical proof of authority writes (`PolicyEngine` is only invocation point
     for admission decisions).
+- `crates/beater-osd-http`
+  - Loopback HTTP control-plane binary over `beater-osd` and the tool gateway,
+    including token-gated local shell execution.
 - `crates/beaterosctl`
   - Operator CLI for session/grant/manifests/receipts.
 

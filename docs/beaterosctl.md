@@ -206,10 +206,10 @@ macOS local lane. Linux `seccomp`/Landlock/cgroups and container/VM lanes
 
 ## Local daemon API
 
-`beater-osd serve` is the first long-running local control-plane surface over
-the same daemon-owned store. It is intentionally small: `/healthz` is the only
-unauthenticated route, while `/v1/sessions` and `/v1/sessions/<id>` require a
-bearer token loaded from `--token-file`.
+For read-only session projection, `beater-osd serve` exposes the first
+long-running local surface over the same daemon-owned store. It is intentionally
+small: `/healthz` is the only unauthenticated route, while `/v1/sessions` and
+`/v1/sessions/<id>` require a bearer token loaded from `--token-file`.
 
 ```console
 $ printf '%s\n' 'replace-with-operator-token' > .beateros/token
@@ -222,6 +222,24 @@ uses short socket timeouts, and applies loopback `Host`/`Origin` checks before
 serving token-gated routes. Loopback and browser boundary checks are not treated
 as authentication; the token remains the authority gate for control-plane data.
 
+For daemon-owned execution, `beater-osd-http serve` is the service-plane control
+binary that sits above the store and the tool gateway. It preserves the same
+loopback, `Host`/`Origin`, and bearer-token boundary, and adds:
+
+- `POST /v1/sessions/<id>/actions/execute-local-shell`
+
+That route accepts a bounded JSON request (`command`, `cwd`, `grants`, optional
+`args`, `env`, `tool`, `tool_version`, `tool_digest`, risk/data/taint metadata,
+server-capped timeouts/output, and receipt/action ids), persists the exact
+local-shell tool digest in the daemon-owned registry, then calls the gateway
+path. Before digesting the executable, the HTTP layer rejects slash-containing
+commands and verifies `cwd` is inside the named grants' filesystem confinement,
+so a token-bearing client cannot use digest computation as an unconstrained
+filesystem read. The HTTP handler never executes a process directly: the gateway
+still derives the manifest, asks `beater-osd::Store` for admission, executes
+only when policy returns `Allowed`, and appends the receipt through the daemon
+store.
+
 ## Scope boundary
 
 `action execute` now routes through the gateway and a daemon-owned durable local
@@ -231,6 +249,6 @@ targets. The typed `beater-os-runtime` crate now centralizes the reusable agent
 loop over `beater-osd`: session bootstrap, grant issuance, sequential admission,
 no-side-effect observation receipts, and deterministic step replay evidence
 anchored to journal and receipt-chain hashes. The current CLI still opens the
-`beater-osd` store in-process for write operations; the daemon API starts with
-read-only session projection so the control-plane boundary can harden before
-action execution moves behind the long-running process.
+`beater-osd` store in-process for write operations, but `beater-osd-http` now
+provides the first token-gated daemon execution route for the same local shell
+gateway lane.

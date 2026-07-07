@@ -1,0 +1,25 @@
+[package]
+name = "beater-osd-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Loopback HTTP control-plane binary for the beaterOS daemon store."
+
+[[bin]]
+name = "beater-osd-http"
+path = "src/bin/beater-osd-http.rs"
+
+[dependencies]
+beater-os-core = { path = "../beater-os-core" }
+beater-osd = { path = "../beater-osd" }
+beater-os-sandbox = { path = "../beater-os-sandbox" }
+beater-os-tool-gateway = { path = "../beater-os-tool-gateway" }
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
