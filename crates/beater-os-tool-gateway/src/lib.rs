@@ -314,6 +314,7 @@ pub fn execute_local_tool(
 
     let command = invocation.command.clone();
     let args = invocation.args.clone();
+    let cwd = invocation.cwd.clone();
     let environment = invocation.environment.clone();
     let limits = invocation.limits.clone();
     let action_id = invocation.action_id.clone();
@@ -322,8 +323,24 @@ pub fn execute_local_tool(
     let receipt_target = manifest.resolved_target.clone();
     let receipt_input_digest = inputs_digest.clone();
     let receipt_tool_ref = tool_ref.clone();
+    let required_grants_for_lease = invocation.required_grants.clone();
+    let required_tool_capabilities = tool.manifest.required_capabilities.clone();
     let (receipt_outcome, execution) =
-        store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |_| {
+        store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |projection| {
+            let active_grants = projection.active_grants(Utc::now());
+            if !tool_capabilities_covered(
+                &active_grants,
+                &required_grants_for_lease,
+                &required_tool_capabilities,
+            ) {
+                return Err(GatewayError::MissingToolCapability);
+            }
+            let confinement_prefixes =
+                confinement_prefixes(&active_grants, &required_grants_for_lease);
+            if confinement_prefixes.is_empty() {
+                return Err(GatewayError::MissingConfinement);
+            }
+            let resolved = resolve_confined(&cwd, &confinement_prefixes)?;
             let execution = sandbox_execute(&SandboxRequest {
                 command,
                 args,
