@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .collect();
 
-    let mut grant = GrantRequest::new(ResourceKind::FilePath, "*", [ActionKind::Execute]);
+    let mut grant = GrantRequest::new(ResourceKind::FilePath, cwd.clone(), [ActionKind::Execute]);
     grant.constraints = GrantConstraints {
         max_risk: None,
         max_data_class: None,
@@ -108,7 +108,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             max_wall_ms: Some(30_000),
             max_payment_minor_units: None,
         },
-        path_prefixes: BTreeSet::from([cwd.clone()]),
         ..Default::default()
     };
     let bundle = runtime.run_bundle(RuntimeBundle {
