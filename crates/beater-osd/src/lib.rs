@@ -1271,6 +1271,7 @@ fn admission_state_from_journal(
     let mut mandates = BTreeMap::new();
     let mut payment_reserved_by_mandate = BTreeMap::new();
     let mut session_budget_used = Budget::default();
+    let mut receipted_actions = BTreeSet::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     let mut approvals = Vec::new();
@@ -1352,6 +1353,7 @@ fn admission_state_from_journal(
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
             JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
             JournalEvent::ReceiptAppended { receipt } => {
+                receipted_actions.insert(receipt.action_id.clone());
                 debit_receipt_budget(&mut session_budget_used, receipt)?;
             }
             JournalEvent::MemoryWritten { .. }
@@ -1395,6 +1397,19 @@ fn admission_state_from_journal(
                     intent.mandate_id
                 ))
             })?;
+    }
+    for (action_id, decision) in &latest_decisions {
+        if !reserves_runtime_budget(decision.result.clone())
+            || receipted_actions.contains(action_id)
+        {
+            continue;
+        }
+        let Some(proposal) = proposals.get(action_id) else {
+            return Err(DaemonError::Refused(format!(
+                "runtime-budget-reserving policy decision for action {action_id} has no proposed manifest"
+            )));
+        };
+        debit_manifest_budget(&mut session_budget_used, &proposal.manifest)?;
     }
 
     Ok(AdmissionState {
@@ -1451,6 +1466,37 @@ fn debit_receipt_budget(budget: &mut Budget, receipt: &CapabilityReceipt) -> Dae
             "session budget replay overflowed committed wall-clock usage".to_string(),
         )
     })?;
+    Ok(())
+}
+
+fn reserves_runtime_budget(result: beater_os_core::DecisionResult) -> bool {
+    matches!(
+        result,
+        beater_os_core::DecisionResult::Allowed
+            | beater_os_core::DecisionResult::NeedsApproval
+            | beater_os_core::DecisionResult::NeedsSimulation
+    )
+}
+
+fn debit_manifest_budget(budget: &mut Budget, manifest: &ActionManifest) -> DaemonResult<()> {
+    if let Some(requested) = manifest.requested_budget.max_tool_calls {
+        let tool_calls = budget.max_tool_calls.get_or_insert(0);
+        *tool_calls = tool_calls.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending tool-call reservation for action {}",
+                manifest.action_id
+            ))
+        })?;
+    }
+    if let Some(requested) = manifest.requested_budget.max_wall_ms {
+        let wall_ms = budget.max_wall_ms.get_or_insert(0);
+        *wall_ms = wall_ms.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending wall-clock reservation for action {}",
+                manifest.action_id
+            ))
+        })?;
+    }
     Ok(())
 }
 

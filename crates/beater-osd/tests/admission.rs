@@ -265,6 +265,39 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
     }
 }
 
+#[test]
+fn pending_allowed_action_reserves_session_tool_budget_before_receipt() {
+    let root = TempDir::new("pending-budget");
+    let store = Store::open(&root.path).unwrap();
+    let session_id = "sess_pending_budget";
+    let mut session = session(&root, session_id);
+    session.budget = Budget {
+        max_model_cents: None,
+        max_tool_calls: Some(1),
+        max_wall_ms: None,
+        max_payment_minor_units: None,
+    };
+    store.create_session(&session).unwrap();
+    append_grant(&store, session_id, grant(session_id));
+
+    let mut first = manifest(session_id, "act-budget-1");
+    first.requested_budget.max_tool_calls = Some(1);
+    let first_outcome = store.admit_action(session_id, first).unwrap();
+    assert_eq!(first_outcome.decision.result, DecisionResult::Allowed);
+
+    let mut second = manifest(session_id, "act-budget-2");
+    second.requested_budget.max_tool_calls = Some(1);
+    let second_outcome = store.admit_action(session_id, second).unwrap();
+
+    assert_eq!(second_outcome.decision.result, DecisionResult::Denied);
+    assert!(
+        second_outcome
+            .decision
+            .explanation
+            .contains("session budget exceeded for tool calls")
+    );
+}
+
 fn receipt_input(action_id: &str) -> CapabilityReceiptInput {
     CapabilityReceiptInput {
         receipt_id: None,
