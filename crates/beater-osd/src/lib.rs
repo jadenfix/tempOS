@@ -33,7 +33,7 @@ use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, ResolveRequest, TestStatus, ToolRegistry, ToolTrust,
 };
 use chrono::{DateTime, TimeDelta, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use crate::error::{DaemonError, DaemonResult};
 
@@ -164,6 +164,34 @@ pub struct SessionProjection {
     pub receipts: Vec<CapabilityReceipt>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerExecutionLeaseStatus {
+    LiveOpen,
+    ExpiredRecoverable,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SchedulerOpenExecutionLease {
+    pub action_id: String,
+    pub lease_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub status: SchedulerExecutionLeaseStatus,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SchedulerProjection {
+    pub pending_allowed_action_ids: Vec<String>,
+    pub runnable_pending_action_ids: Vec<String>,
+    pub open_execution_lease_statuses: Vec<SchedulerOpenExecutionLease>,
+    pub open_execution_lease_ids: Vec<String>,
+    pub live_open_execution_lease_ids: Vec<String>,
+    pub expired_recoverable_execution_lease_ids: Vec<String>,
+    pub recovery_blocked: bool,
+    pub admission_blocked: bool,
+    pub admission_blockers: Vec<String>,
+}
+
 /// Consistent read-only export inputs for one live session trace.
 #[derive(Debug, Clone)]
 pub struct SessionTraceExport {
@@ -212,6 +240,103 @@ impl SessionProjection {
             .iter()
             .rev()
             .find(|decision| decision.action_id == action_id)
+    }
+
+    /// Scheduler-facing state derived from the daemon journal projection.
+    ///
+    /// Open execution leases are split into live and expired-recoverable states
+    /// using the same `expires_at <= now` boundary as explicit reconciliation.
+    /// Callers should wait or inspect the owning worker for live leases, and
+    /// only attempt `outcome_unknown` reconciliation for expired recoverable
+    /// leases.
+    pub fn scheduler_projection(&self, now: DateTime<Utc>) -> SchedulerProjection {
+        let closed_actions = self.closed_execution_actions();
+        let open_execution_leases: BTreeMap<&str, &ExecutionLease> = self
+            .execution_leases
+            .iter()
+            .filter(|lease| !closed_actions.contains(lease.action_id.as_str()))
+            .map(|lease| (lease.action_id.as_str(), lease))
+            .collect();
+        let latest_decisions: BTreeMap<&str, bool> = self
+            .decisions
+            .iter()
+            .map(|decision| {
+                (
+                    decision.action_id.as_str(),
+                    decision.result == DecisionResult::Allowed,
+                )
+            })
+            .collect();
+        let pending_allowed_action_ids: Vec<String> = latest_decisions
+            .iter()
+            .filter(|(action_id, allowed)| **allowed && !closed_actions.contains(*action_id))
+            .map(|(action_id, _)| (*action_id).to_string())
+            .collect();
+        let runnable_pending_action_ids: Vec<String> = pending_allowed_action_ids
+            .iter()
+            .filter(|action_id| !open_execution_leases.contains_key(action_id.as_str()))
+            .cloned()
+            .collect();
+        let open_execution_lease_statuses: Vec<SchedulerOpenExecutionLease> = open_execution_leases
+            .values()
+            .map(|lease| SchedulerOpenExecutionLease {
+                action_id: lease.action_id.clone(),
+                lease_id: lease.lease_id.clone(),
+                expires_at: lease.expires_at,
+                status: if lease.expires_at <= now {
+                    SchedulerExecutionLeaseStatus::ExpiredRecoverable
+                } else {
+                    SchedulerExecutionLeaseStatus::LiveOpen
+                },
+            })
+            .collect();
+        let open_execution_lease_ids: Vec<String> = open_execution_lease_statuses
+            .iter()
+            .map(|lease| lease.lease_id.clone())
+            .collect();
+        let live_open_execution_lease_ids: Vec<String> = open_execution_lease_statuses
+            .iter()
+            .filter(|lease| lease.status == SchedulerExecutionLeaseStatus::LiveOpen)
+            .map(|lease| lease.lease_id.clone())
+            .collect();
+        let expired_recoverable_execution_lease_ids: Vec<String> = open_execution_lease_statuses
+            .iter()
+            .filter(|lease| lease.status == SchedulerExecutionLeaseStatus::ExpiredRecoverable)
+            .map(|lease| lease.lease_id.clone())
+            .collect();
+        let recovery_blocked = !open_execution_lease_ids.is_empty();
+        let mut admission_blockers = Vec::new();
+        if self.session.status != SessionStatus::Running {
+            admission_blockers.push(format!("session_status:{:?}", self.session.status));
+        }
+        if recovery_blocked {
+            admission_blockers.push("open_execution_lease".to_string());
+        }
+        SchedulerProjection {
+            pending_allowed_action_ids,
+            runnable_pending_action_ids,
+            open_execution_lease_statuses,
+            open_execution_lease_ids,
+            live_open_execution_lease_ids,
+            expired_recoverable_execution_lease_ids,
+            recovery_blocked,
+            admission_blocked: !admission_blockers.is_empty(),
+            admission_blockers,
+        }
+    }
+
+    fn closed_execution_actions(&self) -> BTreeSet<&str> {
+        let mut closed_actions: BTreeSet<&str> = self
+            .receipts
+            .iter()
+            .map(|receipt| receipt.action_id.as_str())
+            .collect();
+        closed_actions.extend(
+            self.execution_reconciliations
+                .iter()
+                .map(|reconciliation| reconciliation.action_id.as_str()),
+        );
+        closed_actions
     }
 }
 

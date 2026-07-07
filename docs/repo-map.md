@@ -31,10 +31,11 @@ review boundaries.
   - Loopback HTTP control-plane binary over `beater-osd` and the tool gateway,
     including token-gated local shell execution, hosted runtime bundle
     submission, and scheduler execution-lease claim/completion routes.
-  - Session projection responses expose execution-lease recovery blockers so
-    operators can distinguish ordinary idle state from runnable pending work,
-    paused admission, and unresolved side-effect recovery debt without exporting
-    the full journal.
+  - Session projection responses expose execution-lease recovery blockers and
+    split open leases into live versus expired-recoverable ids so operators and
+    schedulers can distinguish ordinary idle state from runnable pending work,
+    wait-required in-flight work, paused admission, and recoverable side-effect
+    debt without exporting the full journal.
   - Scheduler claim routes derive execution leases from journaled manifest and
     policy decision state using expected manifest/decision/tool
     compare-and-set fields, resolve pinned tool identity through the
@@ -75,9 +76,10 @@ review boundaries.
     projection summary.
   - Deterministic step replay evidence anchored to proposal, decision, receipt,
     journal-root, and receipt-root hashes.
-  - Bundle projection summaries include open execution-lease recovery blockers
-    pending/runnable action queues, admission blockers, and reconciliation
-    counts for scheduler/operator visibility.
+  - Bundle projection summaries include pending/runnable action queues, open
+    execution-lease blockers split into live versus expired-recoverable ids,
+    admission blockers, and reconciliation counts for scheduler/operator
+    visibility.
   - Service-facing `RuntimeBundle` contract used by daemon HTTP adapters without
     exposing direct store mutation APIs.
 - `crates/beater-os-audit`
@@ -127,8 +129,9 @@ review boundaries.
     receiving direct store authority.
 - `scripts/run-beater-osd-http-supervised-worker-smoke.py`
   - Token-gated HTTP proof that opt-in supervised recovery blocks on live
-    leases, reconciles expired lost leases as `outcome_unknown`, and dispatches
-    later admitted work without retrying the reconciled action.
+    leases, exposes live versus expired-recoverable open lease state through
+    session projection, reconciles expired lost leases as `outcome_unknown`,
+    and dispatches later admitted work without retrying the reconciled action.
 - `scripts/run-beater-osd-http-claims-smoke.py`
   - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned
     tool compare-and-set refusal, exact lease-id completion, live-lease

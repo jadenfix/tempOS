@@ -33,7 +33,8 @@ use beater_os_tool_gateway::{
 };
 use beater_osd::{
     AdmissionOutcome, ClaimableExecutionAction, DAEMON_POLICY_VERSION, DaemonError,
-    ExecutionLeaseClaimRequest, LocalShellToolRegistration, SessionProjection, Store,
+    ExecutionLeaseClaimRequest, LocalShellToolRegistration, SchedulerOpenExecutionLease,
+    SessionProjection, Store,
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -1182,6 +1183,16 @@ pub struct RuntimeBundleProjectionSummary {
     #[serde(default)]
     pub open_execution_lease_ids: Vec<String>,
     #[serde(default)]
+    pub open_execution_lease_statuses: Vec<SchedulerOpenExecutionLease>,
+    #[serde(default)]
+    pub live_open_execution_leases: usize,
+    #[serde(default)]
+    pub live_open_execution_lease_ids: Vec<String>,
+    #[serde(default)]
+    pub expired_recoverable_execution_leases: usize,
+    #[serde(default)]
+    pub expired_recoverable_execution_lease_ids: Vec<String>,
+    #[serde(default)]
     pub execution_reconciliations: usize,
     #[serde(default)]
     pub recovery_blocked: bool,
@@ -1194,7 +1205,7 @@ pub struct RuntimeBundleProjectionSummary {
 
 impl RuntimeBundleProjectionSummary {
     fn from_projection(projection: &SessionProjection) -> Self {
-        let scheduler = scheduler_projection(projection);
+        let scheduler = projection.scheduler_projection(Utc::now());
         Self {
             grants: projection.grants.len(),
             active_grants: projection.active_grants(Utc::now()).len(),
@@ -1207,71 +1218,20 @@ impl RuntimeBundleProjectionSummary {
             execution_leases: projection.execution_leases.len(),
             open_execution_leases: scheduler.open_execution_lease_ids.len(),
             recovery_blocked: scheduler.recovery_blocked,
+            open_execution_lease_statuses: scheduler.open_execution_lease_statuses,
+            live_open_execution_leases: scheduler.live_open_execution_lease_ids.len(),
+            live_open_execution_lease_ids: scheduler.live_open_execution_lease_ids,
+            expired_recoverable_execution_leases: scheduler
+                .expired_recoverable_execution_lease_ids
+                .len(),
+            expired_recoverable_execution_lease_ids: scheduler
+                .expired_recoverable_execution_lease_ids,
             open_execution_lease_ids: scheduler.open_execution_lease_ids,
             execution_reconciliations: projection.execution_reconciliations.len(),
             admission_blocked: scheduler.admission_blocked,
             admission_blockers: scheduler.admission_blockers,
             receipts: projection.receipts.len(),
         }
-    }
-}
-
-struct SchedulerProjection {
-    pending_allowed_action_ids: Vec<String>,
-    runnable_pending_action_ids: Vec<String>,
-    open_execution_lease_ids: Vec<String>,
-    recovery_blocked: bool,
-    admission_blocked: bool,
-    admission_blockers: Vec<String>,
-}
-
-fn scheduler_projection(projection: &SessionProjection) -> SchedulerProjection {
-    let closed_actions = closed_execution_actions(projection);
-    let open_execution_leases: BTreeMap<&str, &str> = projection
-        .execution_leases
-        .iter()
-        .filter(|lease| !closed_actions.contains(lease.action_id.as_str()))
-        .map(|lease| (lease.action_id.as_str(), lease.lease_id.as_str()))
-        .collect();
-    let latest_decisions: BTreeMap<&str, bool> = projection
-        .decisions
-        .iter()
-        .map(|decision| {
-            (
-                decision.action_id.as_str(),
-                decision.result == DecisionResult::Allowed,
-            )
-        })
-        .collect();
-    let pending_allowed_action_ids: Vec<String> = latest_decisions
-        .iter()
-        .filter(|(action_id, allowed)| **allowed && !closed_actions.contains(*action_id))
-        .map(|(action_id, _)| (*action_id).to_string())
-        .collect();
-    let runnable_pending_action_ids: Vec<String> = pending_allowed_action_ids
-        .iter()
-        .filter(|action_id| !open_execution_leases.contains_key(action_id.as_str()))
-        .cloned()
-        .collect();
-    let open_execution_lease_ids: Vec<String> = open_execution_leases
-        .values()
-        .map(|lease_id| (*lease_id).to_string())
-        .collect();
-    let recovery_blocked = !open_execution_lease_ids.is_empty();
-    let mut admission_blockers = Vec::new();
-    if projection.session.status != SessionStatus::Running {
-        admission_blockers.push(format!("session_status:{:?}", projection.session.status));
-    }
-    if recovery_blocked {
-        admission_blockers.push("open_execution_lease".to_string());
-    }
-    SchedulerProjection {
-        pending_allowed_action_ids,
-        runnable_pending_action_ids,
-        open_execution_lease_ids,
-        recovery_blocked,
-        admission_blocked: !admission_blockers.is_empty(),
-        admission_blockers,
     }
 }
 

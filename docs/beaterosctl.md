@@ -55,6 +55,13 @@ Example body:
 
 The response is the serialized runtime worker-loop outcome, including
 `stop_reason`, executed action reports, and the final projection summary.
+Projection summaries keep the compatibility fields `open_execution_leases` and
+`recovery_blocked`, and also include `open_execution_lease_statuses`,
+`live_open_execution_leases`, `live_open_execution_lease_ids`,
+`expired_recoverable_execution_leases`, and
+`expired_recoverable_execution_lease_ids`. A scheduler should wait or inspect
+the owning worker while live leases remain, and should use explicit
+`outcome_unknown` recovery only for expired-recoverable leases.
 
 Callers may explicitly opt into supervised recovery before the loop runs:
 
@@ -84,6 +91,20 @@ the serialized supervised-cycle outcome: `recoveries`, `worker_loop`, and final
 outcome with zero recoveries and `worker_loop.stop_reason = "recovery_blocked"`.
 Recovered leases are reconciled only as `outcome_unknown`; the reconciled action
 is closed and not retried.
+
+Schedulers can preflight the same state through:
+
+```text
+GET /v1/sessions/<session-id>
+```
+
+The response includes `pending_allowed_action_ids`,
+`runnable_pending_action_ids`, `open_execution_lease_statuses`,
+`live_open_execution_leases`, `live_open_execution_lease_ids`,
+`expired_recoverable_execution_leases`, and
+`expired_recoverable_execution_lease_ids`. Each open lease status includes the
+`action_id`, `lease_id`, `expires_at`, and `status` (`live_open` or
+`expired_recoverable`).
 
 ## Store layout
 

@@ -40,6 +40,13 @@ These are exactly the properties the merged core already enforces structurally;
 the metric is the **audit that enforcement held end-to-end across the eval
 suite.** Each maps to a §14.5 adversarial scenario in `scenarios/security/`.
 
+The unresolved execution-lease invariant has scheduler-visible states. A
+`live_open` lease blocks recovery and dispatch until the owning worker completes
+or the lease expires. An `expired_recoverable` lease still blocks admission and
+dispatch, but may be closed only by explicit `ExecutionLeaseReconciled` evidence
+with `outcome_unknown`; the recovery path must not fabricate a receipt or retry
+the reconciled action.
+
 ## 3. Tracked trends (targets set from baseline)
 
 | Metric | Definition | Target shape |

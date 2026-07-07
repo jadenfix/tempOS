@@ -173,13 +173,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         || live_supervised.worker_loop.stop_reason
             != RuntimeLocalShellWorkerLoopStopReason::RecoveryBlocked
         || live_supervised.projection.open_execution_leases != 1
+        || live_supervised.projection.live_open_execution_leases != 1
+        || live_supervised
+            .projection
+            .expired_recoverable_execution_leases
+            != 0
     {
         return Err(format!(
-            "live lease should block without recovery: recoveries={} executions={} stop={:?} open_leases={}",
+            "live lease should block without recovery: recoveries={} executions={} stop={:?} open_leases={} live_leases={} expired_recoverable_leases={}",
             live_supervised.recoveries.len(),
             live_supervised.worker_loop.executions.len(),
             live_supervised.worker_loop.stop_reason,
-            live_supervised.projection.open_execution_leases
+            live_supervised.projection.open_execution_leases,
+            live_supervised.projection.live_open_execution_leases,
+            live_supervised.projection.expired_recoverable_execution_leases
         )
         .into());
     }
@@ -231,16 +238,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         || supervised.projection.receipts != 1
         || supervised.projection.runnable_pending_actions != 0
         || supervised.projection.open_execution_leases != 0
+        || supervised.projection.live_open_execution_leases != 0
+        || supervised.projection.expired_recoverable_execution_leases != 0
     {
         return Err(format!(
-            "unexpected supervised projection: recoveries={} stop={:?} executions={} receipts={} reconciliations={} runnable={} open_leases={}",
+            "unexpected supervised projection: recoveries={} stop={:?} executions={} receipts={} reconciliations={} runnable={} open_leases={} live_leases={} expired_recoverable_leases={}",
             supervised.recoveries.len(),
             supervised.worker_loop.stop_reason,
             supervised.worker_loop.executions.len(),
             supervised.projection.receipts,
             supervised.projection.execution_reconciliations,
             supervised.projection.runnable_pending_actions,
-            supervised.projection.open_execution_leases
+            supervised.projection.open_execution_leases,
+            supervised.projection.live_open_execution_leases,
+            supervised.projection.expired_recoverable_execution_leases
         )
         .into());
     }
@@ -262,6 +273,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "execution_reconciliations": supervised.projection.execution_reconciliations,
         "runnable_pending_actions": supervised.projection.runnable_pending_actions,
         "open_execution_leases": supervised.projection.open_execution_leases,
+        "live_open_execution_leases": supervised.projection.live_open_execution_leases,
+        "expired_recoverable_execution_leases": supervised.projection.expired_recoverable_execution_leases,
         "output": output_path.display().to_string(),
     });
     let _ = fs::remove_dir_all(root);

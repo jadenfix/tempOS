@@ -143,6 +143,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         chrono::Utc::now(),
     )?;
 
+    let live_projection = one_shot_get_session(&root, &token_file)?;
+    if live_projection.status != 200
+        || live_projection.body["open_execution_leases"] != 1
+        || live_projection.body["live_open_execution_leases"] != 1
+        || live_projection.body["expired_recoverable_execution_leases"] != 0
+        || live_projection.body["open_execution_lease_statuses"][0]["status"] != "live_open"
+        || live_projection.body["recovery_blocked"] != true
+        || live_projection.body["admission_blocked"] != true
+    {
+        return Err(format!(
+            "live HTTP session projection should expose a non-recoverable open lease: {}",
+            live_projection.body
+        )
+        .into());
+    }
+
     let body = json!({
         "tool": "shell",
         "tool_digest": command_digest,
@@ -177,6 +193,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .is_empty()
         || live_response.body["worker_loop"]["stop_reason"] != "recovery_blocked"
         || live_response.body["projection"]["open_execution_leases"] != 1
+        || live_response.body["projection"]["live_open_execution_leases"] != 1
+        || live_response.body["projection"]["expired_recoverable_execution_leases"] != 0
     {
         return Err(format!(
             "live lease should block without recovery or execution: {}",
@@ -187,6 +205,23 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     while chrono::Utc::now() <= lost_lease.lease.expires_at {
         thread::sleep(Duration::from_millis(100));
+    }
+
+    let expired_projection = one_shot_get_session(&root, &token_file)?;
+    if expired_projection.status != 200
+        || expired_projection.body["open_execution_leases"] != 1
+        || expired_projection.body["live_open_execution_leases"] != 0
+        || expired_projection.body["expired_recoverable_execution_leases"] != 1
+        || expired_projection.body["open_execution_lease_statuses"][0]["status"]
+            != "expired_recoverable"
+        || expired_projection.body["recovery_blocked"] != true
+        || expired_projection.body["admission_blocked"] != true
+    {
+        return Err(format!(
+            "expired HTTP session projection should expose a recoverable open lease: {}",
+            expired_projection.body
+        )
+        .into());
     }
 
     let recovered_response = one_shot_request(&root, &token_file, &body)?;
@@ -211,6 +246,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         || recovered_response.body["projection"]["execution_reconciliations"] != 1
         || recovered_response.body["projection"]["runnable_pending_actions"] != 0
         || recovered_response.body["projection"]["open_execution_leases"] != 0
+        || recovered_response.body["projection"]["live_open_execution_leases"] != 0
+        || recovered_response.body["projection"]["expired_recoverable_execution_leases"] != 0
     {
         return Err(format!(
             "unexpected recovered HTTP supervised projection: {}",
@@ -235,6 +272,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "execution_reconciliations": recovered_response.body["projection"]["execution_reconciliations"],
         "runnable_pending_actions": recovered_response.body["projection"]["runnable_pending_actions"],
         "open_execution_leases": recovered_response.body["projection"]["open_execution_leases"],
+        "live_open_execution_leases_before_recovery": live_projection.body["live_open_execution_leases"],
+        "expired_recoverable_execution_leases_before_recovery": expired_projection.body["expired_recoverable_execution_leases"],
         "output": output_path.display().to_string(),
     });
     let _ = fs::remove_dir_all(root);
@@ -252,6 +291,50 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct HttpResponse {
     status: u16,
     body: Value,
+}
+
+fn one_shot_get_session(
+    root: &std::path::Path,
+    token_file: &std::path::Path,
+) -> Result<HttpResponse, Box<dyn Error>> {
+    let port = free_loopback_port()?;
+    let mut server = Command::new("cargo")
+        .args([
+            "run",
+            "-q",
+            "-p",
+            "beater-osd-http",
+            "--",
+            "serve",
+            "--root",
+            &root.display().to_string(),
+            "--token-file",
+            &token_file.display().to_string(),
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+            "--once",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let response = match get_json(port, &format!("/v1/sessions/{SESSION_ID}"), TOKEN) {
+        Ok(response) => response,
+        Err(err) => {
+            stop_server(&mut server);
+            return Err(err);
+        }
+    };
+    let output = server.wait_with_output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "beater-osd-http exited {}\nSTDOUT:\n{}\nSTDERR:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(response)
 }
 
 fn one_shot_request(
@@ -324,6 +407,29 @@ fn post_json(
                 let request = format!(
                     "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{encoded}",
                     encoded.len()
+                );
+                stream.write_all(request.as_bytes())?;
+                let mut response = String::new();
+                stream.read_to_string(&mut response)?;
+                return parse_response(&response);
+            }
+            Err(err) => {
+                last_error = Some(err);
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    Err(format!("server did not accept request: {last_error:?}").into())
+}
+
+fn get_json(port: u16, path: &str, token: &str) -> Result<HttpResponse, Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(mut stream) => {
+                let request = format!(
+                    "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
                 );
                 stream.write_all(request.as_bytes())?;
                 let mut response = String::new();
