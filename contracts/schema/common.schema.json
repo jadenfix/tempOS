@@ -117,6 +117,25 @@
       "type": "string",
       "enum": ["outcome_unknown"]
     },
+    "execution_lease_heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Daemon-recorded liveness renewal for an open execution lease. It can extend only a still-live lease and cannot create a receipt, reconciliation, or new authority.",
+      "required": ["heartbeat_id", "lease_id", "session_id", "action_id", "manifest_hash", "decision_id", "previous_expires_at", "extended_expires_at", "observed_by", "heartbeat_at"],
+      "properties": {
+        "heartbeat_id": { "type": "string", "minLength": 1 },
+        "lease_id": { "type": "string", "minLength": 1 },
+        "session_id": { "type": "string", "minLength": 1 },
+        "action_id": { "type": "string", "minLength": 1 },
+        "manifest_hash": { "$ref": "#/$defs/hash_value" },
+        "decision_id": { "type": "string", "minLength": 1 },
+        "previous_expires_at": { "$ref": "#/$defs/timestamp" },
+        "extended_expires_at": { "$ref": "#/$defs/timestamp" },
+        "observed_by": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "heartbeat_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
     "execution_lease_reconciliation": {
       "type": "object",
       "additionalProperties": false,

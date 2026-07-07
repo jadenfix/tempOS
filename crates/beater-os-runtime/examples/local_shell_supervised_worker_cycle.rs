@@ -136,6 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             expected_decision_id: lost_action.decision_id,
             expected_tool_version: lost_action.expected_tool_version,
             expected_tool_digest: lost_action.expected_tool_digest,
+            initial_lease_ms: None,
         },
         chrono::Utc::now(),
     )?;

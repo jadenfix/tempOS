@@ -42,10 +42,12 @@ suite.** Each maps to a §14.5 adversarial scenario in `scenarios/security/`.
 
 The unresolved execution-lease invariant has scheduler-visible states. A
 `live_open` lease blocks recovery and dispatch until the owning worker completes
-or the lease expires. An `expired_recoverable` lease still blocks admission and
-dispatch, but may be closed only by explicit `ExecutionLeaseReconciled` evidence
-with `outcome_unknown`; the recovery path must not fabricate a receipt or retry
-the reconciled action.
+or the latest heartbeat-renewed expiry passes. Heartbeats are liveness evidence
+only and must stay within the original action wall-clock budget plus daemon
+grace. An `expired_recoverable` lease still blocks admission and dispatch, but
+may be closed only by explicit `ExecutionLeaseReconciled` evidence with
+`outcome_unknown`; the recovery path must not fabricate a receipt or retry the
+reconciled action.
 
 ## 3. Tracked trends (targets set from baseline)
 

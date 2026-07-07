@@ -350,6 +350,7 @@ impl AgentRuntime {
                 expected_decision_id: action.decision_id.clone(),
                 expected_tool_version: action.expected_tool_version.clone(),
                 expected_tool_digest: action.expected_tool_digest.clone(),
+                initial_lease_ms: None,
             },
             Utc::now(),
         )?;

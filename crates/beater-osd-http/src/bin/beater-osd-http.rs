@@ -39,10 +39,10 @@ use beater_os_tool_gateway::{
     execute_claimed_local_tool, execute_local_tool, local_shell_tool_digest_with_environment,
 };
 use beater_osd::{
-    DAEMON_POLICY_VERSION, DaemonError, ExecutionLeaseClaimRequest, LocalShellToolRegistration,
-    Store,
+    DAEMON_POLICY_VERSION, DaemonError, ExecutionLeaseClaimRequest, ExecutionLeaseHeartbeatRequest,
+    LocalShellToolRegistration, Store,
 };
-use chrono::{Duration, TimeDelta, Utc};
+use chrono::{DateTime, Duration, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -597,6 +597,11 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
                     store, session_id, action_id, lease_id, request,
                 );
             }
+            if let Some((session_id, action_id, lease_id)) = parse_action_heartbeat_path(path) {
+                return heartbeat_execution_lease_route(
+                    store, session_id, action_id, lease_id, request,
+                );
+            }
             if let Some((session_id, action_id, lease_id)) = parse_action_complete_path(path) {
                 return complete_execution_lease_route(
                     store, session_id, action_id, lease_id, request,
@@ -716,6 +721,23 @@ fn parse_action_reconcile_path(path: &str) -> Option<(&str, &str, &str)> {
     let (session_id, action_path) = rest.split_once("/actions/")?;
     let (action_id, lease_path) = action_path.split_once("/claims/")?;
     let lease_id = lease_path.strip_suffix("/reconcile")?;
+    if session_id.is_empty()
+        || action_id.is_empty()
+        || lease_id.is_empty()
+        || session_id.contains('/')
+        || action_id.contains('/')
+        || lease_id.contains('/')
+    {
+        return None;
+    }
+    Some((session_id, action_id, lease_id))
+}
+
+fn parse_action_heartbeat_path(path: &str) -> Option<(&str, &str, &str)> {
+    let rest = path.strip_prefix("/v1/sessions/")?;
+    let (session_id, action_path) = rest.split_once("/actions/")?;
+    let (action_id, lease_path) = action_path.split_once("/claims/")?;
+    let lease_id = lease_path.strip_suffix("/heartbeat")?;
     if session_id.is_empty()
         || action_id.is_empty()
         || lease_id.is_empty()
@@ -1060,6 +1082,7 @@ fn claim_execution_lease_route(
             expected_decision_id,
             expected_tool_version,
             expected_tool_digest,
+            initial_lease_ms: payload.initial_lease_ms,
         },
         Utc::now(),
     ) {
@@ -1135,6 +1158,85 @@ fn complete_execution_lease_route(
                 },
             )
         }
+        Err(err) => daemon_error_response(err),
+    }
+}
+
+fn heartbeat_execution_lease_route(
+    store: &Store,
+    session_id: &str,
+    action_id: &str,
+    lease_id: &str,
+    request: &ControlRequest,
+) -> (u16, String) {
+    if !request.headers.contains_key("content-length") {
+        return (
+            400,
+            json_error("missing_content_length", "POST requires Content-Length"),
+        );
+    }
+    let payload = match serde_json::from_slice::<HeartbeatExecutionLeaseHttpRequest>(&request.body)
+    {
+        Ok(payload) => payload,
+        Err(err) => return (400, json_error("bad_json", &err.to_string())),
+    };
+    if payload.heartbeat_id.trim().is_empty() {
+        return (
+            400,
+            json_error("bad_request", "heartbeat_id must not be empty"),
+        );
+    }
+    if payload.worker_id.trim().is_empty() {
+        return (
+            400,
+            json_error("bad_request", "worker_id must not be empty"),
+        );
+    }
+    if payload.extend_ms == 0 {
+        return (
+            400,
+            json_error("bad_request", "extend_ms must be greater than zero"),
+        );
+    }
+    if payload
+        .evidence_refs
+        .iter()
+        .any(|reference| reference.trim().is_empty())
+    {
+        return (
+            400,
+            json_error("bad_request", "evidence_refs must not contain empty values"),
+        );
+    }
+    match store.heartbeat_execution_lease(
+        session_id,
+        ExecutionLeaseHeartbeatRequest {
+            heartbeat_id: payload.heartbeat_id.clone(),
+            lease_id: lease_id.to_string(),
+            action_id: action_id.to_string(),
+            expected_manifest_hash: payload.expected_manifest_hash,
+            expected_decision_id: payload.expected_decision_id,
+            previous_expires_at: payload.previous_expires_at,
+            extend_by_ms: payload.extend_ms,
+            observed_by: Some(payload.worker_id),
+            evidence_refs: payload.evidence_refs,
+        },
+        Utc::now(),
+    ) {
+        Ok(outcome) => serialize_response(
+            200,
+            &HeartbeatExecutionLeaseResponse {
+                session_id: session_id.to_string(),
+                action_id: action_id.to_string(),
+                lease_id: lease_id.to_string(),
+                heartbeat_id: payload.heartbeat_id,
+                previous_expires_at: outcome.heartbeat.previous_expires_at.to_rfc3339(),
+                renewed_until: outcome.heartbeat.extended_expires_at.to_rfc3339(),
+                heartbeat_seq: outcome.heartbeat_record.seq,
+                heartbeat_hash: outcome.heartbeat_record.hash.clone(),
+                final_journal_root_hash: outcome.heartbeat_record.hash,
+            },
+        ),
         Err(err) => daemon_error_response(err),
     }
 }
@@ -1371,6 +1473,7 @@ fn execute_local_shell_request(
                 expected_decision_id: decision.decision_id.clone(),
                 expected_tool_version: tool_version,
                 expected_tool_digest,
+                initial_lease_ms: None,
             },
             Utc::now(),
         )?;
@@ -1601,6 +1704,21 @@ struct ClaimExecutionLeaseHttpRequest {
     expected_tool_digest: String,
     #[serde(default)]
     lease_id: Option<String>,
+    #[serde(default)]
+    initial_lease_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HeartbeatExecutionLeaseHttpRequest {
+    heartbeat_id: String,
+    worker_id: String,
+    expected_manifest_hash: String,
+    expected_decision_id: String,
+    previous_expires_at: DateTime<Utc>,
+    extend_ms: u64,
+    #[serde(default)]
+    evidence_refs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1741,6 +1859,19 @@ struct ClaimExecutionLeaseResponse {
     lease_seq: u64,
     lease_hash: String,
     journal_root_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HeartbeatExecutionLeaseResponse {
+    session_id: String,
+    action_id: String,
+    lease_id: String,
+    heartbeat_id: String,
+    previous_expires_at: String,
+    renewed_until: String,
+    heartbeat_seq: u64,
+    heartbeat_hash: String,
+    final_journal_root_hash: String,
 }
 
 #[derive(Debug, Serialize)]

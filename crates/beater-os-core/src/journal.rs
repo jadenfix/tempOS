@@ -1,18 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
     ActionKind, ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult,
-    ExecutionLease, ExecutionLeaseReconciliation, MemoryRecord, PaymentIntent, PaymentMandate,
-    PolicyDecision, ScenarioManifest, SessionStatus, SideEffectClass, SimulationEvidence,
+    ExecutionLease, ExecutionLeaseHeartbeat, ExecutionLeaseReconciliation, MemoryRecord,
+    PaymentIntent, PaymentMandate, PolicyDecision, ScenarioManifest, SessionStatus,
+    SideEffectClass, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
 use crate::receipt::{
     CapabilityReceipt, PaymentReceiptEvidence, PaymentSettlementStatus, ReceiptLedger,
 };
+
+const EXECUTION_LEASE_OVERHEAD_GRACE_MS: u64 = 2_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -46,6 +49,9 @@ pub enum JournalEvent {
     },
     ExecutionLeaseIssued {
         lease: ExecutionLease,
+    },
+    ExecutionLeaseHeartbeated {
+        heartbeat: ExecutionLeaseHeartbeat,
     },
     ExecutionLeaseReconciled {
         reconciliation: ExecutionLeaseReconciliation,
@@ -440,6 +446,19 @@ fn verify_event_causality(
                     ),
                 );
             }
+        }
+        JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => {
+            validate_execution_lease_heartbeat(record, heartbeat, state)?;
+            let Some(open_lease) = state.open_execution_leases.get_mut(&heartbeat.action_id) else {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "execution lease heartbeat {} references action {} without an open execution lease",
+                        heartbeat.heartbeat_id, heartbeat.action_id
+                    ),
+                );
+            };
+            open_lease.expires_at = heartbeat.extended_expires_at;
         }
         JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
             validate_execution_lease_reconciliation(record, reconciliation, state)?;
@@ -1391,6 +1410,156 @@ fn valid_counterparty_policy(policy: &str) -> bool {
     false
 }
 
+fn validate_execution_lease_heartbeat(
+    record: &JournalRecord,
+    heartbeat: &ExecutionLeaseHeartbeat,
+    state: &ReplayState,
+) -> BeaterOsResult<()> {
+    if heartbeat.heartbeat_id.trim().is_empty()
+        || heartbeat.lease_id.trim().is_empty()
+        || heartbeat.session_id.trim().is_empty()
+        || heartbeat.action_id.trim().is_empty()
+        || heartbeat.observed_by.trim().is_empty()
+    {
+        return causality_error(
+            record.seq,
+            "execution lease heartbeat has empty identity field",
+        );
+    }
+    if heartbeat
+        .evidence_refs
+        .iter()
+        .any(|reference| reference.trim().is_empty())
+    {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} contains an empty evidence reference",
+                heartbeat.heartbeat_id
+            ),
+        );
+    }
+    if state.receipted_actions.contains(&heartbeat.action_id) {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} references already-receipted action {}",
+                heartbeat.heartbeat_id, heartbeat.action_id
+            ),
+        );
+    }
+    if state
+        .reconciled_execution_actions
+        .contains_key(&heartbeat.action_id)
+    {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} references already-reconciled action {}",
+                heartbeat.heartbeat_id, heartbeat.action_id
+            ),
+        );
+    }
+    let Some(lease) = state.open_execution_leases.get(&heartbeat.action_id) else {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} references action {} without an open execution lease",
+                heartbeat.heartbeat_id, heartbeat.action_id
+            ),
+        );
+    };
+    if heartbeat.lease_id != lease.lease_id {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} lease {} does not match open lease {}",
+                heartbeat.heartbeat_id, heartbeat.lease_id, lease.lease_id
+            ),
+        );
+    }
+    if heartbeat.session_id != lease.session_id
+        || heartbeat.action_id != lease.action_id
+        || heartbeat.manifest_hash != lease.manifest_hash
+        || heartbeat.decision_id != lease.decision_id
+    {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} does not match open lease {} authority",
+                heartbeat.heartbeat_id, lease.lease_id
+            ),
+        );
+    }
+    if heartbeat.previous_expires_at != lease.expires_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} expected previous expiry {}, found {}",
+                heartbeat.heartbeat_id, heartbeat.previous_expires_at, lease.expires_at
+            ),
+        );
+    }
+    if heartbeat.heartbeat_at >= lease.expires_at || record.created_at >= lease.expires_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} occurred after lease {} expired",
+                heartbeat.heartbeat_id, lease.lease_id
+            ),
+        );
+    }
+    if heartbeat.extended_expires_at <= lease.expires_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} did not extend lease {}",
+                heartbeat.heartbeat_id, lease.lease_id
+            ),
+        );
+    }
+    let requested_wall_ms = lease.requested_budget.max_wall_ms.ok_or_else(|| {
+        BeaterOsError::Causality(format!(
+            "record {}: execution lease heartbeat {} cannot extend lease {} without finite wall budget",
+            record.seq, heartbeat.heartbeat_id, lease.lease_id
+        ))
+    })?;
+    let max_wall_ms = requested_wall_ms
+        .checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS)
+        .ok_or_else(|| {
+            BeaterOsError::Causality(format!(
+                "record {}: execution lease heartbeat {} wall budget overflowed",
+                record.seq, heartbeat.heartbeat_id
+            ))
+        })?;
+    let max_expires_at = lease
+        .leased_at
+        .checked_add_signed(TimeDelta::milliseconds(i64::try_from(max_wall_ms).map_err(
+            |_| {
+                BeaterOsError::Causality(format!(
+                    "record {}: execution lease heartbeat {} wall budget cannot fit signed milliseconds",
+                    record.seq, heartbeat.heartbeat_id
+                ))
+            },
+        )?))
+        .ok_or_else(|| {
+            BeaterOsError::Causality(format!(
+                "record {}: execution lease heartbeat {} maximum expiration overflowed",
+                record.seq, heartbeat.heartbeat_id
+            ))
+        })?;
+    if heartbeat.extended_expires_at > max_expires_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease heartbeat {} extends lease {} beyond action wall budget",
+                heartbeat.heartbeat_id, lease.lease_id
+            ),
+        );
+    }
+    Ok(())
+}
+
 fn primary_event_id(record: &JournalRecord) -> Option<&str> {
     match &record.event {
         JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
@@ -1403,6 +1572,9 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
         JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
+        JournalEvent::ExecutionLeaseHeartbeated { heartbeat } => {
+            Some(heartbeat.heartbeat_id.as_str())
+        }
         JournalEvent::ExecutionLeaseReconciled { reconciliation } => {
             Some(reconciliation.reconciliation_id.as_str())
         }
