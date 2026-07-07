@@ -40,7 +40,7 @@ receipt ledger.
 | `session list` | List sessions in the store. |
 | `session show` | Summarize one session's grants, actions, decisions, receipts. |
 | `session pause` | Pause a running session through the daemon lifecycle state machine. |
-| `session resume` | Resume a paused session through the daemon lifecycle state machine. |
+| `session resume` | Resume a paused session through the daemon lifecycle state machine, unless the journal still has an unresolved open execution lease. |
 | `session cancel` | Cancel a running or paused session through the daemon lifecycle state machine. |
 | `grant issue` | Issue a scoped `CapabilityGrant` and journal `CapabilityGranted`. |
 | `grant revoke` | Resolve an issued grant's stored revocation handle and journal `CapabilityRevoked`. |
@@ -250,14 +250,18 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    transitions cannot interleave. If a process fails after the lease is written
    but before a receipt exists, replay sees an open lease and refuses to run the
    action again until a future reconciliation path handles it explicitly. The
-   confined child runs under macOS Seatbelt with filesystem writes limited to
-   granted prefixes, network denied by default, and process execution limited
-   to the resolved entry executable. It also gets an **explicit environment
-   allowlist** (`env_clear` + a CLI-owned safe `PATH` baseline, plus any
-   repeated `--env BEATER_NAME=VALUE`; no inherited secrets), a **wall-clock
-   timeout**, and **capped** stdout/stderr. Invalid env names, duplicate names,
-   unsafe names outside `BEATER_*`, or `PATH` overrides fail closed before the
-   action is journaled. Otherwise the decision is printed and nothing runs.
+   daemon also refuses new action admission and paused-session resume while any
+   unresolved open execution lease remains, because that state means the side
+   effect outcome is unknown and must not be hidden behind model memory or a
+   synthetic success receipt. The confined child runs under macOS Seatbelt with
+   filesystem writes limited to granted prefixes, network denied by default, and
+   process execution limited to the resolved entry executable. It also gets an
+   **explicit environment allowlist** (`env_clear` + a CLI-owned safe `PATH`
+   baseline, plus any repeated `--env BEATER_NAME=VALUE`; no inherited
+   secrets), a **wall-clock timeout**, and **capped** stdout/stderr. Invalid env
+   names, duplicate names, unsafe names outside `BEATER_*`, or `PATH` overrides
+   fail closed before the action is journaled. Otherwise the decision is printed
+   and nothing runs.
 5. **Filesystem-diff receipt.** The confined directory is snapshotted (path ->
    SHA-256) before and after; the created/modified/deleted diff is the observed
    side effect. A `CapabilityReceipt` (input digest = command+args+environment,

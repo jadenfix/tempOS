@@ -385,9 +385,18 @@ impl Store {
     ) -> DaemonResult<JournalRecord> {
         self.with_session_lock(session_id, || {
             let mut journal = self.load_journal_unlocked(session_id)?;
-            let projection = self.project_unlocked(session_id)?;
-            let from = projection.session.status.clone();
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let from = admission_state.session.status.clone();
             let to = next_session_status(transition, &from)?;
+            if matches!(transition, SessionTransition::Resume)
+                && !admission_state.open_execution_leases.is_empty()
+            {
+                return Err(open_execution_lease_refusal(
+                    session_id,
+                    &admission_state.open_execution_leases,
+                    "resume session",
+                ));
+            }
             let transition_id = format!(
                 "session:{session_id}:transition:{}",
                 journal.records().len()
@@ -720,6 +729,13 @@ impl Store {
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
             ensure_session_running(&admission_state.session)?;
+            if !admission_state.open_execution_leases.is_empty() {
+                return Err(open_execution_lease_refusal(
+                    session_id,
+                    &admission_state.open_execution_leases,
+                    "admit new action",
+                ));
+            }
             let existing_proposal = admission_state.proposals.get(manifest.action_id.as_str());
             if let Some(decision) = admission_state
                 .latest_decisions
@@ -882,6 +898,14 @@ impl Store {
             ))
             .into());
         }
+        if !admission_state.open_execution_leases.is_empty() {
+            return Err(open_execution_lease_refusal(
+                session_id,
+                &admission_state.open_execution_leases,
+                "issue execution lease",
+            )
+            .into());
+        }
         let lease_window = lease.expires_at.signed_duration_since(lease.leased_at);
         if lease_window <= TimeDelta::zero() {
             return Err(DaemonError::Refused(format!(
@@ -991,6 +1015,26 @@ impl Store {
     /// Rebuild the read model from the journal under the writer lock.
     pub fn project(&self, session_id: &str) -> DaemonResult<SessionProjection> {
         self.with_session_lock(session_id, || self.project_unlocked(session_id))
+    }
+
+    /// Return unresolved execution leases from the journal-derived runtime
+    /// state under the session lock.
+    ///
+    /// This is the daemon recovery gate for the crash window after
+    /// `ExecutionLeaseIssued` is durable but before `ReceiptAppended` resolves
+    /// the side effect. Callers must treat every returned lease as
+    /// outcome-unknown authority: do not re-execute the action, synthesize a
+    /// success receipt, or resume an agent loop until an explicit
+    /// reconciliation path closes the lease.
+    pub fn open_execution_leases(&self, session_id: &str) -> DaemonResult<Vec<ExecutionLease>> {
+        self.with_session_lock(session_id, || {
+            let journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            Ok(admission_state
+                .open_execution_leases
+                .into_values()
+                .collect())
+        })
     }
 
     /// Export a consistent read-only trace view under one session lock.
@@ -1332,6 +1376,21 @@ fn ensure_session_running(session: &AgentSession) -> DaemonResult<()> {
             session.session_id, session.status
         )))
     }
+}
+
+fn open_execution_lease_refusal(
+    session_id: &str,
+    open_execution_leases: &BTreeMap<String, ExecutionLease>,
+    action: &str,
+) -> DaemonError {
+    let lease_ids = open_execution_leases
+        .values()
+        .map(|lease| format!("{}:{}", lease.action_id, lease.lease_id))
+        .collect::<Vec<_>>()
+        .join(", ");
+    DaemonError::Refused(format!(
+        "cannot {action} for session {session_id}: unresolved open execution lease(s) [{lease_ids}] require operator reconciliation"
+    ))
 }
 
 fn next_session_status(

@@ -54,6 +54,12 @@ section references point to the authoritative definition.
   never *lowered* by the agent (§26).
 - **Receipt / journal** — journal records intent *before* side effects; receipts
   record outcomes *after*. Together they form the causal chain (§4.5, §10.4).
+- **Execution lease** — durable authority between an `Allowed` policy decision
+  and the side-effecting tool process. An unresolved lease means the journal
+  proves execution may have crossed the side-effect boundary, but no receipt
+  proves the outcome. Expiry ends executable authority; it does not prove the
+  side effect did not happen, so unresolved leases are recovery blockers for
+  blind retry, new admission, and session resume until reconciled.
 
 ## Runtime and services (final.md §9, §10)
 
