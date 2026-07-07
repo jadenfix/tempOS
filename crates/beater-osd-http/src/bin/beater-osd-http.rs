@@ -796,6 +796,7 @@ fn runtime_bundle_route(store: &Store, request: &ControlRequest) -> (u16, String
         ),
         Err(RuntimeError::Daemon(err)) => (500, json_error("store_error", &err.to_string())),
         Err(RuntimeError::Core(err)) => (500, json_error("core_error", &err.to_string())),
+        Err(RuntimeError::Gateway(err)) => (500, json_error("gateway_error", &err.to_string())),
     }
 }
 

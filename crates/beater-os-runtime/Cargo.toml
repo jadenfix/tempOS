@@ -9,6 +9,8 @@ description = "Typed agent runtime loop over the beaterOS daemon store."
 
 [dependencies]
 beater-os-core = { path = "../beater-os-core" }
+beater-os-sandbox = { path = "../beater-os-sandbox" }
+beater-os-tool-gateway = { path = "../beater-os-tool-gateway" }
 beater-osd = { path = "../beater-osd" }
 chrono.workspace = true
 serde.workspace = true
