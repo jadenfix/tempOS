@@ -167,6 +167,20 @@ must answer:
   accelerator, or spend budget were measured?
 - What primary source and version date support current toolchain/backend claims?
 - What authority boundary is preserved and what receipt proves it?
+- If the boundary is network-facing or model/tool-facing, what validates the
+  concrete endpoint after DNS, proxy resolution, redirects, and retries?
+- If the boundary is local control plane, loopback, browser, or IPC, what
+  unguessable same-user capability backs Host and Origin checks?
+- What live-state quota bounds repeated valid commands, frames, sessions,
+  screenshots, logs, DOM data, tool results, provider calls, and queue entries?
+- Where is the size cap enforced while reading, collecting, diffing, or
+  serializing remote-driven data, rather than after full materialization?
+- How are untrusted remote tool catalogs classified so missing side-effect
+  metadata cannot weaken local side-effect policy?
+- How is page-controlled or provider-controlled metadata framed as untrusted
+  provenance before it enters model prompts, traces, or review packets?
+- If durability changes, what checksum, recovery, corruption detection, or
+  self-heal rule preserves append-only journal and receipt integrity?
 - What macOS path exists?
 - What Linux or provider path exists, if applicable?
 - What fallback and rollback path exists?

@@ -50,12 +50,22 @@ A host is **runtime-compatible** when:
 The implementation requirement is enforced in the local gate with:
 `scripts/check-bare-metal-readiness.py --require-migration-phase runtime`.
 
-### 3.2 Metal-ready proof
+### 3.2 Optional-lane proof is not metal-OS proof
 
-A host is **metal-ready** when:
+A host has **optional-lane readiness** when:
 - runtime requirements above hold,
 - at least one optional lane is also runnable (e.g. `linux-cuda-lane` or `apple-metal-lane`),
 - PRs that claim metal behavior gate their matrix cases with `require_migration_phase=metal-ready`.
+
+The current readiness manifest still uses the compatibility label
+`metal-ready` for this gate because it proves the host can route beyond the
+portable control plane. That label is not evidence that a full metal OS contract
+exists, and it must not let a Linux CUDA, Apple Metal, provider SDK, or other
+optional accelerator path stand in for portable authority, scheduling, memory,
+receipt, telemetry, fallback, or macOS behavior. PRs that need true
+metal-touching evidence must name the boundary being moved and provide traces,
+benchmarks, security evidence, and rollback proof showing the hosted and Linux
+add-on lanes cannot satisfy the contract.
 
 ### 3.3 Runtime-first execution rule for every PR
 
@@ -88,7 +98,9 @@ Each PR should map to exactly one migration layer:
 
 - **Kernel/runtime slice:** contracts, session lifecycle, policy admission, journal/receipt semantics.
 - **Service slice:** sandbox/tool/receipt/eval/memory/review layer.
-- **Metal-adjacent slice:** accelerator or platform-specific hardening with explicit readiness evidence.
+- **Linux add-on or metal-adjacent slice:** accelerator, Linux-native, or
+  platform-specific hardening with explicit readiness evidence and no claim that
+  optional provider readiness is a portable metal OS contract.
 
 For every slice include:
 - A stated target layer.
@@ -128,7 +140,9 @@ A PR must target only one layer unless the release explicitly proves transition.
   environment when runtime-layer contracts are touched.
 - **Migration proof for this slice:**
   - runtime-only slices: `require_migration_phase=runtime`
-  - optional-lane slices: `require_migration_phase=metal-ready` and explicit route/lane assertions
+  - optional-lane slices: `require_migration_phase=metal-ready` and explicit
+    route/lane assertions, while documenting that this proves optional provider
+    readiness rather than a full metal OS boundary
   - manifest/profile edits require updated migration metadata and matrix case.
 - **Review proof:** PR checklist (`docs/governance/review-checklist.md`) includes
   explicit references to `final.md` and a no-author review entry in the

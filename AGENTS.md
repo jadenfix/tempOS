@@ -12,14 +12,18 @@ The source-of-truth product plan is [final.md](final.md). Implementation must
 turn that plan into reviewed, measurable, macOS-compatible slices without
 shortening or weakening the plan.
 
-The project has two explicit lanes:
+The project has three explicit engineering lanes:
 
-- Compatibility lane: a hosted Rust agent kernel and runtime that makes Linux,
-  macOS, containers, browsers, tools, models, memory, and payments safe for
-  agents now.
-- Metal lane: a long-horizon, first-principles OS stack that can touch scheduler,
-  memory, IO, devices, isolation, authority, audit, and recovery boundaries when
-  hosted traces prove those boundaries need to move closer to hardware.
+- Hosted compatibility lane: a hosted Rust agent kernel and runtime that makes
+  Linux, macOS, containers, browsers, tools, models, memory, and payments safe
+  for agents now.
+- Linux add-on lane: Linux-native scheduler, containment, IO, networking,
+  accelerator, and microVM experiments that can improve deployments without
+  becoming the portable tempOS authority contract.
+- Metal-touching OS lane: a long-horizon, first-principles OS stack that can
+  touch scheduler, memory, IO, devices, isolation, authority, audit, and recovery
+  boundaries when hosted traces prove those boundaries need to move closer to
+  hardware.
 
 The first implementation layer is a Rust workspace with kernel-facing contracts:
 agent sessions, capability grants, action manifests, policy decisions, receipts,
