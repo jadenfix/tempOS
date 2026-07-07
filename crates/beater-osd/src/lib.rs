@@ -31,7 +31,7 @@ use beater_os_core::{
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 pub use crate::error::{DaemonError, DaemonResult};
 
@@ -851,8 +851,8 @@ impl Store {
     pub fn execute_and_append_receipt<T, E>(
         &self,
         session_id: &str,
-        lease: ExecutionLease,
-        created_at: DateTime<Utc>,
+        mut lease: ExecutionLease,
+        _created_at: DateTime<Utc>,
         execute: impl FnOnce(&SessionProjection) -> Result<(CapabilityReceiptInput, T), E>,
     ) -> Result<(ExecutionLeaseOutcome, ReceiptAppendOutcome, T), E>
     where
@@ -881,12 +881,31 @@ impl Store {
             ))
             .into());
         }
+        let lease_window = lease.expires_at.signed_duration_since(lease.leased_at);
+        if lease_window <= TimeDelta::zero() {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} has a non-positive duration",
+                lease.lease_id
+            ))
+            .into());
+        }
+        let lease_issued_at = Utc::now();
+        lease.leased_at = lease_issued_at;
+        lease.expires_at = lease_issued_at
+            .checked_add_signed(lease_window)
+            .ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "execution lease {} expiration overflowed daemon time",
+                    lease.lease_id
+                ))
+            })
+            .map_err(E::from)?;
         let lease_record = journal
             .append(
                 JournalEvent::ExecutionLeaseIssued {
                     lease: lease.clone(),
                 },
-                created_at,
+                lease_issued_at,
             )
             .map_err(DaemonError::from)
             .map_err(E::from)?;

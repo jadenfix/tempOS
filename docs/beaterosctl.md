@@ -241,7 +241,9 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    grants, and requested runtime budget. The lease expiry covers the sandbox
    timeout plus a bounded two-second gateway overhead grace for durable append,
    preflight, and receipt bookkeeping; it does not widen the sandbox's own
-   timeout. Journal appends are flushed and synced
+   timeout. The daemon stamps the lease issuance time after acquiring the
+   session lock, so lock wait cannot backdate executable authority. Journal
+   appends are flushed and synced
    before the daemon returns from the append path, so the lease is durable before
    the gateway starts the side-effecting process. The same daemon session lock is
    held through lease append, sandbox execution, and receipt append, so lifecycle
