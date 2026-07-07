@@ -87,6 +87,12 @@ def build_plan(
     gates.append(
         Gate("beater-osd-runtime-smoke", (python, "scripts/run-beater-osd-runtime-smoke.py", "--json"))
     )
+    gates.append(
+        Gate(
+            "beater-osd-http-execute-smoke",
+            (python, "scripts/run-beater-osd-http-execute-smoke.py", "--json"),
+        )
+    )
     bare_metal_readiness = [
         python,
         "scripts/check-bare-metal-readiness.py",
