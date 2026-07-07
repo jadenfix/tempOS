@@ -28,6 +28,9 @@ review boundaries.
   - Loopback HTTP control-plane binary over `beater-osd` and the tool gateway,
     including token-gated local shell execution and hosted runtime bundle
     submission.
+  - Session projection responses expose execution-lease recovery blockers so
+    operators can distinguish ordinary idle state from unresolved side-effect
+    recovery debt without exporting the full journal.
 - `crates/beaterosctl`
   - Operator CLI for session/grant/manifests/receipts.
 
@@ -50,6 +53,8 @@ review boundaries.
     receipts.
   - Deterministic step replay evidence anchored to proposal, decision, receipt,
     journal-root, and receipt-root hashes.
+  - Bundle projection summaries include open execution-lease recovery blockers
+    and reconciliation counts for scheduler/operator visibility.
   - Service-facing `RuntimeBundle` contract used by daemon HTTP adapters without
     exposing direct store mutation APIs.
 - `crates/beater-os-audit`
